@@ -586,6 +586,7 @@ function ProjectView({
           )}
           <Ports
             projectId={project.id}
+            projectName={project.name}
             running={project.status === 'running'}
             readOnly={!drivable}
           />

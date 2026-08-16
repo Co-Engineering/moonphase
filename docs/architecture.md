@@ -196,6 +196,44 @@ type could otherwise still squeeze the window for whoever is driving. The
 guarantee that actually holds is server-side, though: the PTY bridge drops
 inbound keystrokes for a non-writable client rather than trusting tmux to.
 
+### Previews: why forwarding a port is not enough
+
+A project runs a frontend on 5173 and an API on 8000. Forward each to a free
+local port and the frontend loads — and then fails, because the page runs in a
+browser on the *client* machine, so its `fetch('http://localhost:8000')` gets
+the client's port 8000. That is not the API and may well be something else.
+
+Renumbering cannot fix it. The address is the application's choice, and it asks
+for the one it was written with. Preserving the numbers only works while they
+happen to be free, breaks for a second project, and is impossible below 1024.
+Rewriting the app's URLs is not an option either: the agent writes that code
+and cannot be relied on to write it a particular way.
+
+So Moonphase stops translating addresses and changes what they mean. Each
+project gets a **SOCKS5 proxy** (`socks.py`) whose every connection is
+terminated by the same `docker exec socat` relay the tunnels use, and the
+desktop shell opens previews in a window routed through it. Inside that window
+`localhost:8000` *is* the API, the page's origin *is* `http://localhost:5173`,
+and a CORS allowlist written for local development matches because nothing is
+being faked. Hardcoded ports, absolute URLs, websockets and a service on port
+80 all behave exactly as they would if the browser were on the same machine as
+the code.
+
+Two details are load-bearing:
+
+- **`proxyBypassRules: '<-loopback>'`.** Chromium never proxies loopback
+  addresses by default, so without it every `localhost` request — which is to
+  say all of them — goes straight to the client machine and misses the
+  container entirely.
+- **Both address families are tried for a name.** socat resolves a name once
+  and connects to the first address it gets. Node binds `localhost` to ::1, so
+  a request that resolves to 127.0.0.1 first simply fails against Vite.
+
+The limitation is honest and worth stating: a proxy only helps a client whose
+proxy we can set. That is the Electron window. A phone or an external browser
+still gets a forwarded port, which is enough for a single service and cannot be
+enough for an app that calls its own API by address.
+
 ### One connection is not enough
 
 asyncssh multiplexes channels over a single TCP connection, and sshd allows ten

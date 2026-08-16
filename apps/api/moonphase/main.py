@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from . import preview, ssh
+from . import preview, socks, ssh
 from .config import get_settings
 from .db import dispose_engine
 from .monitor import monitor
@@ -47,6 +47,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await monitor.stop()
     log.info("shutting down: closing preview tunnels and SSH connections")
     await preview.registry.close_all()
+    await socks.registry.close_all()
     await ssh.pool.close_all()
     await dispose_engine()
 

@@ -26,6 +26,8 @@ Implemented:
 - Global sign-in and settings: connect Claude Code and GitHub once, every project uses it
 - User-definable environments — base image plus setup commands, built on the server
 - Automatic port detection and preview tunnels; nothing is ever declared
+- Previews that run inside the container's network, so an app calling its own
+  API at `http://localhost:8000` works without being written any particular way
 - A readable transcript feed for phones, streaming, that writes back into the same session
 - Activity detection and Web Push, so you learn the agent is waiting without a client open
 - Share a server or a project with one person, by email, as a viewer or a collaborator

@@ -313,6 +313,14 @@ export interface FeedPage {
   prompt: Prompt | null
 }
 
+export interface Preview {
+  proxy_host: string
+  proxy_port: number
+  /** What is listening right now — a starting point, not a declaration. */
+  ports: number[]
+  container: string
+}
+
 export interface DetectedPort {
   port: number
   bind: string
@@ -489,6 +497,10 @@ export const api = {
     request<void>(`/api/${kind}/${id}/shares/${shareId}`, { method: 'DELETE' }),
 
   // --- previews -------------------------------------------------------------
+  openPreview: (projectId: string) =>
+    request<Preview>(`/api/projects/${projectId}/preview`, { method: 'POST' }),
+  closePreview: (projectId: string) =>
+    request<void>(`/api/projects/${projectId}/preview`, { method: 'DELETE' }),
   ports: (projectId: string) => request<DetectedPort[]>(`/api/projects/${projectId}/ports`),
   sharePort: (projectId: string, port: number) =>
     request<DetectedPort>(`/api/projects/${projectId}/ports/${port}/share`, {

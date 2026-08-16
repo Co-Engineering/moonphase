@@ -1579,3 +1579,11 @@ button.linkish:hover:not(:disabled) {
   color: var(--text-faint);
   font-size: 10px;
 }
+
+/* Preview opens the whole project, so it reads as the primary action in the
+ * ports strip rather than another per-port control. */
+.ports-preview {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 3px 10px;
+}

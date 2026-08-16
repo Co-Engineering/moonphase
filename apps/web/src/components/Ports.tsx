@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, type DetectedPort } from '../lib/api'
+import { isDesktop, openPreviewWindow } from '../lib/desktop'
 
 interface Props {
   projectId: string
+  projectName: string
   running: boolean
   /**
    * Shared with view-only access. Ports still show — knowing what the agent
@@ -18,11 +20,46 @@ interface Props {
  * Polls while the project is running so a dev server started a minute ago —
  * or restarted onto a different port — simply appears.
  */
-export function Ports({ projectId, running, readOnly = false }: Props) {
+export function Ports({ projectId, projectName, running, readOnly = false }: Props) {
   const [ports, setPorts] = useState<DetectedPort[]>([])
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState<number | null>(null)
   const [loaded, setLoaded] = useState(false)
+  const [opening, setOpening] = useState(false)
+
+  /**
+   * Open the whole project, not a port.
+   *
+   * A forwarded port gives the browser one service at a renumbered address,
+   * which is enough for a static site and useless for anything that calls its
+   * own API: the page runs here, so `http://localhost:8000` means this
+   * machine's port 8000. The preview window routes through a proxy that
+   * resolves every address inside the container, so the app's own assumptions
+   * hold and nothing has to be rewritten.
+   */
+  const preview = async (port?: number) => {
+    setOpening(true)
+    setError(null)
+    try {
+      const opened = await api.openPreview(projectId)
+      const target = port ?? opened.ports.find((p) => p !== 80) ?? opened.ports[0]
+      if (target === undefined) {
+        throw new Error('Nothing is listening in this project yet.')
+      }
+      await openPreviewWindow({
+        projectId,
+        projectName,
+        proxyPort: opened.proxy_port,
+        // The container's own address, which is the point: this is what the
+        // app believes it is being served from.
+        url: target === 80 ? 'http://localhost/' : `http://localhost:${target}/`,
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setOpening(false)
+    }
+  }
 
   const refresh = useCallback(async () => {
     if (!running) return
@@ -67,6 +104,16 @@ export function Ports({ projectId, running, readOnly = false }: Props) {
     <div className="ports">
       <div className="ports-head">
         <span className="ports-title">Ports</span>
+        {isDesktop() && !readOnly && (
+          <button
+            className="primary ports-preview"
+            disabled={opening}
+            title="Open this project in a window whose network is inside the container, so localhost means what the app thinks it means"
+            onClick={() => void preview()}
+          >
+            {opening ? 'Opening…' : 'Preview'}
+          </button>
+        )}
         {error ? (
           <span className="ports-error" title={error}>
             unavailable
@@ -74,6 +121,16 @@ export function Ports({ projectId, running, readOnly = false }: Props) {
         ) : ports.length === 0 ? (
           <span className="ports-empty">
             {loaded ? 'nothing listening yet' : 'looking…'}
+          </span>
+        ) : !isDesktop() && ports.length > 1 ? (
+          // Worth saying rather than letting them find out: a forwarded port
+          // renumbers, so an app that calls its own API by address will fail
+          // here in a way that looks like the app is broken.
+          <span
+            className="ports-empty"
+            title="A forwarded port is renumbered, so an app calling its own API at a fixed address cannot reach it. The desktop app previews through a proxy, where the container's own addresses resolve."
+          >
+            several services — open in the desktop app
           </span>
         ) : null}
       </div>
@@ -84,6 +141,16 @@ export function Ports({ projectId, running, readOnly = false }: Props) {
           <span className="port-number">{entry.port}</span>
           <span className="port-process">{entry.process ?? entry.bind}</span>
 
+          {isDesktop() && !readOnly && (
+            <button
+              className="ghost"
+              disabled={opening}
+              title={`Open http://localhost:${entry.port} as the container sees it`}
+              onClick={() => void preview(entry.port)}
+            >
+              open
+            </button>
+          )}
           {entry.shared && entry.url ? (
             <>
               <a

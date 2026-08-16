@@ -12,11 +12,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from .. import preview, runtime, ssh
+from .. import preview, runtime, socks, ssh
 from ..auth import Principal, current_principal
 from ..config import get_settings
 from ..runtime import CAN_OBSERVE, NotFound
-from ..schemas import DetectedPortOut
+from ..schemas import DetectedPortOut, PreviewOut
 from ..ssh import SSHError
 
 log = logging.getLogger(__name__)
@@ -59,6 +59,73 @@ async def list_ports(
         )
         for item in detected
     ]
+
+
+@router.post("/{project_id}/preview", response_model=PreviewOut)
+async def open_preview(
+    project_id: UUID, principal: Principal = Depends(current_principal)
+) -> PreviewOut:
+    """Start a proxy that puts the whole container on the caller's machine.
+
+    This is the answer to a problem forwarding cannot solve. A page served from
+    the container runs in a browser *here*, so when its code asks for
+    `http://localhost:8000` it gets this machine's port 8000 — not the API it
+    means. Renumbering does not help, because the address is the application's
+    choice and it asks for the one it was written with.
+
+    Pointing the browser at this proxy changes what those names mean instead.
+    Every address it asks for resolves inside the container, so nothing has to
+    be rewritten, nothing has to be declared, and an app that hardcodes a port
+    or serves on 80 works the same as one that does everything properly.
+    """
+    try:
+        ctx = await runtime.load_project_context(
+            principal.claims, project_id, require=CAN_OBSERVE
+        )
+    except NotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    settings = get_settings()
+    try:
+        proxy = await socks.registry.ensure(
+            project_id=str(project_id),
+            container=ctx.container,
+            target=ctx.target,
+            bind=settings.moonphase_preview_bind,
+        )
+    except OSError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Could not start the preview proxy: {exc}"
+        ) from exc
+
+    ports = []
+    try:
+        conn_ssh = await ssh.pool.get(ctx.target)
+        ports = [p.port for p in await preview.detect_ports(conn_ssh, ctx.container)]
+    except SSHError as exc:
+        # The proxy is what matters; the list is a convenience for choosing a
+        # URL, and a slow container should not stop the preview opening.
+        log.debug("preview: could not list ports: %s", exc)
+
+    return PreviewOut(
+        proxy_host=settings.moonphase_preview_host,
+        proxy_port=proxy.local_port,
+        ports=sorted(ports),
+        container=ctx.container,
+    )
+
+
+@router.delete("/{project_id}/preview", status_code=status.HTTP_204_NO_CONTENT)
+async def close_preview(
+    project_id: UUID, principal: Principal = Depends(current_principal)
+) -> None:
+    try:
+        await runtime.load_project_context(
+            principal.claims, project_id, require=CAN_OBSERVE
+        )
+    except NotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await socks.registry.close(str(project_id))
 
 
 @router.post("/{project_id}/ports/{port}/share", response_model=DetectedPortOut)

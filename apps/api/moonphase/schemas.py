@@ -479,6 +479,18 @@ class DetectedPortOut(BaseModel):
     url: str | None = None
 
 
+class PreviewOut(BaseModel):
+    """Where to point a browser so the container's own addresses resolve."""
+
+    proxy_host: str
+    proxy_port: int
+    # What is listening right now, so the UI can offer somewhere to start.
+    # Not a declaration and not required: the proxy carries whatever is asked
+    # for, including ports that appear later.
+    ports: list[int] = Field(default_factory=list)
+    container: str
+
+
 class PortShareIn(BaseModel):
     port: int = Field(ge=1, le=65535)
 
