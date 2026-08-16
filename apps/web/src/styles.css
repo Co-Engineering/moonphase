@@ -1412,6 +1412,14 @@ button.linkish:hover:not(:disabled) {
   min-width: 0;
 }
 
+/* Inputs are width:100% globally, which in a flex row makes the select claim
+ * the whole thing and squeeze the email field to nothing. */
+.share-add select,
+.share-row select {
+  flex: 0 0 auto;
+  width: auto;
+}
+
 .share-meaning {
   margin: 0 0 14px;
 }

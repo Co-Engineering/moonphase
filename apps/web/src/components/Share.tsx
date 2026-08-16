@@ -75,7 +75,7 @@ export function Share({ kind, id, name, onClose, onChanged }: Props) {
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal share-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="card modal share-modal" onClick={(e) => e.stopPropagation()}>
         <h2>Share {name}</h2>
         <p className="hint">
           {kind === 'servers'
