@@ -13,6 +13,15 @@ SshAuthMode = Literal["password_bootstrap", "managed_key", "provided_key"]
 HarnessKindStr = Literal["claude_code", "opencode"]
 HarnessAuthModeStr = Literal["oauth", "api_key"]
 
+# What you grant someone.
+ShareRoleStr = Literal["viewer", "collaborator"]
+# What they end up with. Computed by the database; see the sharing migration.
+#   admin  everything, including deleting it and managing its shares
+#   write  use it: start, stop, type into it, create projects on it
+#   read   watch it
+#   host   you own the machine a project runs on, but not the project
+AccessStr = Literal["admin", "write", "read", "host"]
+
 
 class ORMModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -84,6 +93,11 @@ class ServerOut(ORMModel):
     last_seen_at: datetime | None
     created_at: datetime
     project_count: int = 0
+    # What this caller may do with it, and whether it reached them through a
+    # share rather than their own organization.
+    access: AccessStr = "admin"
+    shared: bool = False
+    share_count: int = 0
 
 
 class ServerBootstrapOut(BaseModel):
@@ -140,6 +154,43 @@ class ProjectOut(ORMModel):
     activity: str = "unknown"
     activity_detail: str | None = None
     activity_at: datetime | None = None
+    access: AccessStr = "admin"
+    shared: bool = False
+    share_count: int = 0
+
+
+# --- sharing ------------------------------------------------------------------
+
+
+class ShareIn(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    role: ShareRoleStr = "collaborator"
+
+    @field_validator("email")
+    @classmethod
+    def _clean_email(cls, v: str) -> str:
+        v = v.strip().lower()
+        # Deliberately not RFC-complete: the address either matches an account
+        # here or it does not, and over-strict validation rejects real ones.
+        if v.count("@") != 1 or v.startswith("@") or v.endswith("@") or " " in v:
+            raise ValueError("That does not look like an email address.")
+        return v
+
+
+class ShareRoleIn(BaseModel):
+    role: ShareRoleStr
+
+
+class ShareOut(BaseModel):
+    id: UUID
+    email: str
+    role: ShareRoleStr
+    # False until the invitee has signed up and the grant has been claimed.
+    accepted: bool = False
+    created_at: datetime
+    # True for the row describing the caller, so the UI can offer "leave"
+    # instead of "revoke".
+    is_you: bool = False
 
 
 class PushSubscriptionIn(BaseModel):

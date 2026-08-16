@@ -6,6 +6,8 @@ interface Props {
   running: boolean
   active: string
   onSelect: (session: string) => void
+  /** Shared with view-only access: pick a session to watch, change nothing. */
+  readOnly?: boolean
 }
 
 const ACTIVITY_TITLE: Record<string, string> = {
@@ -24,7 +26,7 @@ const ACTIVITY_TITLE: Record<string, string> = {
  * also worth being explicit about, since it is not the isolation people
  * assume from separate tabs.
  */
-export function Sessions({ projectId, running, active, onSelect }: Props) {
+export function Sessions({ projectId, running, active, onSelect, readOnly = false }: Props) {
   const [items, setItems] = useState<Session[]>([])
   const [adding, setAdding] = useState(false)
   const [name, setName] = useState('')
@@ -134,7 +136,7 @@ export function Sessions({ projectId, running, active, onSelect }: Props) {
                   </span>
                 )}
               </button>
-              {items.length > 1 && (
+              {items.length > 1 && !readOnly && (
                 <button
                   className="session-close"
                   disabled={busy}
@@ -148,7 +150,7 @@ export function Sessions({ projectId, running, active, onSelect }: Props) {
           )
         })}
 
-        {adding ? (
+        {readOnly ? null : adding ? (
           <form
             className="session-new"
             onSubmit={(e) => {
@@ -175,19 +177,20 @@ export function Sessions({ projectId, running, active, onSelect }: Props) {
 
         <div className="spacer" />
 
-        {items.find((s) => s.tmux_session === active && s.attached_clients > 1) && (
-          <button
-            className="ghost session-detach"
-            disabled={busy}
-            title="Detach every device from this session. The session keeps running."
-            onClick={() => {
-              const current = items.find((s) => s.tmux_session === active)
-              if (current) void detach(current)
-            }}
-          >
-            Detach others
-          </button>
-        )}
+        {!readOnly &&
+          items.find((s) => s.tmux_session === active && s.attached_clients > 1) && (
+            <button
+              className="ghost session-detach"
+              disabled={busy}
+              title="Detach every device from this session. The session keeps running."
+              onClick={() => {
+                const current = items.find((s) => s.tmux_session === active)
+                if (current) void detach(current)
+              }}
+            >
+              Detach others
+            </button>
+          )}
       </div>
 
       {error && <div className="session-error">{error}</div>}

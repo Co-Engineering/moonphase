@@ -183,7 +183,9 @@ class SessionMonitor:
             return
 
         async with service_session() as conn:
-            subscriptions = await _subscriptions_for_org(conn, row["org_id"])
+            subscriptions = await _subscriptions_for_project(
+                conn, row["org_id"], row["id"]
+            )
 
         dead: list[str] = []
         for sub in subscriptions:
@@ -251,18 +253,36 @@ async def _record_activity(
     )
 
 
-async def _subscriptions_for_org(conn: Any, org_id: Any) -> list[dict[str, Any]]:
-    """Everyone in the org who has enabled notifications on some device."""
+async def _subscriptions_for_project(
+    conn: Any, org_id: Any, project_id: Any
+) -> list[dict[str, Any]]:
+    """Everyone who could answer, and who has enabled notifications somewhere.
+
+    The org that owns the project, plus anyone it was shared with as a
+    collaborator. Viewers are deliberately left out: "Claude needs you" sent to
+    someone who cannot type is a notification they can do nothing about.
+
+    `distinct` because one person can be reachable both ways, and two identical
+    pushes to the same device is a bug the user experiences directly.
+    """
     result = await conn.execute(
         text(
             """
-            select ps.endpoint, ps.p256dh, ps.auth
+            select distinct ps.endpoint, ps.p256dh, ps.auth
             from push_subscriptions ps
-            join org_members m on m.user_id = ps.user_id
-            where m.org_id = :org_id
+            where exists (
+                    select 1 from org_members m
+                    where m.user_id = ps.user_id and m.org_id = :org_id
+                  )
+               or exists (
+                    select 1 from project_shares sh
+                    where sh.user_id = ps.user_id
+                      and sh.project_id = :project_id
+                      and sh.role = 'collaborator'
+                  )
             """
         ),
-        {"org_id": org_id},
+        {"org_id": org_id, "project_id": project_id},
     )
     return [dict(r._mapping) for r in result]
 

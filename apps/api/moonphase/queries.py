@@ -98,7 +98,10 @@ async def resolve_org(conn: AsyncConnection, org_id: UUID | None) -> UUID:
 SERVER_COLUMNS = """
     s.id, s.org_id, s.name, s.host, s.port, s.ssh_user, s.ssh_auth_mode,
     s.status, s.status_detail, s.host_key_fingerprint, s.docker_version,
-    s.managed_public_key, s.last_seen_at, s.created_at
+    s.managed_public_key, s.last_seen_at, s.created_at,
+    public.server_access(s.id) as access,
+    not public.is_org_member(s.org_id) as shared,
+    (select count(*) from server_shares sh where sh.server_id = s.id) as share_count
 """
 
 
@@ -329,7 +332,14 @@ PROJECT_COLUMNS = """
               end, s.created_at
      limit 1) as activity_detail,
     (select max(s.activity_at) from project_sessions s
-     where s.project_id = p.id) as activity_at
+     where s.project_id = p.id) as activity_at,
+    public.project_access(p.id) as access,
+    not public.is_org_member(p.org_id) as shared,
+    (select count(*) from project_shares ph where ph.project_id = p.id) as share_count,
+    -- Not `servers.name`: a project shared with you may live on a machine you
+    -- have no access to, and joining the row would either leak its address or
+    -- drop the project from your list entirely.
+    public.server_label(p.server_id) as server_name
 """
 
 
@@ -340,9 +350,8 @@ async def list_projects(
     result = await conn.execute(
         text(
             f"""
-            select {PROJECT_COLUMNS}, s.name as server_name
+            select {PROJECT_COLUMNS}
             from projects p
-            join servers s on s.id = p.server_id
             {clause}
             order by p.created_at desc
             """
@@ -354,18 +363,166 @@ async def list_projects(
 
 async def get_project(conn: AsyncConnection, project_id: UUID) -> dict[str, Any] | None:
     result = await conn.execute(
-        text(
-            f"""
-            select {PROJECT_COLUMNS}, s.name as server_name
-            from projects p
-            join servers s on s.id = p.server_id
-            where p.id = :id
-            """
-        ),
+        text(f"select {PROJECT_COLUMNS} from projects p where p.id = :id"),
         {"id": project_id},
     )
     row = result.first()
     return _row_to_dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Sharing
+# ---------------------------------------------------------------------------
+
+# Both tables have the same shape, and the API surface for them is identical.
+# Keeping one implementation parameterised by table beats two that drift.
+_SHARE_TABLES = {
+    "server": ("server_shares", "server_id"),
+    "project": ("project_shares", "project_id"),
+}
+
+SHARE_COLUMNS = "id, user_id, email, role::text as role, created_at"
+
+
+def _share_table(kind: str) -> tuple[str, str]:
+    try:
+        return _SHARE_TABLES[kind]
+    except KeyError:
+        raise ValueError(f"Not a shareable resource: {kind!r}") from None
+
+
+async def access_level(
+    conn: AsyncConnection, kind: str, resource_id: UUID
+) -> str | None:
+    """What the caller may do with this resource, straight from the database.
+
+    The same function the RLS policies use, so a route cannot be more
+    permissive than the row-level rules it is running under.
+    """
+    fn = "server_access" if kind == "server" else "project_access"
+    result = await conn.execute(
+        text(f"select public.{fn}(:id)"), {"id": resource_id}
+    )
+    return result.scalar_one_or_none()
+
+
+async def list_shares(
+    conn: AsyncConnection, kind: str, resource_id: UUID
+) -> list[dict[str, Any]]:
+    table, column = _share_table(kind)
+    result = await conn.execute(
+        text(
+            f"select {SHARE_COLUMNS} from {table} where {column} = :id "
+            "order by created_at"
+        ),
+        {"id": resource_id},
+    )
+    return [_row_to_dict(r) for r in result]
+
+
+async def upsert_share(
+    conn: AsyncConnection,
+    kind: str,
+    resource_id: UUID,
+    *,
+    email: str,
+    user_id: str | None,
+    role: str,
+    created_by: str,
+) -> dict[str, Any]:
+    """Grant access, or change the role of an existing grant.
+
+    `user_id` is null when the invitee has no account yet; a trigger on
+    auth.users fills it in when they sign up.
+    """
+    table, column = _share_table(kind)
+    result = await conn.execute(
+        text(
+            f"""
+            insert into {table} ({column}, user_id, email, role, created_by)
+            values (:resource, cast(:user_id as uuid), :email,
+                    cast(:role as share_role), :created_by)
+            on conflict ({column}, lower(email)) do update set
+              role    = excluded.role,
+              user_id = coalesce({table}.user_id, excluded.user_id)
+            returning {SHARE_COLUMNS}
+            """
+        ),
+        {
+            "resource": resource_id,
+            "user_id": user_id,
+            "email": email,
+            "role": role,
+            "created_by": created_by,
+        },
+    )
+    row = result.first()
+    if row is None:
+        raise PermissionError("Not allowed to share this.")
+    return _row_to_dict(row)
+
+
+async def update_share_role(
+    conn: AsyncConnection, kind: str, resource_id: UUID, share_id: UUID, role: str
+) -> dict[str, Any] | None:
+    table, column = _share_table(kind)
+    result = await conn.execute(
+        text(
+            f"""
+            update {table} set role = cast(:role as share_role)
+            where id = :share_id and {column} = :resource
+            returning {SHARE_COLUMNS}
+            """
+        ),
+        {"role": role, "share_id": share_id, "resource": resource_id},
+    )
+    row = result.first()
+    return _row_to_dict(row) if row else None
+
+
+async def delete_share(
+    conn: AsyncConnection, kind: str, resource_id: UUID, share_id: UUID
+) -> bool:
+    table, column = _share_table(kind)
+    result = await conn.execute(
+        text(
+            f"delete from {table} where id = :share_id and {column} = :resource "
+            "returning id"
+        ),
+        {"share_id": share_id, "resource": resource_id},
+    )
+    return result.first() is not None
+
+
+async def find_user_by_email_privileged(
+    conn: AsyncConnection, email: str
+) -> dict[str, Any] | None:
+    """Resolve an invitee. Requires a service session: auth.users is not ours.
+
+    Whether this returns anything is observable to the person sharing — they
+    see "invited" rather than "shared" — which does disclose that an address
+    has an account here. On a self-hosted instance among colleagues that is a
+    fair trade for not silently dropping invitations.
+    """
+    result = await conn.execute(
+        text("select id, email from auth.users where lower(email) = lower(:e) limit 1"),
+        {"e": email},
+    )
+    row = result.first()
+    return _row_to_dict(row) if row else None
+
+
+async def is_org_member_by_user(
+    conn: AsyncConnection, org_id: UUID, user_id: str
+) -> bool:
+    """Used to explain "they are already on your team" rather than sharing."""
+    result = await conn.execute(
+        text(
+            "select 1 from org_members where org_id = :o and user_id = cast(:u as uuid)"
+        ),
+        {"o": org_id, "u": user_id},
+    )
+    return result.first() is not None
 
 
 async def slug_is_free(conn: AsyncConnection, server_id: UUID, slug: str) -> bool:

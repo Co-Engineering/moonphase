@@ -34,7 +34,7 @@ from .. import activity, docker_remote, runtime, sessions, ssh
 from .. import harness as harness_registry
 from .. import transcript as transcript_reader
 from ..auth import Principal, websocket_principal
-from ..runtime import NotFound
+from ..runtime import CAN_OBSERVE, Forbidden, NotFound
 from ..ssh import SSHError
 
 log = logging.getLogger(__name__)
@@ -195,7 +195,13 @@ async def project_feed(
     session_name = sessions.sanitise_name(session)
 
     try:
-        ctx = await runtime.load_project_context(principal.claims, project_id)
+        ctx = await runtime.load_project_context(
+            principal.claims, project_id, require=CAN_OBSERVE
+        )
+    except Forbidden as exc:
+        await _send(websocket, {"type": "error", "message": str(exc)})
+        await websocket.close(code=4403)
+        return
     except NotFound as exc:
         await _send(websocket, {"type": "error", "message": str(exc)})
         await websocket.close(code=4404)

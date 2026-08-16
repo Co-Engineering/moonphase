@@ -27,7 +27,7 @@ from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 from .. import docker_remote, queries, runtime, sessions, ssh
 from ..auth import Principal, websocket_principal
 from ..db import user_session
-from ..runtime import NotFound
+from ..runtime import CAN_CONTROL, CAN_OBSERVE, Forbidden, NotFound
 from ..ssh import SSHError
 
 log = logging.getLogger(__name__)
@@ -92,8 +92,19 @@ async def _pump_output(process: asyncssh.SSHClientProcess, websocket: WebSocket)
         await websocket.send_bytes(data)
 
 
-async def _pump_input(process: asyncssh.SSHClientProcess, websocket: WebSocket) -> None:
-    """Client → remote stdin, plus out-of-band control messages."""
+async def _pump_input(
+    process: asyncssh.SSHClientProcess,
+    websocket: WebSocket,
+    *,
+    writable: bool = True,
+) -> None:
+    """Client → remote stdin, plus out-of-band control messages.
+
+    A viewer's socket is still read: it carries pings and the disconnect that
+    ends the session. Only the keystrokes are dropped. tmux is attached
+    read-only as well, but the guarantee that matters is this one, because it
+    does not depend on a tmux version behaving as documented.
+    """
     while True:
         message = await websocket.receive()
 
@@ -102,7 +113,8 @@ async def _pump_input(process: asyncssh.SSHClientProcess, websocket: WebSocket) 
 
         data = message.get("bytes")
         if data is not None:
-            process.stdin.write(data)
+            if writable:
+                process.stdin.write(data)
             continue
 
         raw = message.get("text")
@@ -113,7 +125,8 @@ async def _pump_input(process: asyncssh.SSHClientProcess, websocket: WebSocket) 
         except json.JSONDecodeError:
             # Not control traffic — treat it as typed input so a naive client
             # sending text frames still works.
-            process.stdin.write(raw.encode())
+            if writable:
+                process.stdin.write(raw.encode())
             continue
 
         kind = control.get("type")
@@ -126,7 +139,8 @@ async def _pump_input(process: asyncssh.SSHClientProcess, websocket: WebSocket) 
             with contextlib.suppress(OSError, asyncssh.Error):
                 process.change_terminal_size(cols, rows)
         elif kind == "input":
-            process.stdin.write(str(control.get("data", "")).encode())
+            if writable:
+                process.stdin.write(str(control.get("data", "")).encode())
         elif kind == "ping":
             await websocket.send_text(json.dumps({"type": "pong"}))
 
@@ -144,11 +158,20 @@ async def project_terminal(
     session_name = sessions.sanitise_name(session)
 
     try:
-        ctx = await runtime.load_project_context(principal.claims, project_id)
+        ctx = await runtime.load_project_context(
+            principal.claims, project_id, require=CAN_OBSERVE
+        )
+    except Forbidden as exc:
+        await websocket.send_text(json.dumps({"type": "error", "message": str(exc)}))
+        await websocket.close(code=4403)
+        return
     except NotFound as exc:
         await websocket.send_text(json.dumps({"type": "error", "message": str(exc)}))
         await websocket.close(code=4404)
         return
+
+    # A viewer gets the same live picture and none of the keyboard.
+    writable = ctx.access in CAN_CONTROL
 
     try:
         conn_ssh = await ssh.pool.get(ctx.target)
@@ -162,29 +185,48 @@ async def project_terminal(
 
     # Make sure there is something to attach to. `ensure_session` is a no-op
     # when the session already exists, which is the normal case.
+    #
+    # Skipped entirely for a viewer: starting a container and launching a
+    # harness is exactly the kind of thing view-only access exists to prevent,
+    # and it would be doing it with someone else's credentials.
     try:
         container = await docker_remote.inspect(conn_ssh, ctx.container)
         if container is None:
             raise SSHError("The project container no longer exists on this server.")
-        if container.state != "running":
-            await docker_remote.start(conn_ssh, ctx.container)
+        if not writable:
+            if container.state != "running":
+                raise SSHError(
+                    "This project is not running, and view-only access cannot "
+                    "start it."
+                )
+            if session_name not in await sessions.client_counts(
+                conn_ssh, ctx.container
+            ):
+                raise SSHError(
+                    f"There is no session called {session_name!r} running yet."
+                )
+        else:
+            if container.state != "running":
+                await docker_remote.start(conn_ssh, ctx.container)
 
-        workspace_profile = await runtime.load_profile(
-            principal.claims, ctx.project["org_id"], project_id, ctx.harness
-        )
-        await sessions.ensure_session(
-            conn_ssh,
-            ctx.container,
-            harness_kind=ctx.harness,
-            workspace_profile=workspace_profile,
-            session=session_name,
-        )
+            workspace_profile = await runtime.load_profile(
+                principal.claims, ctx.project["org_id"], project_id, ctx.harness
+            )
+            await sessions.ensure_session(
+                conn_ssh,
+                ctx.container,
+                harness_kind=ctx.harness,
+                workspace_profile=workspace_profile,
+                session=session_name,
+            )
     except SSHError as exc:
         await websocket.send_text(json.dumps({"type": "error", "message": str(exc)}))
         await websocket.close(code=4500)
         return
 
-    attach = sessions.attach_command(ctx.container, session_name)
+    attach = sessions.attach_command(
+        ctx.container, session_name, read_only=not writable
+    )
 
     try:
         process = await conn_ssh.create_process(
@@ -204,8 +246,10 @@ async def project_terminal(
     if leftover:
         await websocket.send_bytes(leftover)
 
-    async with user_session(principal.claims) as conn:
-        await queries.touch_attached(conn, project_id, session_name)
+    if writable:
+        # A viewer arriving must not look like the session being driven.
+        async with user_session(principal.claims) as conn:
+            await queries.touch_attached(conn, project_id, session_name)
 
     await websocket.send_text(
         json.dumps(
@@ -214,12 +258,15 @@ async def project_terminal(
                 "project_id": str(project_id),
                 "container": ctx.container,
                 "session": session_name,
+                "writable": writable,
             }
         )
     )
 
     output_task = asyncio.create_task(_pump_output(process, websocket))
-    input_task = asyncio.create_task(_pump_input(process, websocket))
+    input_task = asyncio.create_task(
+        _pump_input(process, websocket, writable=writable)
+    )
 
     try:
         done, pending = await asyncio.wait(

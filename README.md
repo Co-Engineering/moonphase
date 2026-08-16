@@ -23,10 +23,33 @@ Implemented:
   bring-your-own key), Docker probe and optional install
 - Create a project → dedicated container + named volumes, optional `git clone`
 - Claude Code launched in `tmux`, attached over a WebSocket PTY bridge into xterm.js
+- Global sign-in and settings: connect Claude Code and GitHub once, every project uses it
+- User-definable environments — base image plus setup commands, built on the server
+- Automatic port detection and preview tunnels; nothing is ever declared
+- A readable transcript feed for phones, streaming, that writes back into the same session
+- Activity detection and Web Push, so you learn the agent is waiting without a client open
+- Share a server or a project with one person, by email, as a viewer or a collaborator
 - Electron desktop shell
 
-Not yet: zrok tunnels, the phone transcript feed, Claude Code OAuth relay (API key works
-today), OpenCode, invites and role management UI.
+Not yet: zrok tunnels (previews are reachable from the backend host today), OpenCode,
+organization invites and role management UI.
+
+## Sharing
+
+Two ways to give someone access, both from the **Share** button on a server or a project:
+
+|                   | `Can view`                              | `Can use`                                        |
+| ----------------- | --------------------------------------- | ------------------------------------------------ |
+| **on a server**   | see the machine and how it is doing     | also create their own projects on it              |
+| **on a project**  | watch the feed and terminal, read-only  | also type into it, answer prompts, start and stop |
+
+Share by email. If they have not signed up yet the grant waits for them, so "share it and
+tell them to register" works in that order.
+
+A project someone creates on a server you lent them is **theirs** — their organization,
+their Claude account, their transcript. You see that it exists and can reclaim the
+resources; you do not get to read it. Shares never grant administration: only the owner
+can bootstrap, test, delete, or decide who else gets in.
 
 ## Architecture
 

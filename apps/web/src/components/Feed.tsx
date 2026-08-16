@@ -5,6 +5,12 @@ interface Props {
   projectId: string
   session: string
   running: boolean
+  /**
+   * Shared with view-only access. The feed is the whole point of a read-only
+   * share, so it streams exactly as it does for anyone else; only the ways of
+   * putting something *into* the session go away.
+   */
+  readOnly?: boolean
 }
 
 const TOOL_ICON: Record<string, string> = {
@@ -40,7 +46,7 @@ function merge(current: FeedEvent[], incoming: FeedEvent[]): FeedEvent[] {
  * Everything it sends goes through the same session the desktop is attached
  * to, so answering here shows up there as if it had been typed.
  */
-export function Feed({ projectId, session, running }: Props) {
+export function Feed({ projectId, session, running, readOnly = false }: Props) {
   const [events, setEvents] = useState<FeedEvent[]>([])
   const [prompt, setPrompt] = useState<Prompt | null>(null)
   const [activity, setActivity] = useState('unknown')
@@ -242,7 +248,8 @@ export function Feed({ projectId, session, running }: Props) {
               <button
                 key={option.key}
                 className={option.key === '1' ? 'primary' : ''}
-                disabled={sending}
+                disabled={sending || readOnly}
+                title={readOnly ? 'View-only access' : undefined}
                 onClick={() => void send(option.key)}
               >
                 <span className="feed-option-key">{option.key}</span>
@@ -257,19 +264,25 @@ export function Feed({ projectId, session, running }: Props) {
         className="feed-compose"
         onSubmit={(e) => {
           e.preventDefault()
-          void send(message)
+          if (!readOnly) void send(message)
         }}
       >
         <input
           value={message}
           onChange={(e) => setMessage(e.target.value)}
-          placeholder={activity === 'working' ? 'Claude is working…' : 'Send a message'}
-          disabled={!running || sending}
+          placeholder={
+            readOnly
+              ? 'View only — you can watch this session'
+              : activity === 'working'
+                ? 'Claude is working…'
+                : 'Send a message'
+          }
+          disabled={!running || sending || readOnly}
         />
         <button
           className="primary"
           type="submit"
-          disabled={!running || sending || !message.trim()}
+          disabled={!running || sending || readOnly || !message.trim()}
         >
           Send
         </button>

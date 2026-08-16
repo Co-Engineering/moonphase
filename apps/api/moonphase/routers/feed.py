@@ -23,7 +23,7 @@ from .. import harness as harness_registry
 from .. import transcript as transcript_reader
 from ..auth import Principal, current_principal
 from ..db import user_session
-from ..runtime import NotFound
+from ..runtime import CAN_OBSERVE, NotFound
 from ..schemas import AnswerIn, FeedOut, PromptOut, TranscriptEventOut
 from ..ssh import SSHError
 
@@ -48,7 +48,9 @@ async def get_feed(
     session_name = sessions.sanitise_name(session or sessions.DEFAULT_SESSION)
 
     try:
-        ctx = await runtime.load_project_context(principal.claims, project_id)
+        ctx = await runtime.load_project_context(
+            principal.claims, project_id, require=CAN_OBSERVE
+        )
     except NotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

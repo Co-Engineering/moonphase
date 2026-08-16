@@ -319,7 +319,9 @@ async def capture_pane(
 TTY_MARKER = "MOONPHASE_TTY="
 
 
-def attach_command(container: str, session: str = DEFAULT_SESSION) -> str:
+def attach_command(
+    container: str, session: str = DEFAULT_SESSION, *, read_only: bool = False
+) -> str:
     """Shell command that attaches a client to the session over a PTY.
 
     `-A` creates the session if it vanished, so a race between a health check
@@ -332,11 +334,21 @@ def attach_command(container: str, session: str = DEFAULT_SESSION) -> str:
     the most recent client, a single visit from a phone would pin the desktop
     to 60 columns permanently. Knowing our own tty lets the bridge detach
     itself explicitly on the way out.
+
+    `read_only` is for someone a project was shared with as a viewer. It adds
+    `ignore-size` as well as `-r`: a viewer who cannot type could otherwise
+    still squeeze the window for whoever is driving, which is the same defect
+    as a phantom client and just as baffling to run into. It also attaches
+    rather than creating — a viewer arriving at a project with nothing running
+    should be told so, not silently start a session.
     """
-    inner = (
-        f'printf "{TTY_MARKER}%s\\n" "$(tty)"; '
-        f"exec tmux new-session -A -s {shlex.quote(session)}"
-    )
+    if read_only:
+        attach = (
+            f"exec tmux attach-session -r -f ignore-size -t {shlex.quote(session)}"
+        )
+    else:
+        attach = f"exec tmux new-session -A -s {shlex.quote(session)}"
+    inner = f'printf "{TTY_MARKER}%s\\n" "$(tty)"; {attach}'
     return docker_remote.exec_tty_command(
         container, ["sh", "-c", inner], workdir="/workspace"
     )

@@ -12,6 +12,7 @@ from .. import environments, queries
 from .. import harness as harness_registry
 from ..auth import Principal, current_principal
 from ..db import service_session, user_session
+from ..runtime import CAN_ADMINISTER, Forbidden
 from ..schemas import (
     EnvironmentIn,
     EnvironmentOut,
@@ -222,6 +223,14 @@ async def create_harness_credential(
             project = await queries.get_project(conn, payload.project_id)
             if project is None:
                 raise HTTPException(status_code=404, detail="Project not found.")
+            # Which account the agent runs as is the project owner's call. Being
+            # able to see a project — as a collaborator, a viewer, or the owner
+            # of the machine under it — must not let you swap its credentials.
+            if project.get("access") not in CAN_ADMINISTER:
+                raise Forbidden(
+                    "Only an owner of this project can change which account it "
+                    "runs as."
+                )
             org_id = project["org_id"]
 
     async with service_session() as conn:

@@ -33,10 +33,50 @@ class NotFound(Exception):
     """Row absent, or hidden from this caller by RLS. Same thing to the client."""
 
 
+class Forbidden(Exception):
+    """Visible to this caller, but not at the level this operation needs.
+
+    Distinct from NotFound on purpose. Once someone has been shown a project,
+    telling them "you may watch this but not type into it" is more useful than
+    pretending it vanished, and discloses nothing they cannot already see.
+    """
+
+
+# What each level may do. A plain ordering would be wrong: 'host' — you own the
+# machine, not the project — outranks 'read' for reclaiming resources and sits
+# below it for everything to do with the conversation.
+CAN_OBSERVE = frozenset({"admin", "write", "read"})
+CAN_CONTROL = frozenset({"admin", "write"})
+CAN_ADMINISTER = frozenset({"admin"})
+CAN_DELETE = frozenset({"admin", "host"})
+
+
+def _describe(required: frozenset[str], access: str | None) -> str:
+    if required is CAN_CONTROL:
+        if access == "read":
+            return "You have view-only access to this project."
+        if access == "host":
+            return (
+                "This project belongs to someone else; you can see it because it "
+                "runs on your server."
+            )
+        return "You do not have permission to change this project."
+    if required is CAN_OBSERVE:
+        return (
+            "This project belongs to someone else. You can see that it runs on "
+            "your server, but not what it is doing."
+        )
+    return "Only an owner of this project can do that."
+
+
 @dataclass
 class ProjectContext:
     project: dict[str, Any]
     target: SSHTarget
+
+    @property
+    def access(self) -> str:
+        return str(self.project.get("access") or "read")
 
     @property
     def container(self) -> str:
@@ -50,11 +90,27 @@ class ProjectContext:
         return str(self.project["harness"])
 
 
-async def load_project_context(claims: dict[str, Any], project_id: UUID) -> ProjectContext:
+async def load_project_context(
+    claims: dict[str, Any],
+    project_id: UUID,
+    *,
+    require: frozenset[str] = CAN_CONTROL,
+) -> ProjectContext:
+    """Authorize, then load the credentials needed to act.
+
+    `require` defaults to CAN_CONTROL because most callers are about to do
+    something to the container. Read-only routes must ask for CAN_OBSERVE
+    explicitly, which makes the weaker check visible at the call site rather
+    than implied by its absence.
+    """
     async with user_session(claims) as conn:
         project = await queries.get_project(conn, project_id)
     if project is None:
         raise NotFound(f"Project {project_id} not found.")
+
+    access = str(project.get("access") or "")
+    if access not in require:
+        raise Forbidden(_describe(require, access or None))
 
     async with service_session() as conn:
         target = await queries.load_ssh_target_privileged(conn, project["server_id"])
@@ -64,11 +120,28 @@ async def load_project_context(claims: dict[str, Any], project_id: UUID) -> Proj
     return ProjectContext(project=project, target=target)
 
 
-async def load_server_target(claims: dict[str, Any], server_id: UUID) -> SSHTarget:
+async def load_server_target(
+    claims: dict[str, Any],
+    server_id: UUID,
+    *,
+    require: frozenset[str] = CAN_ADMINISTER,
+) -> SSHTarget:
+    """A connection to the machine itself.
+
+    Defaults to CAN_ADMINISTER: reaching a server directly, rather than through
+    a project on it, is a maintenance operation. Being lent the machine to run
+    work on does not make you its administrator.
+    """
     async with user_session(claims) as conn:
         server = await queries.get_server(conn, server_id)
     if server is None:
         raise NotFound(f"Server {server_id} not found.")
+
+    access = str(server.get("access") or "")
+    if access not in require:
+        raise Forbidden(
+            "This server is shared with you; only its owner can administer it."
+        )
 
     async with service_session() as conn:
         target = await queries.load_ssh_target_privileged(conn, server_id)

@@ -19,7 +19,7 @@ from ..auth import Principal, current_principal
 from ..config import get_settings
 from ..db import service_session, user_session
 from ..harness import get as get_harness
-from ..runtime import NotFound
+from ..runtime import CAN_CONTROL, NotFound
 from ..schemas import (
     GitHubDeviceOut,
     GitHubDeviceStart,
@@ -147,7 +147,10 @@ async def _pick_login_server(
             return server
         servers = await queries.list_servers(conn)
 
-    online = [s for s in servers if s["status"] == "online"]
+    online = [
+        s for s in servers
+        if s["status"] == "online" and s.get("access") in CAN_CONTROL
+    ]
     if not online:
         raise HTTPException(
             status_code=409,
@@ -207,7 +210,9 @@ async def start_harness_login(
     settings = get_settings()
 
     try:
-        target = await runtime.load_server_target(principal.claims, server["id"])
+        target = await runtime.load_server_target(
+            principal.claims, server["id"], require=CAN_CONTROL
+        )
         conn_ssh = await ssh.pool.get(target)
         session = await login.start(
             conn_ssh,
@@ -240,8 +245,8 @@ async def poll_harness_login(
         harness = get_harness(session.harness_kind)
         try:
             target = await runtime.load_server_target(
-                principal.claims, UUID(session.server_id)
-            )
+            principal.claims, UUID(session.server_id), require=CAN_CONTROL
+        )
             conn_ssh = await ssh.pool.get(target)
             session = await login.advance(conn_ssh, session, harness)
         except (SSHError, NotFound) as exc:
@@ -265,7 +270,7 @@ async def submit_harness_code(
 
     try:
         target = await runtime.load_server_target(
-            principal.claims, UUID(session.server_id)
+            principal.claims, UUID(session.server_id), require=CAN_CONTROL
         )
         conn_ssh = await ssh.pool.get(target)
         # Types the code and returns at once; the client polls for the result.

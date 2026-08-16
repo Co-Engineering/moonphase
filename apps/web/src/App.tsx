@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Session as AuthSession } from '@supabase/supabase-js'
 import { supabase } from './lib/supabase'
-import { api, type Project, type Server } from './lib/api'
+import { api, canControl, type Project, type Server } from './lib/api'
 import { useResource } from './lib/useResource'
 import { ProjectTerminal } from './components/Terminal'
 import { Auth } from './routes/Auth'
@@ -11,6 +11,7 @@ import { Settings } from './routes/Settings'
 import { Ports } from './components/Ports'
 import { Sessions } from './components/Sessions'
 import { Feed } from './components/Feed'
+import { Share } from './components/Share'
 
 export function App() {
   const [session, setSession] = useState<AuthSession | null>(null)
@@ -32,6 +33,8 @@ export function App() {
   return <Shell email={session.user.email ?? ''} />
 }
 
+type ShareTarget = { kind: 'servers' | 'projects'; id: string; name: string }
+
 function Shell({ email }: { email: string }) {
   const [selected, setSelected] = useState<
     { kind: 'server' | 'project'; id: string } | null
@@ -40,6 +43,7 @@ function Shell({ email }: { email: string }) {
   const [showNewProject, setShowNewProject] = useState(false)
   const [showSidebar, setShowSidebar] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [shareTarget, setShareTarget] = useState<ShareTarget | null>(null)
 
   // Servers are polled: bootstrap and Docker installs finish out of band, and
   // a stale "bootstrapping" chip is the most confusing thing the UI can show.
@@ -71,6 +75,18 @@ function Shell({ email }: { email: string }) {
       ? (servers.data?.find((s) => s.id === selected.id) ?? null)
       : null
 
+  // A project shared with you directly usually sits on a machine you cannot
+  // see at all, so it has nowhere to nest. Giving those their own group is
+  // also the honest picture: they are not part of your infrastructure.
+  const { grouped, loose } = useMemo(() => {
+    const visible = new Set((servers.data ?? []).map((s) => s.id))
+    const all = projects.data ?? []
+    return {
+      grouped: all.filter((p) => visible.has(p.server_id)),
+      loose: all.filter((p) => !visible.has(p.server_id)),
+    }
+  }, [servers.data, projects.data])
+
   return (
     <div className={`app${showSidebar ? ' show-sidebar' : ''}`}>
       <aside className="sidebar">
@@ -87,7 +103,7 @@ function Shell({ email }: { email: string }) {
           </div>
 
           {servers.error && <div className="banner error">{servers.error}</div>}
-          {servers.data?.length === 0 && (
+          {servers.data?.length === 0 && loose.length === 0 && (
             <p className="hint" style={{ padding: '4px 8px' }}>
               No servers yet.
             </p>
@@ -106,37 +122,50 @@ function Shell({ email }: { email: string }) {
               >
                 <span className="dot" />
                 <span className="name">{server.name}</span>
+                {server.shared && (
+                  <span className="shared-tag" title="Shared with you">
+                    shared
+                  </span>
+                )}
               </button>
 
-              {projects.data
-                ?.filter((p) => p.server_id === server.id)
+              {grouped
+                .filter((p) => p.server_id === server.id)
                 .map((project) => (
-                  <button
+                  <ProjectRow
                     key={project.id}
-                    className={`tree-row tree-project status-${project.status} activity-${
-                      project.status === 'running' ? project.activity : 'stopped'
-                    }${activeProject?.id === project.id ? ' active' : ''}`}
-                    onClick={() => selectProject(project.id)}
-                    title={project.activity_detail ?? undefined}
-                  >
-                    <span className="dot" />
-                    <span className="name">{project.name}</span>
-                    {project.status === 'running' &&
-                      project.activity === 'awaiting_input' && (
-                        <span className="needs-you" title="Waiting for you">
-                          ●
-                        </span>
-                      )}
-                  </button>
+                    project={project}
+                    active={activeProject?.id === project.id}
+                    onSelect={selectProject}
+                  />
                 ))}
             </div>
           ))}
+
+          {loose.length > 0 && (
+            <>
+              <div className="section-label" style={{ marginTop: 12 }}>
+                Shared with you
+              </div>
+              {loose.map((project) => (
+                <ProjectRow
+                  key={project.id}
+                  project={project}
+                  active={activeProject?.id === project.id}
+                  onSelect={selectProject}
+                  subtitle={project.server_name ?? undefined}
+                />
+              ))}
+            </>
+          )}
 
           <div className="section-label" style={{ marginTop: 12 }}>
             <button
               className="ghost"
               onClick={() => setShowNewProject(true)}
-              disabled={!servers.data?.some((s) => s.status === 'online')}
+              disabled={
+                !servers.data?.some((s) => s.status === 'online' && canControl(s.access))
+              }
             >
               + New project
             </button>
@@ -162,6 +191,17 @@ function Shell({ email }: { email: string }) {
             project={activeProject}
             onChanged={reloadAll}
             onToggleSidebar={() => setShowSidebar(true)}
+            onShare={() =>
+              setShareTarget({
+                kind: 'projects',
+                id: activeProject.id,
+                name: activeProject.name,
+              })
+            }
+            onRemoved={() => {
+              setSelected(null)
+              reloadAll()
+            }}
           />
         ) : activeServer ? (
           <ServerView
@@ -169,6 +209,13 @@ function Shell({ email }: { email: string }) {
             onChanged={reloadAll}
             onNewProject={() => setShowNewProject(true)}
             onToggleSidebar={() => setShowSidebar(true)}
+            onShare={() =>
+              setShareTarget({
+                kind: 'servers',
+                id: activeServer.id,
+                name: activeServer.name,
+              })
+            }
           />
         ) : (
           <>
@@ -196,9 +243,18 @@ function Shell({ email }: { email: string }) {
       {showAddServer && (
         <AddServer onClose={() => setShowAddServer(false)} onCreated={reloadAll} />
       )}
+      {shareTarget && (
+        <Share
+          kind={shareTarget.kind}
+          id={shareTarget.id}
+          name={shareTarget.name}
+          onClose={() => setShareTarget(null)}
+          onChanged={reloadAll}
+        />
+      )}
       {showNewProject && (
         <NewProject
-          servers={servers.data ?? []}
+          servers={(servers.data ?? []).filter((s) => canControl(s.access))}
           harnesses={harnesses.data ?? []}
           environments={environments.data ?? []}
           defaultServerId={activeServer?.id ?? activeProject?.server_id}
@@ -217,14 +273,61 @@ function Shell({ email }: { email: string }) {
   )
 }
 
+function ProjectRow({
+  project,
+  active,
+  onSelect,
+  subtitle,
+}: {
+  project: Project
+  active: boolean
+  onSelect: (id: string) => void
+  subtitle?: string
+}) {
+  return (
+    <button
+      className={`tree-row tree-project status-${project.status} activity-${
+        project.status === 'running' ? project.activity : 'stopped'
+      }${active ? ' active' : ''}`}
+      onClick={() => onSelect(project.id)}
+      title={project.activity_detail ?? subtitle}
+    >
+      <span className="dot" />
+      <span className="name">
+        {project.name}
+        {subtitle && <span className="tree-sub">{subtitle}</span>}
+      </span>
+      {project.access === 'read' && (
+        <span className="shared-tag" title="View only">
+          view
+        </span>
+      )}
+      {project.access === 'host' && (
+        <span className="shared-tag" title="Runs on your server; not yours">
+          guest
+        </span>
+      )}
+      {project.status === 'running' && project.activity === 'awaiting_input' && (
+        <span className="needs-you" title="Waiting for you">
+          ●
+        </span>
+      )}
+    </button>
+  )
+}
+
 function ProjectView({
   project,
   onChanged,
   onToggleSidebar,
+  onShare,
+  onRemoved,
 }: {
   project: Project
   onChanged: () => void
   onToggleSidebar: () => void
+  onShare: () => void
+  onRemoved: () => void
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -257,6 +360,65 @@ function ProjectView({
     }
   }
 
+  const drivable = canControl(project.access)
+
+  // Someone else's project on your machine. You are told it is there and can
+  // take the resources back; the conversation is not yours to read.
+  if (project.access === 'host') {
+    return (
+      <>
+        <div className="topbar">
+          <button className="ghost" onClick={onToggleSidebar}>
+            ☰
+          </button>
+          <h1>{project.name}</h1>
+          <span className="sub">{project.server_name}</span>
+          <span className="shared-tag">guest</span>
+          <div className="spacer" />
+        </div>
+        <div className="content">
+          {error && <div className="banner error">{error}</div>}
+          <div className="card">
+            <h2>Running on your server</h2>
+            <p className="hint">
+              Someone you shared <strong>{project.server_name}</strong> with created this
+              project. It is theirs: Moonphase will not show you its terminal, its feed or
+              its transcript.
+            </p>
+            <dl className="meta-grid">
+              <dt>Status</dt>
+              <dd className={`status-${project.status}`}>{project.status}</dd>
+              <dt>Environment</dt>
+              <dd>{project.environment}</dd>
+              <dt>Created</dt>
+              <dd>{new Date(project.created_at).toLocaleString()}</dd>
+            </dl>
+          </div>
+          <div className="card">
+            <h2>Reclaim</h2>
+            <p className="hint">
+              Removing it stops the container and frees its resources on your machine. The
+              volumes are kept, so the work itself survives. To stop new projects appearing,
+              revoke the server share instead.
+            </p>
+            <button
+              className="danger"
+              disabled={busy}
+              onClick={() =>
+                void act(async () => {
+                  await api.deleteProject(project.id)
+                  onRemoved()
+                })
+              }
+            >
+              Remove project
+            </button>
+          </div>
+        </div>
+      </>
+    )
+  }
+
   return (
     <>
       <div className="topbar">
@@ -268,6 +430,11 @@ function ProjectView({
           {project.server_name} · {project.environment}
         </span>
         {project.status === 'running' && <ActivityChip project={project} />}
+        {!drivable && (
+          <span className="shared-tag" title="You can watch this, but not type into it">
+            view only
+          </span>
+        )}
         <div className="spacer" />
         <div className="view-toggle" role="group" aria-label="View">
           <button
@@ -285,26 +452,34 @@ function ProjectView({
             Terminal
           </button>
         </div>
-        <button
-          disabled={busy}
-          onClick={() => void act(() => api.startSession(project.id, true, session))}
-          title="Kill this session and start the harness fresh"
-        >
-          Restart harness
-        </button>
-        {project.status === 'running' ? (
-          <button disabled={busy} onClick={() => void act(() => api.stopProject(project.id))}>
-            Stop
-          </button>
-        ) : (
-          <button
-            className="primary"
-            disabled={busy}
-            onClick={() => void act(() => api.startProject(project.id))}
-          >
-            Start
+        {project.access === 'admin' && (
+          <button onClick={onShare} title="Give someone else access to this session">
+            Share{project.share_count > 0 ? ` (${project.share_count})` : ''}
           </button>
         )}
+        {drivable && (
+          <button
+            disabled={busy}
+            onClick={() => void act(() => api.startSession(project.id, true, session))}
+            title="Kill this session and start the harness fresh"
+          >
+            Restart harness
+          </button>
+        )}
+        {drivable &&
+          (project.status === 'running' ? (
+            <button disabled={busy} onClick={() => void act(() => api.stopProject(project.id))}>
+              Stop
+            </button>
+          ) : (
+            <button
+              className="primary"
+              disabled={busy}
+              onClick={() => void act(() => api.startProject(project.id))}
+            >
+              Start
+            </button>
+          ))}
       </div>
 
       {error && (
@@ -320,6 +495,7 @@ function ProjectView({
             running={project.status === 'running'}
             active={session}
             onSelect={setSession}
+            readOnly={!drivable}
           />
           {view === 'terminal' ? (
             <ProjectTerminal projectId={project.id} session={session} />
@@ -328,15 +504,23 @@ function ProjectView({
               projectId={project.id}
               session={session}
               running={project.status === 'running'}
+              readOnly={!drivable}
             />
           )}
-          <Ports projectId={project.id} running={project.status === 'running'} />
+          <Ports
+            projectId={project.id}
+            running={project.status === 'running'}
+            readOnly={!drivable}
+          />
         </div>
       ) : (
         <div className="content">
           <div className="empty">
             <h3>Container is {project.status}</h3>
-            {project.status_detail ?? 'Start it to attach a terminal.'}
+            {project.status_detail ??
+              (drivable
+                ? 'Start it to attach a terminal.'
+                : 'Whoever owns this project needs to start it.')}
           </div>
         </div>
       )}
@@ -368,11 +552,13 @@ function ServerView({
   onChanged,
   onNewProject,
   onToggleSidebar,
+  onShare,
 }: {
   server: Server
   onChanged: () => void
   onNewProject: () => void
   onToggleSidebar: () => void
+  onShare: () => void
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -390,6 +576,8 @@ function ServerView({
     }
   }
 
+  const owned = server.access === 'admin'
+
   return (
     <>
       <div className="topbar">
@@ -400,17 +588,33 @@ function ServerView({
         <span className="sub">
           {server.ssh_user}@{server.host}:{server.port}
         </span>
+        {server.shared && (
+          <span className="shared-tag" title="Shared with you by its owner">
+            shared with you
+          </span>
+        )}
         <div className="spacer" />
-        <button disabled={busy} onClick={() => void act(() => api.testServer(server.id))}>
-          Test
-        </button>
+        {owned && (
+          <>
+            <button onClick={onShare} title="Let someone else run work on this machine">
+              Share{server.share_count > 0 ? ` (${server.share_count})` : ''}
+            </button>
+            <button disabled={busy} onClick={() => void act(() => api.testServer(server.id))}>
+              Test
+            </button>
+            <button
+              disabled={busy || server.status !== 'online'}
+              onClick={() => void act(() => api.bootstrapServer(server.id))}
+            >
+              Re-bootstrap
+            </button>
+          </>
+        )}
         <button
-          disabled={busy || server.status !== 'online'}
-          onClick={() => void act(() => api.bootstrapServer(server.id))}
+          className="primary"
+          disabled={server.status !== 'online' || !canControl(server.access)}
+          onClick={onNewProject}
         >
-          Re-bootstrap
-        </button>
-        <button className="primary" disabled={server.status !== 'online'} onClick={onNewProject}>
           New project
         </button>
       </div>
@@ -443,7 +647,18 @@ function ServerView({
           </dl>
         </div>
 
-        {server.managed_public_key && (
+        {!owned && (
+          <div className="card">
+            <h2>Shared with you</h2>
+            <p className="hint">
+              {canControl(server.access)
+                ? 'You can create projects here. They belong to you — their owner sees that they exist and how much of the machine they are using, not what they are doing. Only the owner can administer the machine itself.'
+                : 'You can see this machine but not run anything on it. Ask its owner for access if you need to.'}
+            </p>
+          </div>
+        )}
+
+        {owned && server.managed_public_key && (
           <div className="card">
             <h2>Moonphase public key</h2>
             <p className="hint">
@@ -455,20 +670,26 @@ function ServerView({
           </div>
         )}
 
-        <div className="card">
-          <h2>Danger zone</h2>
-          <p className="hint">
-            Removing the server deletes its projects from Moonphase and revokes the key
-            above. Container volumes on the machine are left alone.
-          </p>
-          <button
-            className="danger"
-            disabled={busy}
-            onClick={() => void act(() => api.deleteServer(server.id))}
-          >
-            Remove server
-          </button>
-        </div>
+        {owned && (
+          <div className="card">
+            <h2>Danger zone</h2>
+            <p className="hint">
+              Removing the server deletes its projects from Moonphase and revokes the key
+              above. Container volumes on the machine are left alone.
+              {server.share_count > 0 &&
+                ` ${server.share_count} ${
+                  server.share_count === 1 ? 'person' : 'people'
+                } will lose access.`}
+            </p>
+            <button
+              className="danger"
+              disabled={busy}
+              onClick={() => void act(() => api.deleteServer(server.id))}
+            >
+              Remove server
+            </button>
+          </div>
+        )}
       </div>
     </>
   )

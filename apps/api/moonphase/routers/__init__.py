@@ -9,6 +9,7 @@ from . import (
     profile,
     projects,
     servers,
+    shares,
     terminal,
 )
 
@@ -21,5 +22,6 @@ __all__ = [
     "profile",
     "projects",
     "servers",
+    "shares",
     "terminal",
 ]

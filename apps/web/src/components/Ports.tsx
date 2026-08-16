@@ -4,6 +4,12 @@ import { api, type DetectedPort } from '../lib/api'
 interface Props {
   projectId: string
   running: boolean
+  /**
+   * Shared with view-only access. Ports still show — knowing what the agent
+   * has running is part of watching it — but opening a tunnel puts the app on
+   * the network, which is a decision for whoever owns the project.
+   */
+  readOnly?: boolean
 }
 
 /**
@@ -12,7 +18,7 @@ interface Props {
  * Polls while the project is running so a dev server started a minute ago —
  * or restarted onto a different port — simply appears.
  */
-export function Ports({ projectId, running }: Props) {
+export function Ports({ projectId, running, readOnly = false }: Props) {
   const [ports, setPorts] = useState<DetectedPort[]>([])
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState<number | null>(null)
@@ -89,22 +95,26 @@ export function Ports({ projectId, running }: Props) {
               >
                 open
               </a>
+              {!readOnly && (
+                <button
+                  className="ghost"
+                  disabled={pending === entry.port}
+                  onClick={() => void toggle(entry)}
+                >
+                  stop
+                </button>
+              )}
+            </>
+          ) : (
+            !readOnly && (
               <button
                 className="ghost"
                 disabled={pending === entry.port}
                 onClick={() => void toggle(entry)}
               >
-                stop
+                {pending === entry.port ? '…' : 'share'}
               </button>
-            </>
-          ) : (
-            <button
-              className="ghost"
-              disabled={pending === entry.port}
-              onClick={() => void toggle(entry)}
-            >
-              {pending === entry.port ? '…' : 'share'}
-            </button>
+            )
           )}
         </div>
       ))}

@@ -23,7 +23,7 @@ from .. import harness as harness_registry
 from ..auth import Principal, current_principal
 from ..config import get_settings
 from ..db import service_session, user_session
-from ..runtime import NotFound
+from ..runtime import CAN_CONTROL, CAN_DELETE, CAN_OBSERVE, Forbidden, NotFound
 from ..schemas import (
     ProjectCreate,
     ProjectOut,
@@ -108,11 +108,22 @@ async def create_project(
                 ),
             )
 
-        org_id_for_check = server["org_id"]
+        # A project on a server someone lent you is yours, not theirs: it
+        # belongs to your organization, runs on your Claude account, and is
+        # invisible to them beyond the fact that it exists.
+        if server["shared"]:
+            owning_org = await queries.personal_org_id(conn)
+            if owning_org is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="You have no personal organization to own this project.",
+                )
+        else:
+            owning_org = server["org_id"]
 
     async with service_session() as conn:
         credential = await queries.resolve_harness_credential_privileged(
-            conn, org_id=org_id_for_check, project_id=org_id_for_check,
+            conn, org_id=owning_org, project_id=owning_org,
             harness=payload.harness,
         )
     if credential is None:
@@ -136,7 +147,7 @@ async def create_project(
         try:
             row = await queries.insert_project(
                 conn,
-                org_id=server["org_id"],
+                org_id=owning_org,
                 server_id=payload.server_id,
                 name=payload.name.strip(),
                 slug=slug,
@@ -216,7 +227,9 @@ async def _provision_container(
     cpus: str | None,
     memory: str | None,
 ) -> str:
-    target = await runtime.load_server_target(principal.claims, server_id)
+    target = await runtime.load_server_target(
+        principal.claims, server_id, require=CAN_CONTROL
+    )
     conn_ssh = await ssh.pool.get(target)
 
     # Environments are recipes, not published images: build on the server the
@@ -353,7 +366,9 @@ async def list_sessions(
     live: dict[str, int] = {}
     if project.get("container_name") and project["status"] == "running":
         try:
-            ctx = await runtime.load_project_context(principal.claims, project_id)
+            ctx = await runtime.load_project_context(
+                principal.claims, project_id, require=CAN_OBSERVE
+            )
             conn_ssh = await ssh.pool.get(ctx.target)
             live = await sessions.client_counts(conn_ssh, ctx.container)
         except (SSHError, NotFound) as exc:
@@ -603,7 +618,9 @@ async def snapshot(
 ) -> dict[str, str]:
     """Plain-text view of the pane, for previews and debugging."""
     try:
-        ctx = await runtime.load_project_context(principal.claims, project_id)
+        ctx = await runtime.load_project_context(
+            principal.claims, project_id, require=CAN_OBSERVE
+        )
     except NotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -622,14 +639,26 @@ async def delete_project(
 
     Defaulting to keeping them means an accidental delete loses the container,
     not the work.
+
+    Open to the owner, and to whoever owns the machine it is running on —
+    reclaiming your own hardware should not require going behind Moonphase's
+    back with `docker rm`. Everyone else, including a collaborator who can
+    otherwise drive the session, gets a 403.
     """
     async with user_session(principal.claims) as conn:
         project = await queries.get_project(conn, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found.")
+    if project.get("access") not in CAN_DELETE:
+        raise Forbidden(
+            "Only the owner of this project, or the owner of the server it runs "
+            "on, can delete it."
+        )
 
     try:
-        ctx = await runtime.load_project_context(principal.claims, project_id)
+        ctx = await runtime.load_project_context(
+            principal.claims, project_id, require=CAN_DELETE
+        )
         conn_ssh = await ssh.pool.get(ctx.target)
         if project.get("container_name"):
             await docker_remote.remove(conn_ssh, project["container_name"])
@@ -656,7 +685,9 @@ async def container_logs(
     principal: Principal = Depends(current_principal),
 ) -> dict[str, str]:
     try:
-        ctx = await runtime.load_project_context(principal.claims, project_id)
+        ctx = await runtime.load_project_context(
+            principal.claims, project_id, require=CAN_OBSERVE
+        )
     except NotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

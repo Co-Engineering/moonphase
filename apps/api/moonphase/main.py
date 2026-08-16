@@ -14,10 +14,19 @@ from . import preview, ssh
 from .config import get_settings
 from .db import dispose_engine
 from .monitor import monitor
-from .routers import feed, feedsocket, meta, notifications, projects, servers, terminal
+from .routers import (
+    feed,
+    feedsocket,
+    meta,
+    notifications,
+    projects,
+    servers,
+    shares,
+    terminal,
+)
 from .routers import preview as preview_router
 from .routers import profile as profile_router
-from .runtime import NotFound
+from .runtime import Forbidden, NotFound
 from .ssh import HostKeyMismatch, SSHError
 
 logging.basicConfig(
@@ -65,6 +74,13 @@ def create_app() -> FastAPI:
         del request
         return JSONResponse(status_code=404, content={"detail": str(exc)})
 
+    @app.exception_handler(Forbidden)
+    async def _forbidden(request: Request, exc: Forbidden) -> JSONResponse:
+        del request
+        # 403 rather than 404: the caller can already see this resource, so
+        # hiding it now would only be confusing.
+        return JSONResponse(status_code=403, content={"detail": str(exc)})
+
     @app.exception_handler(HostKeyMismatch)
     async def _host_key(request: Request, exc: HostKeyMismatch) -> JSONResponse:
         del request
@@ -84,6 +100,7 @@ def create_app() -> FastAPI:
     app.include_router(notifications.router)
     app.include_router(feed.router)
     app.include_router(feedsocket.router)
+    app.include_router(shares.router)
     app.include_router(terminal.router)
 
     return app

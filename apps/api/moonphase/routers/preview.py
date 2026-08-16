@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from .. import preview, runtime, ssh
 from ..auth import Principal, current_principal
 from ..config import get_settings
-from ..runtime import NotFound
+from ..runtime import CAN_OBSERVE, NotFound
 from ..schemas import DetectedPortOut
 from ..ssh import SSHError
 
@@ -35,7 +35,9 @@ async def list_ports(
 ) -> list[DetectedPortOut]:
     """Everything listening inside the container, and whether it is shared."""
     try:
-        ctx = await runtime.load_project_context(principal.claims, project_id)
+        ctx = await runtime.load_project_context(
+            principal.claims, project_id, require=CAN_OBSERVE
+        )
     except NotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

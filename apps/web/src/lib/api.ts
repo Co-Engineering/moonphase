@@ -51,6 +51,31 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export type SshAuthMode = 'password_bootstrap' | 'managed_key' | 'provided_key'
 export type HarnessKind = 'claude_code' | 'opencode'
 
+/** What you grant someone. */
+export type ShareRole = 'viewer' | 'collaborator'
+
+/**
+ * What you end up with. Decided by the database, not the client.
+ *
+ * `host` is the odd one: you own the machine a project runs on but not the
+ * project, so you can see that it exists and reclaim it, and nothing else.
+ */
+export type Access = 'admin' | 'write' | 'read' | 'host'
+
+export interface Share {
+  id: string
+  email: string
+  role: ShareRole
+  /** False until the invitee has signed up and the grant has been claimed. */
+  accepted: boolean
+  created_at: string
+  is_you: boolean
+}
+
+export const canControl = (access: Access) => access === 'admin' || access === 'write'
+export const canObserve = (access: Access) =>
+  access === 'admin' || access === 'write' || access === 'read'
+
 export interface Organization {
   id: string
   name: string
@@ -76,6 +101,10 @@ export interface Server {
   last_seen_at: string | null
   created_at: string
   project_count: number
+  access: Access
+  /** Reached through a share rather than your own organization. */
+  shared: boolean
+  share_count: number
 }
 
 export interface ServerBootstrap {
@@ -104,6 +133,9 @@ export interface Project {
   activity: ActivityState
   activity_detail: string | null
   activity_at: string | null
+  access: Access
+  shared: boolean
+  share_count: number
 }
 
 export interface Session {
@@ -420,6 +452,27 @@ export const api = {
       `/api/projects/${projectId}/feed/answer${session ? `?session=${encodeURIComponent(session)}` : ''}`,
       { method: 'POST', body: JSON.stringify({ key }) },
     ),
+
+  // --- sharing --------------------------------------------------------------
+  shares: (kind: 'servers' | 'projects', id: string) =>
+    request<Share[]>(`/api/${kind}/${id}/shares`),
+  addShare: (kind: 'servers' | 'projects', id: string, email: string, role: ShareRole) =>
+    request<Share>(`/api/${kind}/${id}/shares`, {
+      method: 'POST',
+      body: JSON.stringify({ email, role }),
+    }),
+  setShareRole: (
+    kind: 'servers' | 'projects',
+    id: string,
+    shareId: string,
+    role: ShareRole,
+  ) =>
+    request<Share>(`/api/${kind}/${id}/shares/${shareId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ role }),
+    }),
+  removeShare: (kind: 'servers' | 'projects', id: string, shareId: string) =>
+    request<void>(`/api/${kind}/${id}/shares/${shareId}`, { method: 'DELETE' }),
 
   // --- previews -------------------------------------------------------------
   ports: (projectId: string) => request<DetectedPort[]>(`/api/projects/${projectId}/ports`),

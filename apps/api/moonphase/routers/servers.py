@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from .. import docker_remote, provision, queries, ssh
 from ..auth import Principal, current_principal
 from ..db import service_session, user_session
-from ..runtime import NotFound, load_server_target
+from ..runtime import CAN_ADMINISTER, Forbidden, NotFound, load_server_target
 from ..schemas import ServerBootstrapOut, ServerCreate, ServerOut
 from ..ssh import HostKeyMismatch, SSHError
 
@@ -103,11 +103,27 @@ async def rerun_bootstrap(
     principal: Principal = Depends(current_principal),
 ) -> ServerBootstrapOut:
     """Retry onboarding — used after the user installs a managed public key."""
+    await _require_admin(principal, server_id)
+    return await _run_bootstrap(principal, server_id, auto_install_docker=auto_install_docker)
+
+
+async def _require_admin(principal: Principal, server_id: UUID) -> dict:
+    """Visible is not the same as yours.
+
+    Every route below reaches the machine itself rather than a workload on it,
+    so a share is never enough. Checked here rather than relying on
+    `load_server_target`, because bootstrap loads its credentials directly and
+    would otherwise let anyone the server was shared with re-run it.
+    """
     async with user_session(principal.claims) as conn:
         row = await queries.get_server(conn, server_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Server not found.")
-    return await _run_bootstrap(principal, server_id, auto_install_docker=auto_install_docker)
+    if row.get("access") not in CAN_ADMINISTER:
+        raise Forbidden(
+            "This server is shared with you. Only its owner can administer it."
+        )
+    return row
 
 
 async def _run_bootstrap(
@@ -208,6 +224,7 @@ async def test_server(
     server_id: UUID, principal: Principal = Depends(current_principal)
 ) -> ServerOut:
     """Liveness check: connect, confirm Docker still answers, update status."""
+    await _require_admin(principal, server_id)
     try:
         target = await load_server_target(principal.claims, server_id)
     except NotFound as exc:
@@ -252,10 +269,7 @@ async def delete_server(
     Revocation is best effort: an unreachable machine must not block the user
     from removing a stale row, but they are told when it did not happen.
     """
-    async with user_session(principal.claims) as conn:
-        server = await queries.get_server(conn, server_id)
-    if server is None:
-        raise HTTPException(status_code=404, detail="Server not found.")
+    server = await _require_admin(principal, server_id)
 
     if revoke_key and server.get("managed_public_key"):
         try:
