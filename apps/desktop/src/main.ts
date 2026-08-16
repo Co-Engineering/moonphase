@@ -10,7 +10,7 @@ import { app, BrowserWindow, shell } from 'electron'
 import * as path from 'node:path'
 
 // Set by `pnpm dev`; in a packaged build we load the built assets from disk.
-const DEV_SERVER_URL = process.env.MOONPHASE_DEV_SERVER_URL ?? 'http://127.0.0.1:5273'
+const DEV_SERVER_URL = process.env.MOONPHASE_DEV_SERVER_URL ?? 'http://127.0.0.1:8472'
 const isDev = process.env.NODE_ENV !== 'production' && !app.isPackaged
 
 let window: BrowserWindow | null = null

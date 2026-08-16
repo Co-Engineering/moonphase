@@ -27,7 +27,7 @@ set -a
 source .env
 set +a
 
-API_PORT="${MOONPHASE_API_PORT:-8787}"
+API_PORT="${MOONPHASE_API_PORT:-8471}"
 
 blue "==> Supabase"
 if ! supabase status >/dev/null 2>&1; then
@@ -69,13 +69,13 @@ blue "==> API on :${API_PORT}"
   --host 127.0.0.1 --port "$API_PORT" --reload) &
 pids+=($!)
 
-blue "==> Vite on :5273"
+blue "==> Vite on :8472"
 pnpm --filter @moonphase/web dev &
 pids+=($!)
 
 # Wait for Vite before Electron, or the window opens on a connection error.
 for _ in $(seq 1 60); do
-  curl -sf http://127.0.0.1:5273 >/dev/null 2>&1 && break
+  curl -sf http://127.0.0.1:8472 >/dev/null 2>&1 && break
   sleep 0.5
 done
 

@@ -13,6 +13,6 @@ export default defineConfig({
   // Bind IPv4 explicitly. Vite's default host of "localhost" resolves to ::1
   // on systems that prefer IPv6, and the Electron shell loads 127.0.0.1 — so
   // the dev server would be up and the app still unable to reach it.
-  server: { host: '127.0.0.1', port: 5273, strictPort: true },
+  server: { host: '127.0.0.1', port: 8472, strictPort: true },
   build: { outDir: 'dist', emptyOutDir: true, sourcemap: true },
 })

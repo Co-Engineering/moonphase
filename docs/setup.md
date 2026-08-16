@@ -18,10 +18,10 @@ supabase start          # prints ANON_KEY and JWT secret
 ```
 
 `dev.sh` starts Supabase, applies migrations, builds the runtime image if
-missing, then runs the API on `:8787`, Vite on `:5273` and the Electron shell.
+missing, then runs the API on `:8471`, Vite on `:8472` and the Electron shell.
 Ctrl-C stops everything it started.
 
-Ports are 8787 and 5273 rather than the more usual 8000 and 5173 because those
+Ports are 8471 and 8472 rather than the more usual 8000 and 5173 because those
 collide with other local Supabase and Vite projects often enough to be
 annoying.
 

@@ -18,8 +18,8 @@ import uuid
 
 import httpx
 
-API = "http://127.0.0.1:8787"
-SUPABASE = "http://127.0.0.1:54321"
+API = "http://127.0.0.1:8471"
+SUPABASE = "http://127.0.0.1:54721"
 SSH_PORT = 22422
 FIXTURE_NAME = "moonphase-demo-server"
 FIXTURE_IMAGE = "moonphase/fake-server:latest"

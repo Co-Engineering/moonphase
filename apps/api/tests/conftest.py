@@ -18,7 +18,7 @@ os.environ.setdefault(
     "MOONPHASE_SECRET_KEY", base64.urlsafe_b64encode(_TEST_KEY_MATERIAL).decode()
 )
 os.environ.setdefault(
-    "DATABASE_URL", "postgresql+asyncpg://postgres:postgres@127.0.0.1:54322/postgres"
+    "DATABASE_URL", "postgresql+asyncpg://postgres:postgres@127.0.0.1:54722/postgres"
 )
 os.environ.setdefault("SUPABASE_JWT_SECRET", "test-jwt-secret-at-least-32-characters-long")
 

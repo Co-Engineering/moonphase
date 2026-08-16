@@ -26,16 +26,16 @@ class Settings(BaseSettings):
     )
 
     # --- database ----------------------------------------------------------
-    database_url: str = "postgresql+asyncpg://postgres:postgres@127.0.0.1:54322/postgres"
+    database_url: str = "postgresql+asyncpg://postgres:postgres@127.0.0.1:54722/postgres"
 
     # --- supabase ----------------------------------------------------------
-    supabase_url: str = "http://127.0.0.1:54321"
+    supabase_url: str = "http://127.0.0.1:54721"
     supabase_anon_key: str = ""
     supabase_jwt_secret: str = ""
 
     # --- api ---------------------------------------------------------------
     moonphase_api_host: str = "0.0.0.0"
-    moonphase_api_port: int = 8787
+    moonphase_api_port: int = 8471
     moonphase_cors_origins: str = "http://localhost:5173"
 
     # --- containers --------------------------------------------------------
