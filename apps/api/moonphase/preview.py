@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import re
 import shlex
@@ -282,6 +283,118 @@ def _parse_ss(text: str) -> list[DetectedPort]:
             process = match.group(1)
         found.append(DetectedPort(port=port, bind=host.strip("[]") or "0.0.0.0", process=process))
     return found
+
+
+# Asked of every detected port, inside the container, in one round trip.
+# Sequential probing of a handful of ports at a second apiece is long enough to
+# feel broken, hence the thread pool.
+_PROBE_SCRIPT = r"""
+import concurrent.futures, json, re, socket, sys
+
+TIMEOUT = 1.2
+REQUEST = b"GET / HTTP/1.0\r\nHost: localhost\r\nUser-Agent: moonphase-probe\r\n\r\n"
+
+
+def ask(port):
+    for family, address in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
+        sock = socket.socket(family, socket.SOCK_STREAM)
+        sock.settimeout(TIMEOUT)
+        try:
+            sock.connect((address, port))
+            sock.sendall(REQUEST)
+            data = b""
+            while len(data) < 8192:
+                chunk = sock.recv(8192)
+                if not chunk:
+                    break
+                data += chunk
+        except Exception:
+            continue
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        if data:
+            return classify(data)
+    return {"kind": "unknown", "title": None}
+
+
+def classify(data):
+    head, _, body = data.partition(b"\r\n\r\n")
+    headers = head.lower()
+    lowered = body.lower()
+    kind = "unknown"
+    if b"text/html" in headers or b"<html" in lowered or b"<!doctype html" in lowered:
+        kind = "page"
+    elif b"application/json" in headers:
+        kind = "api"
+    title = None
+    match = re.search(rb"<title[^>]*>(.{0,200}?)</title>", body, re.I | re.S)
+    if match:
+        text = " ".join(match.group(1).decode("utf-8", "replace").split())
+        title = text[:60] or None
+    return {"kind": kind, "title": title}
+
+
+ports = [int(value) for value in sys.argv[1:]]
+with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+    results = dict(zip(ports, pool.map(ask, ports)))
+print(json.dumps({str(port): value for port, value in results.items()}))
+"""
+
+
+async def probe_services(
+    conn: asyncssh.SSHClientConnection, container: str, ports: list[int]
+) -> dict[int, dict[str, str | None]]:
+    """Ask each port what it serves, rather than guessing from its number.
+
+    Opening the lowest-numbered port is a guess that happens to be right when
+    the frontend's number sorts below the API's and wrong the moment it does
+    not — a page of JSON where the app should be. One HTTP request answers the
+    question directly: whatever returns HTML is the thing a person meant to
+    open, and its <title> is a better label than a port number.
+    """
+    if not ports:
+        return {}
+    result = await docker_remote.exec_capture(
+        conn,
+        container,
+        ["python3", "-c", _PROBE_SCRIPT, *[str(port) for port in ports]],
+        timeout=30,
+    )
+    if not result.ok or not result.stdout.strip():
+        log.debug("preview: could not probe services: %s", result.stderr[:200])
+        return {}
+    try:
+        raw = json.loads(result.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return {}
+    return {int(port): value for port, value in raw.items()}
+
+
+# A file server's index is HTML and therefore a "page", but it is plainly not
+# the application — and this is what its title always looks like.
+_AUTOINDEX = re.compile(r"^(directory listing|index of)\b", re.IGNORECASE)
+
+
+def rank(port: int, kind: str | None, title: str | None = None) -> tuple[int, ...]:
+    """Sort key for "which of these did the user mean to open".
+
+    A page beats anything; an API loses to everything, because landing on raw
+    JSON looks like the app is broken.
+
+    Among pages, a directory listing loses. It is HTML and so passes the first
+    test, but nobody previews a project to look at a file index — and when two
+    things both serve HTML, falling through to the lower port number is exactly
+    the guess this ranking exists to replace.
+
+    Port 80 sinks slightly: it is usually infrastructure someone else put there
+    rather than the thing being built.
+    """
+    order = {"page": 0, "unknown": 1, "api": 2}.get(kind or "unknown", 1)
+    autoindex = 1 if title and _AUTOINDEX.match(title.strip()) else 0
+    return (order, autoindex, 1 if port == 80 else 0, port)
 
 
 async def detect_ports(

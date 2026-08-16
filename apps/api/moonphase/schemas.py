@@ -479,15 +479,27 @@ class DetectedPortOut(BaseModel):
     url: str | None = None
 
 
+class PreviewServiceOut(BaseModel):
+    """One thing listening in the container, and what it appears to be."""
+
+    port: int
+    # 'page' serves HTML and is what someone means by "open the app"; 'api'
+    # answers JSON; 'unknown' did not respond to an HTTP request at all.
+    kind: Literal["page", "api", "unknown"] = "unknown"
+    # The page's <title>, which names it far better than a port number does.
+    title: str | None = None
+    process: str | None = None
+
+
 class PreviewOut(BaseModel):
     """Where to point a browser so the container's own addresses resolve."""
 
     proxy_host: str
     proxy_port: int
-    # What is listening right now, so the UI can offer somewhere to start.
-    # Not a declaration and not required: the proxy carries whatever is asked
-    # for, including ports that appear later.
-    ports: list[int] = Field(default_factory=list)
+    # Ordered by what a person most likely meant to open. Not a declaration and
+    # not exhaustive: the proxy carries whatever is asked for, including ports
+    # that appear after this was built.
+    services: list[PreviewServiceOut] = Field(default_factory=list)
     container: str
 
 

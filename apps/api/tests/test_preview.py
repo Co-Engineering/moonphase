@@ -258,3 +258,139 @@ async def test_detects_and_tunnels_a_loopback_server(fake_server: str) -> None:
         except Exception as exc:  # noqa: BLE001 — cleanup must not mask failures
             print(f"  cleanup warning: {exc}")
         await ssh.pool.close_all()
+
+
+# --- which port did you mean to open ----------------------------------------
+
+
+def test_a_page_outranks_an_api() -> None:
+    """Opening the lowest-numbered port is a guess, and it is often wrong.
+
+    A frontend on 9000 with an API on 8000 sorts the API first, so "preview"
+    lands on raw JSON and looks like the app is broken. Ranking by what each
+    port actually served puts the page first whatever its number.
+    """
+    ports = [(8000, "api"), (9000, "page")]
+    assert sorted(ports, key=lambda item: preview.rank(*item))[0] == (9000, "page")
+
+
+def test_an_unknown_service_beats_an_api_but_loses_to_a_page() -> None:
+    # Something that did not answer HTTP might still be worth opening; an API
+    # answering JSON is the one thing we know is not the app.
+    ports = [(8000, "api"), (7000, "unknown"), (3000, "page")]
+    ranked = [port for port, _ in sorted(ports, key=lambda item: preview.rank(*item))]
+    assert ranked == [3000, 7000, 8000]
+
+
+def test_a_file_index_loses_to_a_real_page() -> None:
+    """The tie-break that stops it falling back to "lowest number wins"."""
+    ports = [(8000, "page", "Directory listing for /"), (9000, "page", "My Shop")]
+    ranked = [port for port, *_ in sorted(ports, key=lambda i: preview.rank(*i))]
+    assert ranked == [9000, 8000]
+
+
+def test_port_eighty_sinks_among_equals() -> None:
+    # Usually infrastructure someone else put there rather than the thing being
+    # built — but still ahead of an API, and still openable by hand.
+    ports = [(80, "page"), (5173, "page")]
+    ranked = [port for port, _ in sorted(ports, key=lambda item: preview.rank(*item))]
+    assert ranked == [5173, 80]
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_probing_tells_a_page_from_an_api(fake_server: str) -> None:
+    """The probe has to work on what a real dev stack looks like.
+
+    A frontend on IPv4 loopback with a <title>, and an API on IPv6 loopback
+    answering JSON — the same split that made port forwarding useless.
+    """
+    server_id = str(uuid.uuid4())
+    container = f"mp-probe-{uuid.uuid4().hex[:8]}"
+
+    try:
+        result = await provision.bootstrap(
+            server_id=server_id, server_name="probe-test", host="127.0.0.1",
+            port=SSH_PORT, ssh_user=SSH_USER, auth_mode="password_bootstrap",
+            password=SSH_PASSWORD, auto_install_docker=False,
+        )
+        assert result.status == "online", result.detail
+        target = SSHTarget(
+            server_id=server_id, host="127.0.0.1", port=SSH_PORT, username=SSH_USER,
+            private_key=result.generated_private_key,
+            known_host_key_fp=result.host_key_fingerprint,
+        )
+        conn = await ssh.pool.get(target)
+
+        await docker_remote.volume_create(conn, f"{container}-workspace")
+        await docker_remote.volume_create(conn, f"{container}-home")
+        await docker_remote.run_container(
+            conn, name=container, image=RUNTIME_IMAGE,
+            workspace_volume=f"{container}-workspace",
+            home_volume=f"{container}-home",
+        )
+        await docker_remote.exec_capture(
+            conn, container, ["chown", "-R", "dev:dev", "/home/dev", "/workspace"],
+            user="root", timeout=120,
+        )
+        await docker_remote.exec_capture(
+            conn, container,
+            ["sh", "-c",
+             "mkdir -p /workspace/ui /workspace/svc && "
+             "printf '%s' '<html><head><title>My Shop</title></head><body>hi</body></html>' "
+             "> /workspace/ui/index.html && "
+             "printf '%s' '{\"ok\":true}' > /workspace/svc/index.json && echo ready"],
+            timeout=60,
+        )
+        # Higher-numbered page, lower-numbered API: exactly the arrangement the
+        # old "lowest port wins" rule got backwards.
+        await docker_remote.exec_capture(
+            conn, container,
+            ["sh", "-c", "cd /workspace/ui && nohup python3 -m http.server 9000 "
+             "--bind 127.0.0.1 >/tmp/ui.log 2>&1 & sleep 1; echo ok"],
+            timeout=60,
+        )
+        await docker_remote.exec_capture(
+            conn, container,
+            ["sh", "-c", "cd /workspace/svc && nohup python3 -m http.server 8000 "
+             "--bind ::1 >/tmp/svc.log 2>&1 & sleep 1; echo ok"],
+            timeout=60,
+        )
+
+        probed = await preview.probe_services(conn, container, [8000, 9000])
+        assert probed.get(9000, {}).get("kind") == "page", probed
+        assert probed[9000]["title"] == "My Shop", probed
+        print(f"\n  9000 identified as a page titled {probed[9000]['title']!r}")
+
+        # A file server's index is HTML too, so 8000 also reads as a page —
+        # honestly, it did serve one. Its title is what gives it away.
+        assert probed.get(8000, {}).get("kind") == "page", probed
+        assert "directory listing" in (probed[8000]["title"] or "").lower(), probed
+        print(f"  8000 identified as a {probed[8000]['title']!r}")
+
+        ranked = sorted(
+            [9000, 8000],
+            key=lambda port: preview.rank(
+                port,
+                str(probed.get(port, {}).get("kind")),
+                probed.get(port, {}).get("title"),
+            ),
+        )
+        assert ranked == [9000, 8000], (
+            "the higher-numbered real page must beat the lower-numbered file index"
+        )
+        print(f"  ranking opens {ranked[0]}, not the lower-numbered {ranked[1]}")
+
+    finally:
+        try:
+            cleanup = SSHTarget(
+                server_id=server_id, host="127.0.0.1", port=SSH_PORT,
+                username=SSH_USER, password=SSH_PASSWORD,
+            )
+            conn_c, _ = await ssh.connect(cleanup)
+            await docker_remote.remove(conn_c, container)
+            await docker_remote.volume_remove(conn_c, f"{container}-workspace")
+            await docker_remote.volume_remove(conn_c, f"{container}-home")
+            conn_c.close()
+        except Exception as exc:  # noqa: BLE001
+            print(f"  cleanup warning: {exc}")
+        await ssh.pool.drop(server_id)

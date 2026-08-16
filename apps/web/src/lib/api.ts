@@ -313,11 +313,20 @@ export interface FeedPage {
   prompt: Prompt | null
 }
 
+export interface PreviewService {
+  port: number
+  /** 'page' serves HTML and is what "open the app" means; 'api' answers JSON. */
+  kind: 'page' | 'api' | 'unknown'
+  /** The page's <title> — a better label than a port number. */
+  title: string | null
+  process: string | null
+}
+
 export interface Preview {
   proxy_host: string
   proxy_port: number
-  /** What is listening right now — a starting point, not a declaration. */
-  ports: number[]
+  /** Ordered by what you most likely meant to open. */
+  services: PreviewService[]
   container: string
 }
 

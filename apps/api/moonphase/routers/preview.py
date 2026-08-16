@@ -16,7 +16,7 @@ from .. import preview, runtime, socks, ssh
 from ..auth import Principal, current_principal
 from ..config import get_settings
 from ..runtime import CAN_OBSERVE, NotFound
-from ..schemas import DetectedPortOut, PreviewOut
+from ..schemas import DetectedPortOut, PreviewOut, PreviewServiceOut
 from ..ssh import SSHError
 
 log = logging.getLogger(__name__)
@@ -98,19 +98,36 @@ async def open_preview(
             status_code=502, detail=f"Could not start the preview proxy: {exc}"
         ) from exc
 
-    ports = []
+    services: list[PreviewServiceOut] = []
     try:
         conn_ssh = await ssh.pool.get(ctx.target)
-        ports = [p.port for p in await preview.detect_ports(conn_ssh, ctx.container)]
+        detected = await preview.detect_ports(conn_ssh, ctx.container)
+        probed = await preview.probe_services(
+            conn_ssh, ctx.container, [item.port for item in detected]
+        )
+        services = [
+            PreviewServiceOut(
+                port=item.port,
+                kind=str((probed.get(item.port) or {}).get("kind") or "unknown"),
+                title=(probed.get(item.port) or {}).get("title"),
+                process=item.process,
+            )
+            for item in detected
+        ]
+        # Ordered so the first entry is the one to open, rather than the one
+        # with the smallest number.
+        services.sort(
+            key=lambda item: preview.rank(item.port, item.kind, item.title)
+        )
     except SSHError as exc:
-        # The proxy is what matters; the list is a convenience for choosing a
-        # URL, and a slow container should not stop the preview opening.
-        log.debug("preview: could not list ports: %s", exc)
+        # The proxy is what matters; this list only chooses a starting URL, and
+        # a slow container should not stop the preview opening.
+        log.debug("preview: could not inspect services: %s", exc)
 
     return PreviewOut(
         proxy_host=settings.moonphase_preview_host,
         proxy_port=proxy.local_port,
-        ports=sorted(ports),
+        services=services,
         container=ctx.container,
     )
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, type DetectedPort } from '../lib/api'
+import { api, type DetectedPort, type PreviewService } from '../lib/api'
 import { isDesktop, openPreviewWindow } from '../lib/desktop'
 
 interface Props {
@@ -26,6 +26,27 @@ export function Ports({ projectId, projectName, running, readOnly = false }: Pro
   const [pending, setPending] = useState<number | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [opening, setOpening] = useState(false)
+  const [services, setServices] = useState<PreviewService[]>([])
+
+  // Whatever you opened last, per project. The ranking below is a good guess
+  // and a guess all the same; once you have corrected it, it should stay
+  // corrected rather than being re-guessed every time.
+  const rememberedKey = `moonphase.preview.${projectId}`
+  const remember = (port: number) => {
+    try {
+      window.localStorage.setItem(rememberedKey, String(port))
+    } catch {
+      // Private browsing, or storage disabled. Losing the preference is fine.
+    }
+  }
+  const remembered = (): number | null => {
+    try {
+      const value = window.localStorage.getItem(rememberedKey)
+      return value ? Number(value) : null
+    } catch {
+      return null
+    }
+  }
 
   /**
    * Open the whole project, not a port.
@@ -42,10 +63,19 @@ export function Ports({ projectId, projectName, running, readOnly = false }: Pro
     setError(null)
     try {
       const opened = await api.openPreview(projectId)
-      const target = port ?? opened.ports.find((p) => p !== 80) ?? opened.ports[0]
+      setServices(opened.services)
+
+      // Your last choice wins, as long as it is still listening. Otherwise the
+      // server has already ordered these by what it found — whatever serves
+      // HTML first, an API last — so the head of the list is the answer.
+      const previous = remembered()
+      const stillThere = opened.services.some((s) => s.port === previous)
+      const target =
+        port ?? (previous !== null && stillThere ? previous : opened.services[0]?.port)
       if (target === undefined) {
         throw new Error('Nothing is listening in this project yet.')
       }
+      remember(target)
       await openPreviewWindow({
         projectId,
         projectName,
@@ -139,7 +169,11 @@ export function Ports({ projectId, projectName, running, readOnly = false }: Pro
         <div className="port-row" key={entry.port}>
           <span className={`dot${entry.shared ? ' connected' : ''}`} />
           <span className="port-number">{entry.port}</span>
-          <span className="port-process">{entry.process ?? entry.bind}</span>
+          <span className="port-process">
+            {services.find((s) => s.port === entry.port)?.title ??
+              entry.process ??
+              entry.bind}
+          </span>
 
           {isDesktop() && !readOnly && (
             <button
