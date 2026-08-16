@@ -138,9 +138,56 @@ export interface CreateProjectInput {
   name: string
   harness: HarnessKind
   repo_url?: string | null
-  harness_auth_mode?: 'api_key' | 'oauth' | null
-  api_key?: string | null
-  preview_port?: number | null
+}
+
+export interface WorkspaceProfile {
+  org_id: string
+  claude_settings_json: string | null
+  claude_md: string | null
+  mcp_json: string | null
+  env_vars: Record<string, string>
+  git_user_name: string | null
+  git_user_email: string | null
+  harness_connected: boolean
+  harness_auth_mode: string | null
+  github_connected: boolean
+  github_account: string | null
+  github_scopes: string | null
+}
+
+export interface WorkspaceProfileInput {
+  claude_settings_json?: string | null
+  claude_md?: string | null
+  mcp_json?: string | null
+  env_vars: Record<string, string>
+  git_user_name?: string | null
+  git_user_email?: string | null
+}
+
+export interface HarnessLogin {
+  session_id: string
+  state: 'starting' | 'awaiting_code' | 'verifying' | 'complete' | 'error'
+  url: string | null
+  detail: string | null
+}
+
+export interface GitHubDevice {
+  session_id: string
+  state: 'awaiting_authorization' | 'complete' | 'error'
+  user_code: string | null
+  verification_uri: string | null
+  interval: number
+  detail: string | null
+  account: string | null
+}
+
+export interface DetectedPort {
+  port: number
+  bind: string
+  process: string | null
+  loopback_only: boolean
+  shared: boolean
+  url: string | null
 }
 
 // --- endpoints --------------------------------------------------------------
@@ -187,6 +234,59 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ keys, enter }),
     }),
+
+  // --- global profile -------------------------------------------------------
+  profile: () => request<WorkspaceProfile>('/api/profile'),
+  saveProfile: (input: WorkspaceProfileInput) =>
+    request<WorkspaceProfile>('/api/profile', {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    }),
+
+  startHarnessLogin: (harness: HarnessKind = 'claude_code') =>
+    request<HarnessLogin>('/api/profile/harness/login/start', {
+      method: 'POST',
+      body: JSON.stringify({ harness }),
+    }),
+  pollHarnessLogin: (sessionId: string) =>
+    request<HarnessLogin>(`/api/profile/harness/login/${sessionId}`),
+  submitHarnessCode: (sessionId: string, code: string) =>
+    request<HarnessLogin>('/api/profile/harness/login/code', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: sessionId, code }),
+    }),
+  setHarnessApiKey: (apiKey: string, harness: HarnessKind = 'claude_code') =>
+    request<WorkspaceProfile>('/api/profile/harness/api-key', {
+      method: 'POST',
+      body: JSON.stringify({ api_key: apiKey, harness }),
+    }),
+  disconnectHarness: () =>
+    request<WorkspaceProfile>('/api/profile/harness', { method: 'DELETE' }),
+
+  githubAvailable: () => request<{ device_flow: boolean }>('/api/profile/github/available'),
+  startGitHubDevice: () =>
+    request<GitHubDevice>('/api/profile/github/device/start', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+  pollGitHubDevice: (sessionId: string) =>
+    request<GitHubDevice>(`/api/profile/github/device/${sessionId}`),
+  setGitHubToken: (token: string) =>
+    request<WorkspaceProfile>('/api/profile/github/token', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    }),
+  disconnectGitHub: () =>
+    request<WorkspaceProfile>('/api/profile/github', { method: 'DELETE' }),
+
+  // --- previews -------------------------------------------------------------
+  ports: (projectId: string) => request<DetectedPort[]>(`/api/projects/${projectId}/ports`),
+  sharePort: (projectId: string, port: number) =>
+    request<DetectedPort>(`/api/projects/${projectId}/ports/${port}/share`, {
+      method: 'POST',
+    }),
+  unsharePort: (projectId: string, port: number) =>
+    request<void>(`/api/projects/${projectId}/ports/${port}/share`, { method: 'DELETE' }),
 }
 
 export async function terminalUrl(projectId: string, cols: number, rows: number) {

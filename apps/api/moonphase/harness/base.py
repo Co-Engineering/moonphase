@@ -14,6 +14,7 @@ from __future__ import annotations
 import abc
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 
 # StrEnum rather than (str, Enum): these values are interpolated into SQL enum
@@ -86,6 +87,37 @@ class Harness(abc.ABC):
         exist because the user, not Moonphase, should answer them.
         """
         return {}
+
+    def profile_files(self, profile: Any) -> dict[str, str]:
+        """The user's global configuration, as {path: contents}.
+
+        Written on every session start, so editing the profile reaches every
+        project on its next restart without re-provisioning. Unlike
+        `seed_config_files`, these overwrite: the profile is the source of
+        truth for the files it owns.
+        """
+        return {}
+
+    def auth_status_script(self) -> str | None:
+        """A `sh` snippet printing the harness's own auth status as JSON.
+
+        Preferred over `auth_probe_script` when the harness offers it, since
+        checking for the presence of a credentials file says nothing about
+        whether the credential is still valid.
+        """
+        return None
+
+    def login_command(self) -> list[str] | None:
+        """Argv for an interactive sign-in, driven over a PTY and relayed.
+
+        None means the harness cannot be signed into interactively and must
+        use an API key.
+        """
+        return None
+
+    def login_url_pattern(self) -> str | None:
+        """Regex matching the authorization URL the login flow prints."""
+        return None
 
     @abc.abstractmethod
     def auth_probe_script(self) -> str:

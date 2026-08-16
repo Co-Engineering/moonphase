@@ -5,24 +5,33 @@ interface Props {
   servers: Server[]
   harnesses: HarnessInfo[]
   defaultServerId?: string
+  connected: boolean
   onClose: () => void
   onCreated: (projectId: string) => void
+  onOpenSettings: () => void
 }
 
+/**
+ * Creating a project asks four questions and no credentials.
+ *
+ * Authentication and configuration come from the global profile, so this form
+ * never grows a "paste your API key" field, and ports are discovered rather
+ * than declared.
+ */
 export function NewProject({
   servers,
   harnesses,
   defaultServerId,
+  connected,
   onClose,
   onCreated,
+  onOpenSettings,
 }: Props) {
   const online = servers.filter((s) => s.status === 'online')
   const [serverId, setServerId] = useState(defaultServerId ?? online[0]?.id ?? '')
   const [name, setName] = useState('')
   const [harness, setHarness] = useState(harnesses[0]?.kind ?? 'claude_code')
   const [repoUrl, setRepoUrl] = useState('')
-  const [apiKey, setApiKey] = useState('')
-  const [previewPort, setPreviewPort] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -36,9 +45,6 @@ export function NewProject({
         name,
         harness: harness as 'claude_code' | 'opencode',
         repo_url: repoUrl.trim() || null,
-        harness_auth_mode: apiKey.trim() ? 'api_key' : null,
-        api_key: apiKey.trim() || null,
-        preview_port: previewPort ? Number(previewPort) : null,
       })
       // The API returns the row even when provisioning failed, so the user can
       // read the reason instead of losing what they typed.
@@ -76,12 +82,22 @@ export function NewProject({
       <div className="card modal" onClick={(e) => e.stopPropagation()}>
         <h2>New project</h2>
         <p className="hint">
-          Creates an isolated container on the server with its own workspace volume, then
-          starts the harness in a tmux session that outlives every client.
+          Creates an isolated container with its own workspace volume, then starts the
+          harness in a tmux session that outlives every client.
         </p>
 
         <form onSubmit={submit}>
           {error && <div className="banner error">{error}</div>}
+
+          {!connected && (
+            <div className="banner warn">
+              Claude is not connected yet, so the harness will start signed out.{' '}
+              <button type="button" className="linkish" onClick={onOpenSettings}>
+                Sign in once in Settings
+              </button>{' '}
+              and every project picks it up.
+            </div>
+          )}
 
           <label>
             <span>Server</span>
@@ -120,35 +136,12 @@ export function NewProject({
             <input
               value={repoUrl}
               onChange={(e) => setRepoUrl(e.target.value)}
-              placeholder="https://github.com/you/repo.git"
-            />
-          </label>
-
-          <label>
-            <span>Anthropic API key (optional)</span>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="sk-ant-…"
+              placeholder="https://github.com/you/private-repo.git"
             />
           </label>
           <p className="hint" style={{ marginTop: -6 }}>
-            Leave blank to sign in with your Claude subscription from inside the terminal on
-            first attach. Stored encrypted either way.
+            Private repositories work once GitHub is connected in Settings.
           </p>
-
-          <label>
-            <span>Preview port (optional)</span>
-            <input
-              type="number"
-              value={previewPort}
-              onChange={(e) => setPreviewPort(e.target.value)}
-              placeholder="3000"
-              min={1}
-              max={65535}
-            />
-          </label>
 
           <div className="actions">
             <button className="primary" type="submit" disabled={busy}>

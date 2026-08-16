@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import logging
 import shlex
+from typing import Any
 
 import asyncssh
 
-from . import docker_remote, ssh
+from . import docker_remote, profile, ssh
 from . import harness as harness_registry
 from .harness import Harness, HarnessCredential
 from .ssh import SSHError
@@ -97,10 +98,11 @@ async def apply_credential(
     harness: Harness,
     credential: HarnessCredential | None,
 ) -> None:
-    """Materialise harness credentials in the container.
+    """Materialise a bare harness credential, with no surrounding profile.
 
-    Env vars land in a 0600 file the launcher sources; credential files are
-    written straight to the paths the harness expects.
+    Kept for tests and for the per-project override path. Normal session
+    startup goes through `moonphase.profile.apply`, which also writes global
+    settings and git configuration.
     """
     if credential is None:
         return
@@ -170,6 +172,7 @@ async def ensure_session(
     *,
     harness_kind: str,
     credential: HarnessCredential | None = None,
+    workspace_profile: Any | None = None,
     session: str = DEFAULT_SESSION,
     restart: bool = False,
 ) -> bool:
@@ -178,6 +181,10 @@ async def ensure_session(
     Idempotent by design: the UI calls this on every project open, and an
     already-running session must be left strictly alone — recreating it would
     throw away the conversation the user came back for.
+
+    The global profile is applied whenever one is supplied, so a container
+    created before the user changed a setting picks the change up on its next
+    restart without being re-provisioned.
     """
     harness = harness_registry.get(harness_kind)
 
@@ -188,7 +195,10 @@ async def ensure_session(
         return False
 
     await seed_config(conn, container, harness)
-    await apply_credential(conn, container, harness, credential)
+    if workspace_profile is not None:
+        await profile.apply(conn, container, harness, workspace_profile)
+    else:
+        await apply_credential(conn, container, harness, credential)
 
     spec = harness.launch_spec()
     await _write_file(

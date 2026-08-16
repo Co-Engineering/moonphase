@@ -7,6 +7,8 @@ import { ProjectTerminal } from './components/Terminal'
 import { Auth } from './routes/Auth'
 import { AddServer } from './routes/AddServer'
 import { NewProject } from './routes/NewProject'
+import { Settings } from './routes/Settings'
+import { Ports } from './components/Ports'
 
 export function App() {
   const [session, setSession] = useState<AuthSession | null>(null)
@@ -35,17 +37,20 @@ function Shell({ email }: { email: string }) {
   const [showAddServer, setShowAddServer] = useState(false)
   const [showNewProject, setShowNewProject] = useState(false)
   const [showSidebar, setShowSidebar] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
 
   // Servers are polled: bootstrap and Docker installs finish out of band, and
   // a stale "bootstrapping" chip is the most confusing thing the UI can show.
   const servers = useResource<Server[]>(() => api.servers(), [], { pollMs: 15000 })
   const projects = useResource<Project[]>(() => api.projects(), [], { pollMs: 15000 })
   const harnesses = useResource(() => api.harnesses(), [])
+  const profile = useResource(() => api.profile(), [])
 
   const reloadAll = useCallback(() => {
     void servers.reload(true)
     void projects.reload(true)
-  }, [servers, projects])
+    void profile.reload(true)
+  }, [servers, projects, profile])
 
   const selectProject = useCallback((id: string) => {
     setSelected({ kind: 'project', id })
@@ -128,6 +133,9 @@ function Shell({ email }: { email: string }) {
 
         <div className="sidebar-foot">
           <span title={email}>{email}</span>
+          <button className="ghost" onClick={() => setShowSettings(true)} title="Settings">
+            Settings
+          </button>
           <button className="ghost" onClick={() => void supabase.auth.signOut()}>
             Sign out
           </button>
@@ -168,6 +176,9 @@ function Shell({ email }: { email: string }) {
         )}
       </main>
 
+      {showSettings && (
+        <Settings onClose={() => setShowSettings(false)} onSaved={reloadAll} />
+      )}
       {showAddServer && (
         <AddServer onClose={() => setShowAddServer(false)} onCreated={reloadAll} />
       )}
@@ -176,6 +187,11 @@ function Shell({ email }: { email: string }) {
           servers={servers.data ?? []}
           harnesses={harnesses.data ?? []}
           defaultServerId={activeServer?.id ?? activeProject?.server_id}
+          connected={profile.data?.harness_connected ?? false}
+          onOpenSettings={() => {
+            setShowNewProject(false)
+            setShowSettings(true)
+          }}
           onClose={() => setShowNewProject(false)}
           onCreated={(id) => {
             reloadAll()
@@ -252,8 +268,9 @@ function ProjectView({
       )}
 
       {project.status === 'running' ? (
-        <div className="content flush">
+        <div className="content flush terminal-and-ports">
           <ProjectTerminal projectId={project.id} />
+          <Ports projectId={project.id} running={project.status === 'running'} />
         </div>
       ) : (
         <div className="content">

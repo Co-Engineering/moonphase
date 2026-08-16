@@ -41,6 +41,21 @@ class Settings(BaseSettings):
     # --- containers --------------------------------------------------------
     moonphase_runtime_image: str = "moonphase/runtime-claude:latest"
 
+    # --- previews ----------------------------------------------------------
+    # Interface the per-port preview listeners bind to. Loopback is right when
+    # the backend and browser are the same machine; set 0.0.0.0 when the
+    # backend is remote and you want previews reachable from your phone.
+    moonphase_preview_bind: str = "127.0.0.1"
+    # Host clients should dial to reach those listeners. Defaults to the bind
+    # address, but must be the externally routable name behind a proxy.
+    moonphase_preview_host: str = "127.0.0.1"
+
+    # --- github -------------------------------------------------------------
+    # OAuth app client id enabling the device flow. Without it, GitHub can
+    # still be connected by pasting a personal access token. Device flow needs
+    # no client secret, which is why it suits a self-hosted deployment.
+    moonphase_github_client_id: str = ""
+
     # --- ssh ---------------------------------------------------------------
     moonphase_ssh_connect_timeout: int = 15
     moonphase_ssh_keepalive_interval: int = 30

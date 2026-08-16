@@ -192,6 +192,115 @@ class HarnessInfoOut(BaseModel):
     available: bool = True
 
 
+# --- workspace profile ------------------------------------------------------
+
+
+class WorkspaceProfileIn(BaseModel):
+    org_id: UUID | None = None
+    claude_settings_json: str | None = None
+    claude_md: str | None = None
+    mcp_json: str | None = None
+    env_vars: dict[str, str] = Field(default_factory=dict)
+    git_user_name: str | None = None
+    git_user_email: str | None = None
+
+    @field_validator("claude_settings_json", "mcp_json")
+    @classmethod
+    def _valid_json(cls, v: str | None) -> str | None:
+        """Reject malformed JSON here rather than letting the harness choke."""
+        if v is None or not v.strip():
+            return None
+        import json
+
+        try:
+            json.loads(v)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Must be valid JSON: {exc}") from exc
+        return v
+
+
+class WorkspaceProfileOut(BaseModel):
+    org_id: UUID
+    claude_settings_json: str | None
+    claude_md: str | None
+    mcp_json: str | None
+    env_vars: dict[str, str]
+    git_user_name: str | None
+    git_user_email: str | None
+    # Connection state, never the credentials themselves.
+    harness_connected: bool = False
+    harness_auth_mode: str | None = None
+    github_connected: bool = False
+    github_account: str | None = None
+    github_scopes: str | None = None
+
+
+# --- harness sign-in --------------------------------------------------------
+
+
+class HarnessLoginStart(BaseModel):
+    org_id: UUID | None = None
+    harness: HarnessKindStr = "claude_code"
+    # Which server runs the throwaway login container. Defaults to any online one.
+    server_id: UUID | None = None
+
+
+class HarnessLoginOut(BaseModel):
+    session_id: str
+    state: str
+    url: str | None = None
+    detail: str | None = None
+
+
+class HarnessLoginCode(BaseModel):
+    session_id: str
+    code: str = Field(min_length=1, max_length=4096)
+
+
+class HarnessApiKeyIn(BaseModel):
+    org_id: UUID | None = None
+    harness: HarnessKindStr = "claude_code"
+    api_key: str = Field(min_length=8, max_length=512)
+
+
+# --- github -----------------------------------------------------------------
+
+
+class GitHubDeviceStart(BaseModel):
+    org_id: UUID | None = None
+
+
+class GitHubDeviceOut(BaseModel):
+    session_id: str
+    state: str
+    user_code: str | None = None
+    verification_uri: str | None = None
+    interval: int = 5
+    detail: str | None = None
+    account: str | None = None
+
+
+class GitHubTokenIn(BaseModel):
+    org_id: UUID | None = None
+    token: str = Field(min_length=8, max_length=512)
+
+
+# --- previews ---------------------------------------------------------------
+
+
+class DetectedPortOut(BaseModel):
+    port: int
+    bind: str
+    process: str | None = None
+    loopback_only: bool = False
+    shared: bool = False
+    url: str | None = None
+
+
+class PortShareIn(BaseModel):
+    port: int = Field(ge=1, le=65535)
+
+
 class HealthOut(BaseModel):
     status: str
     version: str

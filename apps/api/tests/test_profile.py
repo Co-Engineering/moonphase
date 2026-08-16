@@ -1,0 +1,249 @@
+"""Global profile materialisation.
+
+The product claim is that you sign in and configure once, and every project
+gets it. These tests check that against a real container rather than trusting
+the plumbing: settings files land where the harness reads them, credentials are
+0600, git is configured to use the token, and disconnecting actually removes
+what was written.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import time
+import uuid
+
+import pytest
+
+from moonphase import docker_remote, provision, sessions, ssh
+from moonphase import profile as profile_mod
+from moonphase.harness import HarnessAuthMode, HarnessCredential
+from moonphase.harness import get as get_harness
+from moonphase.profile import VcsCredential, WorkspaceProfile
+from moonphase.ssh import SSHTarget
+
+FAKE_SERVER_IMAGE = "moonphase/fake-server:latest"
+RUNTIME_IMAGE = "moonphase/runtime-claude:latest"
+SSH_PORT = 22622
+SSH_USER = "deploy"
+SSH_PASSWORD = "moonphase-test"
+
+
+def _docker(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["docker", *args], capture_output=True, text=True, check=check)
+
+
+def _docker_available() -> bool:
+    try:
+        return _docker("info", "--format", "{{.ServerVersion}}", check=False).returncode == 0
+    except FileNotFoundError:
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _docker_available(), reason="Docker daemon is not reachable"
+)
+
+
+@pytest.fixture(scope="module")
+def fake_server():
+    name = f"moonphase-profile-{uuid.uuid4().hex[:8]}"
+    _docker("rm", "-f", name, check=False)
+    _docker(
+        "run", "-d", "--name", name,
+        "-p", f"127.0.0.1:{SSH_PORT}:22",
+        "-v", "/var/run/docker.sock:/var/run/docker.sock",
+        FAKE_SERVER_IMAGE,
+    )
+    deadline = time.time() + 45
+    while time.time() < deadline:
+        logs = _docker("logs", name, check=False)
+        if "Server listening on 0.0.0.0" in (logs.stdout + logs.stderr):
+            break
+        time.sleep(0.4)
+    else:
+        _docker("rm", "-f", name, check=False)
+        pytest.fail("fake server never started")
+    yield name
+    _docker("rm", "-f", name, check=False)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_profile_reaches_the_container(fake_server: str) -> None:
+    server_id = str(uuid.uuid4())
+    container = f"mp-profile-{uuid.uuid4().hex[:8]}"
+
+    try:
+        result = await provision.bootstrap(
+            server_id=server_id,
+            server_name="profile-test",
+            host="127.0.0.1",
+            port=SSH_PORT,
+            ssh_user=SSH_USER,
+            auth_mode="password_bootstrap",
+            password=SSH_PASSWORD,
+            auto_install_docker=False,
+        )
+        assert result.status == "online", result.detail
+
+        target = SSHTarget(
+            server_id=server_id, host="127.0.0.1", port=SSH_PORT, username=SSH_USER,
+            private_key=result.generated_private_key,
+            known_host_key_fp=result.host_key_fingerprint,
+        )
+        conn = await ssh.pool.get(target)
+
+        await docker_remote.volume_create(conn, f"{container}-workspace")
+        await docker_remote.volume_create(conn, f"{container}-home")
+        await docker_remote.run_container(
+            conn, name=container, image=RUNTIME_IMAGE,
+            workspace_volume=f"{container}-workspace",
+            home_volume=f"{container}-home",
+        )
+        await docker_remote.exec_capture(
+            conn, container, ["chown", "-R", "dev:dev", "/home/dev", "/workspace"],
+            user="root", timeout=120,
+        )
+
+        harness = get_harness("claude_code")
+        wp = WorkspaceProfile(
+            org_id=str(uuid.uuid4()),
+            claude_md="# Global preferences\nPrefer small commits.\n",
+            claude_settings_json='{"permissions":{"allow":["Bash(npm test)"]}}',
+            mcp_json='{"mcpServers":{}}',
+            env_vars={"MOONPHASE_TEST_VAR": "hello-from-profile"},
+            git_user_name="Ada Lovelace",
+            git_user_email="ada@example.com",
+            harness_credential=HarnessCredential(
+                mode=HarnessAuthMode.API_KEY, api_key="sk-ant-profile-not-real"
+            ),
+            vcs_credential=VcsCredential(
+                provider="github", token="ghp_fake_token_for_test", account="ada"
+            ),
+        )
+
+        await profile_mod.apply(conn, container, harness, wp)
+
+        # --- harness configuration -----------------------------------------
+        claude_md = await profile_mod.read_file(
+            conn, container, "/home/dev/.claude/CLAUDE.md"
+        )
+        assert claude_md and "Prefer small commits" in claude_md
+
+        settings = await profile_mod.read_file(
+            conn, container, "/home/dev/.claude/settings.json"
+        )
+        assert settings and "Bash(npm test)" in settings
+        print("\n  global CLAUDE.md and settings.json written")
+
+        # --- environment ----------------------------------------------------
+        env = await profile_mod.read_file(conn, container, profile_mod.ENV_FILE)
+        assert env and "MOONPHASE_TEST_VAR" in env
+        assert "ANTHROPIC_API_KEY" in env, "harness credential missing from env"
+        assert "GH_TOKEN" in env, "github token missing from env"
+
+        mode = await docker_remote.exec_capture(
+            conn, container, ["stat", "-c", "%a", profile_mod.ENV_FILE]
+        )
+        assert mode.stdout.strip() == "600", f"env file mode {mode.stdout.strip()}"
+        print("  env file written, mode 600")
+
+        # The launcher must actually export these to the harness.
+        assert await sessions.is_authenticated(conn, container, harness)
+        seen = await docker_remote.exec_capture(
+            conn, container,
+            ["sh", "-c", f"set -a; . {profile_mod.ENV_FILE}; set +a; "
+                         'printf "%s" "$MOONPHASE_TEST_VAR"'],
+        )
+        assert seen.stdout.strip() == "hello-from-profile"
+        print("  variables are exported into the harness environment")
+
+        # --- git --------------------------------------------------------------
+        name = await docker_remote.exec_capture(
+            conn, container, ["git", "config", "--global", "user.name"]
+        )
+        assert name.stdout.strip() == "Ada Lovelace"
+
+        helper = await docker_remote.exec_capture(
+            conn, container, ["git", "config", "--global", "credential.helper"]
+        )
+        assert helper.stdout.strip() == "store"
+
+        creds = await profile_mod.read_file(
+            conn, container, profile_mod.GIT_CREDENTIALS_FILE
+        )
+        assert creds and "ghp_fake_token_for_test" in creds
+        creds_mode = await docker_remote.exec_capture(
+            conn, container, ["stat", "-c", "%a", profile_mod.GIT_CREDENTIALS_FILE]
+        )
+        assert creds_mode.stdout.strip() == "600"
+
+        # ssh-style URLs must be rewritten, or a repo referenced as git@ still
+        # prompts for a key we do not have.
+        rewrite = await docker_remote.exec_capture(
+            conn, container,
+            ["git", "config", "--global", "--get-all", "url.https://github.com/.insteadOf"],
+        )
+        values = rewrite.stdout.split()
+        # Both forms must survive. `git config` without --add replaces, so a
+        # naive implementation keeps only the last one and `git clone
+        # git@github.com:...` still fails.
+        assert "git@github.com:" in values, f"scp-style rewrite missing: {values}"
+        assert "ssh://git@github.com/" in values, f"ssh:// rewrite missing: {values}"
+        print("  git identity, credential helper and both URL rewrites configured")
+
+        # Re-applying must not accumulate duplicates.
+        await profile_mod.apply(conn, container, harness, wp)
+        again = await docker_remote.exec_capture(
+            conn, container,
+            ["git", "config", "--global", "--get-all", "url.https://github.com/.insteadOf"],
+        )
+        assert len(again.stdout.split()) == 2, (
+            f"rewrites accumulated on re-apply: {again.stdout.split()}"
+        )
+        print("  re-applying does not duplicate git rewrites")
+
+        # --- editing the profile takes effect ---------------------------------
+        wp.claude_md = "# Updated\nNow with different guidance.\n"
+        await profile_mod.apply(conn, container, harness, wp)
+        updated = await profile_mod.read_file(
+            conn, container, "/home/dev/.claude/CLAUDE.md"
+        )
+        assert updated and "Now with different guidance" in updated
+        assert "Prefer small commits" not in updated
+        print("  re-applying the profile overwrites owned files")
+
+        # --- disconnecting GitHub cleans up ------------------------------------
+        wp.vcs_credential = None
+        await profile_mod.apply(conn, container, harness, wp)
+
+        gone = await profile_mod.read_file(
+            conn, container, profile_mod.GIT_CREDENTIALS_FILE
+        )
+        assert gone is None, "git credentials survived disconnection"
+
+        helper_after = await docker_remote.exec_capture(
+            conn, container, ["git", "config", "--global", "credential.helper"]
+        )
+        assert not helper_after.stdout.strip(), (
+            "credential.helper still set after disconnect; git would prompt against "
+            "a file that no longer exists"
+        )
+        env_after = await profile_mod.read_file(conn, container, profile_mod.ENV_FILE)
+        assert env_after is not None and "GH_TOKEN" not in env_after
+        print("  disconnecting GitHub removes the token and the helper")
+
+    finally:
+        try:
+            cleanup = SSHTarget(
+                server_id=server_id, host="127.0.0.1", port=SSH_PORT,
+                username=SSH_USER, password=SSH_PASSWORD,
+            )
+            conn_c, _ = await ssh.connect(cleanup)
+            await docker_remote.remove(conn_c, container)
+            await docker_remote.volume_remove(conn_c, f"{container}-workspace")
+            await docker_remote.volume_remove(conn_c, f"{container}-home")
+            conn_c.close()
+        except Exception as exc:  # noqa: BLE001 — cleanup must not mask failures
+            print(f"  cleanup warning: {exc}")
+        await ssh.pool.close_all()

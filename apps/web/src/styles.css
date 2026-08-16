@@ -534,6 +534,173 @@ pre {
   margin: 0;
 }
 
+.modal--wide {
+  max-width: 680px;
+}
+
+.card.inner {
+  background: var(--bg-elev);
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+.card.inner h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.row-between {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.row-between .hint {
+  margin-bottom: 0;
+}
+
+.dot.connected {
+  background: var(--green);
+  box-shadow: 0 0 6px rgba(158, 206, 106, 0.6);
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+
+.tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--text-dim);
+  padding: 8px 12px;
+}
+
+.tab:hover:not(:disabled) {
+  background: none;
+  color: var(--text);
+}
+
+.tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+button.linkish {
+  border: none;
+  background: none;
+  color: var(--accent);
+  padding: 0;
+  text-decoration: underline;
+}
+
+button.linkish:hover:not(:disabled) {
+  background: none;
+}
+
+/* The GitHub device code is read off the screen and typed elsewhere, so it is
+   set large and widely spaced to make transcription hard to get wrong. */
+.devicecode {
+  font-family: var(--mono);
+  font-size: 26px;
+  letter-spacing: 0.28em;
+  text-align: center;
+  padding: 14px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  color: var(--text);
+  margin: 10px 0;
+  user-select: all;
+}
+
+/* --- ports ---------------------------------------------------------------- */
+
+.terminal-and-ports {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ports {
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+  padding: 6px 12px 8px;
+  flex-shrink: 0;
+  max-height: 25vh;
+  overflow-y: auto;
+}
+
+.ports-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 2px;
+}
+
+.ports-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+.ports-empty,
+.ports-error {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.ports-error {
+  color: var(--amber);
+}
+
+.port-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 13px;
+}
+
+.port-number {
+  font-family: var(--mono);
+  color: var(--text);
+  min-width: 52px;
+}
+
+.port-process {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-faint);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.port-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 12px;
+  padding: 3px 8px;
+  border: 1px solid var(--accent-dim);
+  border-radius: 5px;
+}
+
+.port-link:hover {
+  background: var(--accent-dim);
+  color: #eaf0ff;
+}
+
 /* --- responsive: the same UI is the phone client -------------------------- */
 
 @media (max-width: 720px) {

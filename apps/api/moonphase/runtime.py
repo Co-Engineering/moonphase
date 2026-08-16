@@ -18,6 +18,12 @@ import asyncssh
 
 from . import queries, ssh
 from .db import service_session, user_session
+from .profile import (
+    VcsCredential,
+    WorkspaceProfile,
+    credential_from_row,
+    profile_from_row,
+)
 from .ssh import SSHError, SSHTarget
 
 log = logging.getLogger(__name__)
@@ -87,3 +93,45 @@ async def resolve_credential(
         return await queries.resolve_harness_credential_privileged(
             conn, org_id=org_id, project_id=project_id, harness=harness_kind
         )
+
+
+async def load_profile(
+    claims: dict[str, Any], org_id: UUID, project_id: UUID | None, harness_kind: str
+) -> WorkspaceProfile:
+    """Assemble the global profile plus whatever credentials apply.
+
+    Settings are read through the caller's RLS session; secrets through a
+    service session. A project-specific harness credential wins over the
+    org-wide one, so a single project can be pinned to a different account
+    without disturbing the global sign-in.
+    """
+    async with user_session(claims) as conn:
+        row = await queries.get_profile(conn, org_id)
+
+    if row is None:
+        # The signup trigger creates one, so this only happens for orgs made
+        # before the profile migration. Treat it as empty rather than failing.
+        row = {"org_id": org_id, "env_vars": {}}
+
+    async with service_session() as conn:
+        credential_row = await queries.resolve_harness_credential_privileged(
+            conn,
+            org_id=org_id,
+            project_id=project_id or org_id,
+            harness=harness_kind,
+        )
+        vcs_row = await queries.get_vcs_credential_privileged(conn, org_id, "github")
+
+    vcs = None
+    if vcs_row and vcs_row.get("token"):
+        vcs = VcsCredential(
+            provider=str(vcs_row["provider"]),
+            token=str(vcs_row["token"]),
+            account=vcs_row.get("account"),
+        )
+
+    return profile_from_row(
+        row,
+        harness_credential=credential_from_row(credential_row),
+        vcs_credential=vcs,
+    )

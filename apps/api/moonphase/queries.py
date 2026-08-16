@@ -12,6 +12,7 @@ Two conventions worth knowing before reading:
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 from uuid import UUID
@@ -618,6 +619,169 @@ async def resolve_harness_credential_privileged(
         "api_key": decrypt(data["api_key_enc"]),
         "oauth_blob": decrypt(data["oauth_blob_enc"]),
     }
+
+
+# ---------------------------------------------------------------------------
+# Workspace profile
+# ---------------------------------------------------------------------------
+
+
+async def get_profile(conn: AsyncConnection, org_id: UUID) -> dict[str, Any] | None:
+    result = await conn.execute(
+        text(
+            """
+            select id, org_id, claude_settings_json, claude_md, mcp_json,
+                   env_vars, git_user_name, git_user_email, created_at, updated_at
+            from workspace_profiles
+            where org_id = :org_id
+            """
+        ),
+        {"org_id": org_id},
+    )
+    row = result.first()
+    return _row_to_dict(row) if row else None
+
+
+async def upsert_profile(
+    conn: AsyncConnection,
+    org_id: UUID,
+    *,
+    claude_settings_json: str | None,
+    claude_md: str | None,
+    mcp_json: str | None,
+    env_vars: dict[str, str],
+    git_user_name: str | None,
+    git_user_email: str | None,
+) -> dict[str, Any]:
+    result = await conn.execute(
+        text(
+            """
+            insert into workspace_profiles
+              (org_id, claude_settings_json, claude_md, mcp_json, env_vars,
+               git_user_name, git_user_email)
+            values
+              (:org_id, :settings, :claude_md, :mcp, cast(:env as jsonb),
+               :git_name, :git_email)
+            on conflict (org_id) do update set
+              claude_settings_json = excluded.claude_settings_json,
+              claude_md            = excluded.claude_md,
+              mcp_json             = excluded.mcp_json,
+              env_vars             = excluded.env_vars,
+              git_user_name        = excluded.git_user_name,
+              git_user_email       = excluded.git_user_email
+            returning id, org_id, claude_settings_json, claude_md, mcp_json,
+                      env_vars, git_user_name, git_user_email, created_at, updated_at
+            """
+        ),
+        {
+            "org_id": org_id,
+            "settings": claude_settings_json,
+            "claude_md": claude_md,
+            "mcp": mcp_json,
+            "env": json.dumps(env_vars),
+            "git_name": git_user_name,
+            "git_email": git_user_email,
+        },
+    )
+    row = result.first()
+    if row is None:
+        raise PermissionError("Not allowed to edit this organization's profile.")
+    return _row_to_dict(row)
+
+
+# ---------------------------------------------------------------------------
+# VCS credentials (privileged)
+# ---------------------------------------------------------------------------
+
+
+async def upsert_vcs_credential_privileged(
+    conn: AsyncConnection,
+    *,
+    org_id: UUID,
+    provider: str,
+    auth_mode: str,
+    account: str | None,
+    scopes: str | None,
+    token: str,
+    created_by: str,
+) -> dict[str, Any]:
+    result = await conn.execute(
+        text(
+            """
+            insert into private.vcs_credentials
+              (org_id, provider, auth_mode, account, scopes, token_enc, created_by)
+            values
+              (:org_id, cast(:provider as vcs_provider),
+               cast(:auth_mode as vcs_auth_mode), :account, :scopes, :token, :created_by)
+            on conflict (org_id, provider) do update set
+              auth_mode  = excluded.auth_mode,
+              account    = excluded.account,
+              scopes     = excluded.scopes,
+              token_enc  = excluded.token_enc
+            returning id, org_id, provider, auth_mode, account, scopes, created_at
+            """
+        ),
+        {
+            "org_id": org_id,
+            "provider": provider,
+            "auth_mode": auth_mode,
+            "account": account,
+            "scopes": scopes,
+            "token": encrypt(token),
+            "created_by": created_by,
+        },
+    )
+    row = result.first()
+    if row is None:
+        raise RuntimeError("Failed to store the version-control credential.")
+    return _row_to_dict(row)
+
+
+async def get_vcs_credential_privileged(
+    conn: AsyncConnection, org_id: UUID, provider: str = "github"
+) -> dict[str, Any] | None:
+    result = await conn.execute(
+        text(
+            """
+            select provider, auth_mode, account, scopes, token_enc, created_at
+            from private.vcs_credentials
+            where org_id = :org_id and provider = cast(:provider as vcs_provider)
+            """
+        ),
+        {"org_id": org_id, "provider": provider},
+    )
+    row = result.first()
+    if row is None:
+        return None
+    data = _row_to_dict(row)
+    data["token"] = decrypt(data.pop("token_enc"))
+    return data
+
+
+async def delete_vcs_credential_privileged(
+    conn: AsyncConnection, org_id: UUID, provider: str = "github"
+) -> None:
+    await conn.execute(
+        text(
+            "delete from private.vcs_credentials "
+            "where org_id = :org_id and provider = cast(:provider as vcs_provider)"
+        ),
+        {"org_id": org_id, "provider": provider},
+    )
+
+
+async def delete_harness_credential_privileged(
+    conn: AsyncConnection, org_id: UUID, harness: str
+) -> None:
+    """Remove the org-wide credential, leaving per-project overrides alone."""
+    await conn.execute(
+        text(
+            "delete from private.harness_credentials "
+            "where org_id = :org_id and harness = cast(:h as harness_kind) "
+            "and project_id is null"
+        ),
+        {"org_id": org_id, "h": harness},
+    )
 
 
 async def list_harness_credentials(

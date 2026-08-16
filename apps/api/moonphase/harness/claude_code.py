@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from .base import (
     AuthStatus,
@@ -19,6 +20,9 @@ __all__ = ["ClaudeCode", "AuthStatus"]
 # Claude Code stores per-project transcripts under ~/.claude/projects/<slug>,
 # where <slug> is the working directory with every '/' turned into '-'.
 CLAUDE_HOME = "/home/dev/.claude"
+
+# The OAuth authorization URL `claude setup-token` prints for the user to open.
+LOGIN_URL_PATTERN = r"https://claude\.com/\S*oauth\S*"
 
 
 def _project_slug(workdir: str) -> str:
@@ -58,14 +62,44 @@ class ClaudeCode(Harness):
             )
         }
 
+    def profile_files(self, profile: Any) -> dict[str, str]:
+        """The user's global Claude Code configuration.
+
+        `settings.json` and the global `CLAUDE.md` are exactly the things
+        people expect to set once and have everywhere, so they are owned by
+        the profile and overwritten on each session start.
+        """
+        files: dict[str, str] = {}
+        if profile.claude_settings_json:
+            files[f"{CLAUDE_HOME}/settings.json"] = profile.claude_settings_json
+        if profile.claude_md:
+            files[f"{CLAUDE_HOME}/CLAUDE.md"] = profile.claude_md
+        if profile.mcp_json:
+            files[f"{CLAUDE_HOME}/.mcp.json"] = profile.mcp_json
+        return files
+
     def auth_probe_script(self) -> str:
-        # `claude auth status` would be ideal, but its availability varies by
-        # version, so probe for the artefacts instead: either a credentials
-        # file on disk or a key in the environment.
         return f'test -s "{CLAUDE_HOME}/.credentials.json" || test -n "$ANTHROPIC_API_KEY"'
+
+    def auth_status_script(self) -> str:
+        # Authoritative, unlike checking for a file: it reports whether the
+        # credential actually works and which method is in use.
+        return "claude auth status --json 2>/dev/null"
+
+    def login_command(self) -> list[str]:
+        # Produces a long-lived token tied to the user's Claude subscription,
+        # which is what makes a single global sign-in possible.
+        return ["claude", "setup-token"]
+
+    def login_url_pattern(self) -> str:
+        return LOGIN_URL_PATTERN
 
     def transcript_dir(self, workdir: str = "/workspace") -> str:
         return f"{CLAUDE_HOME}/projects/{_project_slug(workdir)}"
+
+    def credential_paths(self) -> list[str]:
+        """Files to harvest after an interactive login succeeds."""
+        return [f"{CLAUDE_HOME}/.credentials.json"]
 
     def version_command(self) -> list[str]:
         return ["claude", "--version"]

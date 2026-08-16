@@ -27,7 +27,6 @@ from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 from .. import docker_remote, queries, runtime, sessions, ssh
 from ..auth import Principal, websocket_principal
 from ..db import user_session
-from ..harness import HarnessAuthMode, HarnessCredential
 from ..runtime import NotFound
 from ..ssh import SSHError
 
@@ -124,19 +123,14 @@ async def project_terminal(
         if container.state != "running":
             await docker_remote.start(conn_ssh, ctx.container)
 
-        credential_row = await runtime.resolve_credential(
-            ctx.project["org_id"], project_id, ctx.harness
+        workspace_profile = await runtime.load_profile(
+            principal.claims, ctx.project["org_id"], project_id, ctx.harness
         )
-        credential = None
-        if credential_row:
-            credential = HarnessCredential(
-                mode=HarnessAuthMode(credential_row["auth_mode"]),
-                api_key=credential_row.get("api_key"),
-                oauth_blob=credential_row.get("oauth_blob"),
-            )
-
         await sessions.ensure_session(
-            conn_ssh, ctx.container, harness_kind=ctx.harness, credential=credential
+            conn_ssh,
+            ctx.container,
+            harness_kind=ctx.harness,
+            workspace_profile=workspace_profile,
         )
     except SSHError as exc:
         await websocket.send_text(json.dumps({"type": "error", "message": str(exc)}))

@@ -10,10 +10,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from . import ssh
+from . import preview, ssh
 from .config import get_settings
 from .db import dispose_engine
 from .routers import meta, projects, servers, terminal
+from .routers import preview as preview_router
+from .routers import profile as profile_router
 from .runtime import NotFound
 from .ssh import HostKeyMismatch, SSHError
 
@@ -29,7 +31,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
     log.info("moonphase api starting (runtime image: %s)", settings.moonphase_runtime_image)
     yield
-    log.info("shutting down: closing SSH connections")
+    log.info("shutting down: closing preview tunnels and SSH connections")
+    await preview.registry.close_all()
     await ssh.pool.close_all()
     await dispose_engine()
 
@@ -71,6 +74,8 @@ def create_app() -> FastAPI:
     app.include_router(meta.router)
     app.include_router(servers.router)
     app.include_router(projects.router)
+    app.include_router(profile_router.router)
+    app.include_router(preview_router.router)
     app.include_router(terminal.router)
 
     return app

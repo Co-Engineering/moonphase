@@ -9,12 +9,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from .. import docker_remote, queries, runtime, sessions, ssh
+from .. import docker_remote, preview, queries, runtime, sessions, ssh
 from .. import harness as harness_registry
 from ..auth import Principal, current_principal
 from ..config import get_settings
 from ..db import service_session, user_session
-from ..harness import HarnessAuthMode, HarnessCredential
 from ..runtime import NotFound
 from ..schemas import (
     ProjectCreate,
@@ -281,6 +280,9 @@ async def stop_project(
 
     conn_ssh = await ssh.pool.get(ctx.target)
     await docker_remote.stop(conn_ssh, ctx.container)
+    # The ports behind them are gone; leaving listeners open would advertise
+    # previews that refuse every connection.
+    await preview.registry.close_project(str(project_id))
 
     async with user_session(principal.claims) as conn:
         await queries.update_project_state(
@@ -326,16 +328,9 @@ async def start_session(
     except NotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    credential_row = await runtime.resolve_credential(
-        ctx.project["org_id"], project_id, ctx.harness
+    workspace_profile = await runtime.load_profile(
+        principal.claims, ctx.project["org_id"], project_id, ctx.harness
     )
-    credential = None
-    if credential_row:
-        credential = HarnessCredential(
-            mode=HarnessAuthMode(credential_row["auth_mode"]),
-            api_key=credential_row.get("api_key"),
-            oauth_blob=credential_row.get("oauth_blob"),
-        )
 
     conn_ssh = await ssh.pool.get(ctx.target)
 
@@ -352,7 +347,7 @@ async def start_session(
             conn_ssh,
             ctx.container,
             harness_kind=ctx.harness,
-            credential=credential,
+            workspace_profile=workspace_profile,
             restart=options.restart,
         )
     except SSHError as exc:
@@ -452,6 +447,8 @@ async def delete_project(
     except (SSHError, NotFound) as exc:
         # An unreachable server must not trap a stale row in the UI.
         log.warning("cleanup for project %s failed: %s", project_id, exc)
+
+    await preview.registry.close_project(str(project_id))
 
     async with user_session(principal.claims) as conn:
         deleted = await queries.delete_project(conn, project_id)
