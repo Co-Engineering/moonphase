@@ -104,6 +104,18 @@ class Harness(abc.ABC):
         """
         return {}
 
+    def activity_signals(self) -> Any:
+        """Hints for reading a still terminal, as an `ActivitySignals`.
+
+        Returned loosely typed to keep this module free of a dependency on
+        `activity`, which imports the harness registry. Patterns only refine a
+        pane that has already stopped changing, so an out-of-date pattern
+        mislabels a state rather than missing the transition.
+        """
+        from ..activity import ActivitySignals
+
+        return ActivitySignals()
+
     def auth_status_script(self) -> str | None:
         """A `sh` snippet printing the harness's own auth status as JSON.
 

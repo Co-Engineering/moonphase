@@ -18,22 +18,28 @@ container → tmux + Claude Code → live terminal in Electron.
 - [x] Harness abstraction with Claude Code as the first implementation
 - [x] Electron shell over a responsive web UI
 
-## v0.2 — make it comfortable
+## v0.2 — make it comfortable ✅
 
-The slice proves it works; this makes it something you would actually leave
+The slice proved it works; this made it something you would actually leave
 running.
 
-- [ ] **Claude Code OAuth relay.** Surface the login URL and code in the UI so
-      subscription users never touch an API key. The credential tables already
-      model `oauth` mode and store the blob.
-- [ ] **Web push notifications.** "Claude is waiting for you" is the single
-      highest-value feature after the terminal itself — it is the whole reason
-      you walked away.
-- [ ] **Repo credentials.** A per-project deploy key so `git clone` and `git
-      push` work for private repositories.
-- [ ] **Session health reconciliation.** A periodic sweep that reconciles
-      recorded state against what is actually running, so a rebooted server
-      does not leave the UI lying.
+- [x] **Global sign-in and settings.** One organization-wide profile holds the
+      Claude credential, global CLAUDE.md, settings.json, MCP config, env vars
+      and git identity, materialised into every container on session start.
+- [x] **Claude Code sign-in relay.** The login runs on a PTY in a throwaway
+      container; the URL is surfaced in the UI and the code typed back.
+- [x] **GitHub.** Device flow or a pasted token, becoming a git credential
+      helper and `GH_TOKEN` in every project.
+- [x] **Automatic preview ports.** Detected inside the container's network
+      namespace and tunnelled on demand, so nothing is declared up front.
+- [x] **User-defined environments.** A base image plus setup commands, built
+      on the server from a generated recipe.
+- [x] **Session activity and web push.** A background monitor watches every
+      running project and notifies when the agent stops working or blocks on a
+      question — the reason you were able to walk away at all.
+- [ ] **Session health reconciliation.** The monitor already detects a stopped
+      container; it should write that back to `projects.status` so a rebooted
+      server does not leave the UI lying.
 - [ ] **WebSocket auth tickets.** Replace the token query parameter with a
       short-lived single-use ticket, so access tokens stop landing in logs.
 

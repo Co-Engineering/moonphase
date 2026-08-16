@@ -82,6 +82,26 @@ class ClaudeCode(Harness):
             files[f"{CLAUDE_HOME}/.mcp.json"] = profile.mcp_json
         return files
 
+    def activity_signals(self) -> Any:
+        from ..activity import ActivitySignals
+
+        return ActivitySignals(
+            # Blocking questions. Verified against the shipped binary's own
+            # strings rather than guessed: permission prompts are phrased
+            # "Do you want to ...", and selections offer numbered options with
+            # "Enter to confirm".
+            prompt_patterns=(
+                r"Do you want to\b",
+                r"❯\s*1\.",
+                r"Enter to confirm",
+                r"\(y/n\)",
+                r"Press Enter to continue",
+            ),
+            # Claude Code composes its interrupt hint dynamically, so there is
+            # no stable literal to match. Change detection covers this.
+            busy_patterns=(),
+        )
+
     def auth_probe_script(self) -> str:
         return (
             f'test -s "{CLAUDE_HOME}/.credentials.json" '

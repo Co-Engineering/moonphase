@@ -85,6 +85,15 @@ def main() -> None:
         signup.raise_for_status()
         auth = {"Authorization": f"Bearer {signup.json()['access_token']}"}
 
+        # Projects now require a connected harness, which is the point: an
+        # unconfigured one would come up unable to do anything.
+        http.post(
+            f"{API}/api/profile/harness/api-key",
+            headers=auth,
+            json={"api_key": "sk-ant-demo-not-real", "harness": "claude_code"},
+        ).raise_for_status()
+        print("harness connected (demo key)", file=sys.stderr)
+
         server = http.post(
             f"{API}/api/servers",
             headers=auth,
@@ -110,8 +119,7 @@ def main() -> None:
                     "server_id": server_id,
                     "name": project_name,
                     "harness": "claude_code",
-                    "harness_auth_mode": "api_key",
-                    "api_key": "sk-ant-demo-not-real",
+                    "environment": "debian",
                 },
             )
             project.raise_for_status()

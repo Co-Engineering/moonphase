@@ -136,6 +136,29 @@ class ProjectOut(ORMModel):
     preview_port: int | None
     preview_url: str | None
     created_at: datetime
+    # What the agent is doing right now, so the sidebar means something.
+    activity: str = "unknown"
+    activity_detail: str | None = None
+    activity_at: datetime | None = None
+
+
+class PushSubscriptionIn(BaseModel):
+    endpoint: str = Field(min_length=8, max_length=2048)
+    p256dh: str = Field(min_length=8, max_length=512)
+    auth: str = Field(min_length=8, max_length=512)
+    user_agent: str | None = None
+
+
+class PushStatusOut(BaseModel):
+    configured: bool
+    public_key: str | None = None
+    subscribed: bool = False
+
+
+class ActivityOut(BaseModel):
+    state: str = "unknown"
+    detail: str | None = None
+    changed_at: datetime | None = None
 
 
 class SessionOut(ORMModel):

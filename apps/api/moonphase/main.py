@@ -13,7 +13,8 @@ from fastapi.responses import JSONResponse
 from . import preview, ssh
 from .config import get_settings
 from .db import dispose_engine
-from .routers import meta, projects, servers, terminal
+from .monitor import monitor
+from .routers import meta, notifications, projects, servers, terminal
 from .routers import preview as preview_router
 from .routers import profile as profile_router
 from .runtime import NotFound
@@ -30,7 +31,11 @@ log = logging.getLogger("moonphase")
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
     log.info("moonphase api starting (runtime image: %s)", settings.moonphase_runtime_image)
+    # Notifications only mean anything if something is watching while no
+    # client is open, which is exactly when they matter.
+    monitor.start()
     yield
+    await monitor.stop()
     log.info("shutting down: closing preview tunnels and SSH connections")
     await preview.registry.close_all()
     await ssh.pool.close_all()
@@ -76,6 +81,7 @@ def create_app() -> FastAPI:
     app.include_router(projects.router)
     app.include_router(profile_router.router)
     app.include_router(preview_router.router)
+    app.include_router(notifications.router)
     app.include_router(terminal.router)
 
     return app

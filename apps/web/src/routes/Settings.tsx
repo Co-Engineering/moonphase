@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { disable as disablePush, enable as enablePush, pushSupport } from '../lib/notifications'
 import {
   api,
   type Environment,
   type GitHubDevice,
   type HarnessLogin,
+  type PushStatus,
   type WorkspaceProfile,
 } from '../lib/api'
 
@@ -125,6 +127,7 @@ function AccountsTab({
     <>
       <ClaudeAccount profile={profile} busy={busy} run={run} />
       <GitHubAccount profile={profile} busy={busy} run={run} />
+      <NotificationsPanel run={run} />
     </>
   )
 }
@@ -904,4 +907,118 @@ function slugify(value: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 40)
+}
+
+// --- notifications ----------------------------------------------------------
+
+/**
+ * Enabling push.
+ *
+ * This is what makes leaving actually work: without it you have to keep
+ * opening the app to find out whether Claude got stuck, which is the waiting
+ * Moonphase exists to remove.
+ */
+function NotificationsPanel({ run }: { run: Runner }) {
+  const [status, setStatus] = useState<PushStatus | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [working, setWorking] = useState(false)
+
+  const support = pushSupport()
+
+  const load = useCallback(async () => {
+    try {
+      setStatus(await api.pushStatus())
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const toggle = async () => {
+    if (!status) return
+    setWorking(true)
+    setError(null)
+    setNotice(null)
+    try {
+      if (status.subscribed) {
+        await disablePush()
+      } else {
+        if (!status.public_key) throw new Error('This deployment has no VAPID key.')
+        await enablePush(status.public_key)
+      }
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  const test = async () => {
+    setWorking(true)
+    setError(null)
+    setNotice(null)
+    try {
+      const result = await api.testPush()
+      setNotice(
+        result.delivered > 0
+          ? `Sent to ${result.delivered} device${result.delivered === 1 ? '' : 's'}.`
+          : 'No devices are subscribed yet.',
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  return (
+    <div className="card inner">
+      <h3>
+        <span className={`dot${status?.subscribed ? ' connected' : ''}`} /> Notifications
+      </h3>
+      <p className="hint">
+        Tells you when Claude finishes or gets stuck on a question, so you can close the
+        app and walk away instead of checking it.
+      </p>
+
+      {error && <div className="banner error">{error}</div>}
+      {notice && <div className="banner info">{notice}</div>}
+
+      {!support.supported ? (
+        <div className="banner warn">{support.reason}</div>
+      ) : status && !status.configured ? (
+        <div className="banner warn">
+          This deployment has no VAPID keypair, so it cannot send push. Run{' '}
+          <code>python scripts/gen_vapid.py &gt;&gt; .env</code> and restart the API.
+        </div>
+      ) : (
+        <div className="actions">
+          <button
+            className={status?.subscribed ? '' : 'primary'}
+            disabled={working || !status}
+            onClick={() => void toggle()}
+          >
+            {working
+              ? 'Working…'
+              : status?.subscribed
+                ? 'Turn off on this device'
+                : 'Enable on this device'}
+          </button>
+          {status?.subscribed && (
+            <button disabled={working} onClick={() => void test()}>
+              Send a test
+            </button>
+          )}
+        </div>
+      )}
+      {/* `run` is unused here: enabling push changes nothing the rest of the
+          settings dialog displays. */}
+      {void run}
+    </div>
+  )
 }

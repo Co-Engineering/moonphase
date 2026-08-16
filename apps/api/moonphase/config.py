@@ -53,6 +53,16 @@ class Settings(BaseSettings):
     # address, but must be the externally routable name behind a proxy.
     moonphase_preview_host: str = "127.0.0.1"
 
+    # --- notifications -------------------------------------------------------
+    # How often to check whether each running agent is still working. Zero
+    # disables the monitor entirely, which also disables notifications.
+    moonphase_monitor_interval: int = 20
+    # VAPID keypair for web push. Generate with: python scripts/gen_vapid.py
+    moonphase_vapid_public_key: str = ""
+    moonphase_vapid_private_key: str = ""
+    # Contact address browsers can use if a push is misbehaving.
+    moonphase_vapid_subject: str = "mailto:admin@example.com"
+
     # --- github -------------------------------------------------------------
     # OAuth app client id enabling the device flow. Without it, GitHub can
     # still be connected by pasting a personal access token. Device flow needs

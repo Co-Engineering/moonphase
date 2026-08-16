@@ -306,7 +306,16 @@ async def load_ssh_target_privileged(
 PROJECT_COLUMNS = """
     p.id, p.org_id, p.server_id, p.name, p.slug, p.harness, p.environment, p.repo_url,
     p.container_name, p.container_id, p.workspace_volume, p.home_volume,
-    p.status, p.status_detail, p.preview_port, p.preview_url, p.created_at
+    p.status, p.status_detail, p.preview_port, p.preview_url, p.created_at,
+    coalesce(
+        (select s.activity::text from project_sessions s
+         where s.project_id = p.id order by s.created_at limit 1),
+        'unknown'
+    ) as activity,
+    (select s.activity_detail from project_sessions s
+     where s.project_id = p.id order by s.created_at limit 1) as activity_detail,
+    (select s.activity_at from project_sessions s
+     where s.project_id = p.id order by s.created_at limit 1) as activity_at
 """
 
 
@@ -695,6 +704,66 @@ async def upsert_profile(
     if row is None:
         raise PermissionError("Not allowed to edit this organization's profile.")
     return _row_to_dict(row)
+
+
+# ---------------------------------------------------------------------------
+# Push subscriptions
+# ---------------------------------------------------------------------------
+
+
+async def upsert_push_subscription(
+    conn: AsyncConnection,
+    *,
+    user_id: str,
+    endpoint: str,
+    p256dh: str,
+    auth: str,
+    user_agent: str | None,
+) -> None:
+    await conn.execute(
+        text(
+            """
+            insert into push_subscriptions
+              (user_id, endpoint, p256dh, auth, user_agent)
+            values (cast(:user_id as uuid), :endpoint, :p256dh, :auth, :user_agent)
+            on conflict (endpoint) do update set
+              user_id    = excluded.user_id,
+              p256dh     = excluded.p256dh,
+              auth       = excluded.auth,
+              user_agent = excluded.user_agent
+            """
+        ),
+        {
+            "user_id": user_id,
+            "endpoint": endpoint,
+            "p256dh": p256dh,
+            "auth": auth,
+            "user_agent": user_agent,
+        },
+    )
+
+
+async def delete_push_subscription(conn: AsyncConnection, endpoint: str) -> None:
+    await conn.execute(
+        text("delete from push_subscriptions where endpoint = :e"), {"e": endpoint}
+    )
+
+
+async def list_own_push_subscriptions(conn: AsyncConnection) -> list[dict[str, Any]]:
+    result = await conn.execute(
+        text(
+            "select endpoint, p256dh, auth from push_subscriptions "
+            "where user_id = auth.uid()"
+        )
+    )
+    return [_row_to_dict(r) for r in result]
+
+
+async def has_push_subscription(conn: AsyncConnection) -> bool:
+    result = await conn.execute(
+        text("select 1 from push_subscriptions where user_id = auth.uid() limit 1")
+    )
+    return result.first() is not None
 
 
 # ---------------------------------------------------------------------------

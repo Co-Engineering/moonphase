@@ -42,7 +42,7 @@ function Shell({ email }: { email: string }) {
   // Servers are polled: bootstrap and Docker installs finish out of band, and
   // a stale "bootstrapping" chip is the most confusing thing the UI can show.
   const servers = useResource<Server[]>(() => api.servers(), [], { pollMs: 15000 })
-  const projects = useResource<Project[]>(() => api.projects(), [], { pollMs: 15000 })
+  const projects = useResource<Project[]>(() => api.projects(), [], { pollMs: 8000 })
   const harnesses = useResource(() => api.harnesses(), [])
   const profile = useResource(() => api.profile(), [])
   const environments = useResource(() => api.environments(), [])
@@ -111,13 +111,20 @@ function Shell({ email }: { email: string }) {
                 .map((project) => (
                   <button
                     key={project.id}
-                    className={`tree-row tree-project status-${project.status}${
-                      activeProject?.id === project.id ? ' active' : ''
-                    }`}
+                    className={`tree-row tree-project status-${project.status} activity-${
+                      project.status === 'running' ? project.activity : 'stopped'
+                    }${activeProject?.id === project.id ? ' active' : ''}`}
                     onClick={() => selectProject(project.id)}
+                    title={project.activity_detail ?? undefined}
                   >
                     <span className="dot" />
                     <span className="name">{project.name}</span>
+                    {project.status === 'running' &&
+                      project.activity === 'awaiting_input' && (
+                        <span className="needs-you" title="Waiting for you">
+                          ●
+                        </span>
+                      )}
                   </button>
                 ))}
             </div>
@@ -135,7 +142,9 @@ function Shell({ email }: { email: string }) {
         </div>
 
         <div className="sidebar-foot">
-          <span title={email}>{email}</span>
+          <span className="who" title={email}>
+            {email}
+          </span>
           <button className="ghost" onClick={() => setShowSettings(true)} title="Settings">
             Settings
           </button>
@@ -239,8 +248,9 @@ function ProjectView({
         </button>
         <h1>{project.name}</h1>
         <span className="sub">
-          {project.server_name} · {project.environment} · {project.container_name}
+          {project.server_name} · {project.environment}
         </span>
+        {project.status === 'running' && <ActivityChip project={project} />}
         <div className="spacer" />
         <button
           disabled={busy}
@@ -284,6 +294,25 @@ function ProjectView({
         </div>
       )}
     </>
+  )
+}
+
+const ACTIVITY_LABEL: Record<string, string> = {
+  working: 'working',
+  awaiting_input: 'waiting for you',
+  idle: 'idle',
+  stopped: 'stopped',
+  unknown: '',
+}
+
+function ActivityChip({ project }: { project: Project }) {
+  const label = ACTIVITY_LABEL[project.activity] ?? ''
+  if (!label) return null
+  return (
+    <span className={`activity-chip activity-${project.activity}`} title={project.activity_detail ?? undefined}>
+      <span className="dot" />
+      {label}
+    </span>
   )
 }
 

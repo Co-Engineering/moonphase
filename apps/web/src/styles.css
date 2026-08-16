@@ -167,15 +167,31 @@ pre {
   padding: 10px 8px;
 }
 
+/* Three items in a 260px column: the email must give way, and the actions
+   must never wrap mid-word ("Sign / out" reads as broken). */
 .sidebar-foot {
   border-top: 1px solid var(--border);
-  padding: 10px 12px;
+  padding: 8px 10px;
   font-size: 12px;
   color: var(--text-faint);
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
+}
+
+.sidebar-foot .who {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-foot button {
+  flex-shrink: 0;
+  white-space: nowrap;
+  padding: 4px 7px;
+  font-size: 12px;
 }
 
 .section-label {
@@ -767,4 +783,66 @@ button.linkish:hover:not(:disabled) {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   vertical-align: middle;
+}
+
+/* --- activity ------------------------------------------------------------- */
+
+/* The sidebar dot carries the state that matters most: is the agent working,
+   is it stuck on a question, or is it done. Amber pulses because "waiting for
+   you" is the only one that wants attention. */
+.activity-working .dot {
+  background: var(--accent);
+  box-shadow: 0 0 6px rgba(122, 162, 247, 0.55);
+}
+
+.activity-awaiting_input .dot {
+  background: var(--amber);
+  box-shadow: 0 0 7px rgba(224, 175, 104, 0.75);
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+.activity-idle .dot {
+  background: var(--green);
+  box-shadow: 0 0 6px rgba(158, 206, 106, 0.5);
+}
+
+.activity-stopped .dot,
+.activity-unknown .dot {
+  background: var(--text-faint);
+  box-shadow: none;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-awaiting_input .dot {
+    animation: none;
+  }
+}
+
+.needs-you {
+  color: var(--amber);
+  font-size: 9px;
+  flex-shrink: 0;
+}
+
+.activity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 2px 9px 2px 7px;
+  white-space: nowrap;
 }

@@ -101,6 +101,9 @@ export interface Project {
   preview_port: number | null
   preview_url: string | null
   created_at: string
+  activity: ActivityState
+  activity_detail: string | null
+  activity_at: string | null
 }
 
 export interface Session {
@@ -205,6 +208,26 @@ export interface GitHubDevice {
   interval: number
   detail: string | null
   account: string | null
+}
+
+export type ActivityState =
+  | 'unknown'
+  | 'working'
+  | 'awaiting_input'
+  | 'idle'
+  | 'stopped'
+
+export interface PushStatus {
+  configured: boolean
+  public_key: string | null
+  subscribed: boolean
+}
+
+export interface PushSubscriptionInput {
+  endpoint: string
+  p256dh: string
+  auth: string
+  user_agent?: string
 }
 
 export interface DetectedPort {
@@ -312,6 +335,23 @@ export const api = {
     }),
   disconnectGitHub: () =>
     request<WorkspaceProfile>('/api/profile/github', { method: 'DELETE' }),
+
+  // --- notifications --------------------------------------------------------
+  pushStatus: () => request<PushStatus>('/api/notifications'),
+  subscribePush: (input: PushSubscriptionInput) =>
+    request<PushStatus>('/api/notifications/subscribe', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  unsubscribePush: (input: PushSubscriptionInput) =>
+    request<void>('/api/notifications/unsubscribe', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  testPush: () =>
+    request<{ delivered: number; subscriptions: number }>('/api/notifications/test', {
+      method: 'POST',
+    }),
 
   // --- previews -------------------------------------------------------------
   ports: (projectId: string) => request<DetectedPort[]>(`/api/projects/${projectId}/ports`),

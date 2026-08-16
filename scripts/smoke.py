@@ -198,7 +198,7 @@ async def main(anon_key: str) -> None:
                 while time.time() < deadline and len(received) < 200:
                     try:
                         frame = await asyncio.wait_for(socket.recv(), timeout=5)
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         break
                     if isinstance(frame, bytes):
                         received.extend(frame)
@@ -219,7 +219,7 @@ async def main(anon_key: str) -> None:
                     frame = await asyncio.wait_for(socket.recv(), timeout=10)
                     if isinstance(frame, bytes):
                         received.extend(frame)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     pass
 
             if len(received) < 50:
