@@ -1,0 +1,559 @@
+:root {
+  --bg: #0b0c12;
+  --bg-panel: #12141d;
+  --bg-elev: #181b26;
+  --bg-input: #0f111a;
+  --border: #242838;
+  --border-strong: #333950;
+  --text: #d5dbe8;
+  --text-dim: #8a93a8;
+  --text-faint: #5b6377;
+  --accent: #7aa2f7;
+  --accent-dim: #3d5a99;
+  --green: #9ece6a;
+  --amber: #e0af68;
+  --red: #f7768e;
+  --radius: 8px;
+  --mono: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elev);
+  color: var(--text);
+  padding: 7px 13px;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+button:hover:not(:disabled) {
+  background: #20242f;
+  border-color: #414863;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: #eaf0ff;
+}
+
+button.primary:hover:not(:disabled) {
+  background: #47679f;
+}
+
+button.danger {
+  border-color: #5d2b39;
+  color: var(--red);
+}
+
+button.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-dim);
+  padding: 5px 8px;
+}
+
+button.ghost:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bg-elev);
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-input);
+  color: var(--text);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+textarea {
+  font-family: var(--mono);
+  font-size: 12px;
+  resize: vertical;
+  min-height: 110px;
+}
+
+label {
+  display: block;
+  margin-bottom: 12px;
+}
+
+label > span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+code,
+pre {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+/* --- layout --------------------------------------------------------------- */
+
+.app {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  height: 100%;
+}
+
+.sidebar {
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.brand {
+  padding: 16px 16px 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.brand .glyph {
+  color: var(--accent);
+  font-size: 16px;
+}
+
+.sidebar-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 8px;
+}
+
+.sidebar-foot {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--text-faint);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.section-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  padding: 10px 8px 6px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.tree-server {
+  margin-bottom: 4px;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--text-dim);
+  text-decoration: none;
+  font-size: 13px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+.tree-row:hover {
+  background: var(--bg-elev);
+  color: var(--text);
+}
+
+.tree-row.active {
+  background: #1c2334;
+  color: var(--text);
+}
+
+.tree-row .name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-project {
+  padding-left: 24px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.topbar {
+  height: 48px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  gap: 12px;
+  background: var(--bg-panel);
+  flex-shrink: 0;
+}
+
+.topbar h1 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.topbar .sub {
+  color: var(--text-faint);
+  font-size: 12px;
+  font-family: var(--mono);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.content {
+  flex: 1;
+  overflow: auto;
+  padding: 24px;
+}
+
+.content.flush {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* --- pieces --------------------------------------------------------------- */
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.status-online .dot,
+.terminal-status--attached .dot {
+  background: var(--green);
+  box-shadow: 0 0 6px rgba(158, 206, 106, 0.6);
+}
+
+.status-error .dot,
+.terminal-status--error .dot {
+  background: var(--red);
+}
+
+.status-pending .dot,
+.status-bootstrapping .dot,
+.status-creating .dot,
+.terminal-status--connecting .dot {
+  background: var(--amber);
+}
+
+.card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+.card h2 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+.card .hint {
+  color: var(--text-dim);
+  font-size: 13px;
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+
+.row {
+  display: flex;
+  gap: 12px;
+}
+
+.row > * {
+  flex: 1;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.banner {
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 13px;
+  margin-bottom: 14px;
+  line-height: 1.5;
+  border: 1px solid;
+}
+
+.banner.error {
+  background: #2a1620;
+  border-color: #5d2b39;
+  color: #ffa8b8;
+}
+
+.banner.warn {
+  background: #2a2416;
+  border-color: #5d4b2b;
+  color: var(--amber);
+}
+
+.banner.info {
+  background: #16202a;
+  border-color: #2b475d;
+  color: #a8d4ff;
+}
+
+.keyblock {
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  word-break: break-all;
+  line-height: 1.6;
+  color: var(--text-dim);
+  margin: 8px 0;
+}
+
+.empty {
+  text-align: center;
+  color: var(--text-faint);
+  padding: 60px 20px;
+  line-height: 1.7;
+}
+
+.empty h3 {
+  color: var(--text-dim);
+  font-weight: 500;
+  margin: 0 0 6px;
+}
+
+.meta-grid {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 8px 16px;
+  font-size: 13px;
+}
+
+.meta-grid dt {
+  color: var(--text-faint);
+}
+
+.meta-grid dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+/* --- terminal ------------------------------------------------------------- */
+
+.terminal-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: #0f1017;
+  min-height: 0;
+  position: relative;
+  /* Breathing room lives here, NOT on .terminal-host. FitAddon sizes the
+     terminal from its parent's computed width, which with border-box includes
+     padding — so padding on the direct parent makes it propose one column too
+     many and the right-hand edge gets clipped. */
+  padding: 8px 4px 4px 10px;
+}
+
+.terminal-host {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.terminal-host .xterm {
+  height: 100%;
+}
+
+/*
+ * tmux owns scrollback, so the terminal is created with `scrollback: 0` and
+ * xterm's own scrollbar is meaningless. It is also actively harmful: FitAddon
+ * only subtracts a scrollbar's width when scrollback is non-zero, so a visible
+ * one makes every row wider than the pane and clips the right-hand columns.
+ * Hiding it makes the measurement and the reality agree.
+ */
+.terminal-host .xterm-viewport {
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.terminal-host .xterm-viewport::-webkit-scrollbar {
+  display: none;
+}
+
+.terminal-status {
+  position: absolute;
+  top: 8px;
+  right: 16px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-faint);
+  background: rgba(15, 16, 23, 0.9);
+  padding: 3px 9px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  pointer-events: none;
+}
+
+/* --- auth ----------------------------------------------------------------- */
+
+.auth-shell {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 360px;
+}
+
+.auth-card .brand {
+  border: none;
+  padding: 0 0 18px;
+  font-size: 18px;
+  justify-content: center;
+}
+
+.tagline {
+  text-align: center;
+  color: var(--text-faint);
+  font-size: 13px;
+  line-height: 1.6;
+  margin: -8px 0 22px;
+}
+
+.auth-toggle {
+  text-align: center;
+  margin-top: 14px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.auth-toggle button {
+  border: none;
+  background: none;
+  color: var(--accent);
+  padding: 0 2px;
+}
+
+/* --- modal ---------------------------------------------------------------- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 6, 10, 0.7);
+  display: grid;
+  place-items: center;
+  z-index: 100;
+  padding: 24px;
+}
+
+.modal {
+  width: 100%;
+  max-width: 520px;
+  max-height: 88vh;
+  overflow-y: auto;
+  margin: 0;
+}
+
+/* --- responsive: the same UI is the phone client -------------------------- */
+
+@media (max-width: 720px) {
+  .app {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    display: none;
+  }
+
+  .app.show-sidebar .sidebar {
+    display: flex;
+  }
+
+  .app.show-sidebar .main {
+    display: none;
+  }
+
+  .content {
+    padding: 16px;
+  }
+}

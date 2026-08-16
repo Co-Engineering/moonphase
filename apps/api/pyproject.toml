@@ -1,0 +1,50 @@
+[project]
+name = "moonphase-api"
+version = "0.1.0"
+description = "Moonphase backend — SSH, Docker orchestration and PTY bridging"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "asyncssh>=2.18",
+    "cryptography>=43.0",
+    "pyjwt>=2.9",
+    "httpx>=0.27",
+    "python-slugify>=8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.7",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["moonphase"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+ignore = [
+    # `Depends(...)` / `Query(...)` in a default argument is the FastAPI idiom,
+    # not the mutable-default bug this rule exists to catch.
+    "B008",
+    # Our SSH and Docker helpers take an explicit `timeout=` on purpose: the
+    # right bound differs enormously between `whoami` and `docker pull`.
+    "ASYNC109",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
