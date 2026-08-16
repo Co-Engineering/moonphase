@@ -39,11 +39,16 @@ export function useResource<T>(
         setState({ data, error: null, loading: false })
       } catch (err) {
         if (!mounted.current || mine !== generation.current) return
-        setState({
-          data: null,
+        // Keep whatever we last had. Discarding it meant one failed poll —
+        // a token refresh, a busy server, a dropped packet — emptied the
+        // project list, which unmounted the open project and destroyed the
+        // terminal attached to it. The next poll brought it back, so it read
+        // as the app randomly losing your session mid-keystroke.
+        setState((current) => ({
+          data: current.data,
           error: err instanceof Error ? err.message : String(err),
           loading: false,
-        })
+        }))
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps

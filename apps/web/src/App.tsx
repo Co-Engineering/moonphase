@@ -372,11 +372,17 @@ function ProjectView({
 
   // Two conditions, and they are different questions. Project access decides
   // whether you may run anything here at all; session ownership decides whether
-  // this particular agent is yours to type into. Someone else's session is
-  // read-only however much access you have to the project, because it is
-  // authenticated as them.
-  const drivable = canControl(project.access) && (active?.is_mine ?? false)
+  // this particular agent is yours to type into.
+  //
+  // Note which way the unknown case falls. Until the session list resolves we
+  // do not know whose session this is, and treating that as read-only meant
+  // every keystroke in the first second after opening a project — and after
+  // any failed refresh — was swallowed by the client with no explanation. The
+  // server is the gate and enforces ownership on every byte; this flag only
+  // decides whether to explain. So it fails open, and closes only once we
+  // positively know the session belongs to someone else.
   const watching = active !== null && !active.is_mine
+  const drivable = canControl(project.access) && !watching
 
   // Someone else's project on your machine. You are told it is there and can
   // take the resources back; the conversation is not yours to read.
@@ -553,7 +559,16 @@ function ProjectView({
             readOnly={!canControl(project.access)}
             onActiveSession={setActive}
           />
-          {view === 'terminal' ? (
+          {!session ? (
+            // Nothing is attached until we know which session to attach to.
+            // Attaching first and correcting afterwards meant every open cost
+            // two attaches, and on a shared project the first one landed on
+            // whatever the server considers the default — a flash of someone
+            // else's terminal before switching to your own.
+            <div className="terminal-wrap">
+              <div className="empty">Finding your session…</div>
+            </div>
+          ) : view === 'terminal' ? (
             <ProjectTerminal
               projectId={project.id}
               session={session}
