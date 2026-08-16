@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, type FeedEvent, type Prompt } from '../lib/api'
+import { api, feedUrl, type DiffLine, type FeedEvent, type Prompt } from '../lib/api'
 
 interface Props {
   projectId: string
@@ -19,6 +19,16 @@ const TOOL_ICON: Record<string, string> = {
   WebSearch: '⌕',
 }
 
+/** Newest wins on id, and the buffer is bounded — a long session is unbounded. */
+const MAX_EVENTS = 600
+
+function merge(current: FeedEvent[], incoming: FeedEvent[]): FeedEvent[] {
+  if (incoming.length === 0) return current
+  const seen = new Set(current.map((e) => e.id))
+  const fresh = incoming.filter((e) => !seen.has(e.id))
+  return fresh.length ? [...current, ...fresh].slice(-MAX_EVENTS) : current
+}
+
 /**
  * The phone client.
  *
@@ -35,53 +45,125 @@ export function Feed({ projectId, session, running }: Props) {
   const [prompt, setPrompt] = useState<Prompt | null>(null)
   const [activity, setActivity] = useState('unknown')
   const [available, setAvailable] = useState(true)
+  const [live, setLive] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState('')
   const [sending, setSending] = useState(false)
 
-  const cursorRef = useRef<string>('')
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const scrollerRef = useRef<HTMLDivElement | null>(null)
   // Only follow new output when the reader is already at the bottom; yanking
   // the view while someone is reading history is worse than a missed update.
   const pinnedRef = useRef(true)
-
-  const poll = useCallback(async () => {
-    try {
-      const page = await api.feed(projectId, session, cursorRef.current || undefined)
-      cursorRef.current = page.cursor
-      setAvailable(page.available)
-      setActivity(page.activity)
-      setPrompt(page.prompt)
-      setError(null)
-      if (page.events.length > 0) {
-        setEvents((current) => {
-          // The cursor makes duplicates unlikely, but a retried request or a
-          // rotated transcript can replay; ids make that harmless.
-          const seen = new Set(current.map((e) => e.id))
-          const fresh = page.events.filter((e) => !seen.has(e.id))
-          return fresh.length ? [...current, ...fresh].slice(-600) : current
-        })
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    }
-  }, [projectId, session])
-
-  // Restart the feed when the project or session changes.
-  useEffect(() => {
-    cursorRef.current = ''
-    setEvents([])
-    setPrompt(null)
-    pinnedRef.current = true
-  }, [projectId, session])
+  const socketRef = useRef<WebSocket | null>(null)
+  const disposedRef = useRef(false)
 
   useEffect(() => {
     if (!running) return
-    void poll()
-    const id = window.setInterval(() => void poll(), 3000)
-    return () => window.clearInterval(id)
-  }, [poll, running])
+    disposedRef.current = false
+    setEvents([])
+    setPrompt(null)
+    pinnedRef.current = true
+
+    let pollTimer: number | undefined
+    let reconnectTimer: number | undefined
+    let attempts = 0
+    let cursor = ''
+
+    /**
+     * Fallback for when a socket cannot be held open — a proxy that strips
+     * upgrades, or a flaky mobile connection. Slower, but the feed still works
+     * rather than sitting empty.
+     */
+    const startPolling = () => {
+      setLive(false)
+      const tick = async () => {
+        if (disposedRef.current) return
+        try {
+          const page = await api.feed(projectId, session, cursor || undefined)
+          cursor = page.cursor
+          setAvailable(page.available)
+          setActivity(page.activity)
+          setPrompt(page.prompt)
+          setEvents((current) => merge(current, page.events))
+          setError(null)
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err))
+        }
+        pollTimer = window.setTimeout(tick, 3000)
+      }
+      void tick()
+    }
+
+    const connect = async () => {
+      if (disposedRef.current) return
+      let socket: WebSocket
+      try {
+        socket = new WebSocket(await feedUrl(projectId, session))
+      } catch {
+        startPolling()
+        return
+      }
+      if (disposedRef.current) {
+        socket.close()
+        return
+      }
+      socketRef.current = socket
+
+      socket.onopen = () => {
+        attempts = 0
+        setLive(true)
+        setError(null)
+      }
+
+      socket.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data as string)
+          if (msg.type === 'page') {
+            setAvailable(msg.available ?? true)
+            setEvents(msg.events ?? [])
+          } else if (msg.type === 'events') {
+            setEvents((current) => merge(current, msg.events ?? []))
+          } else if (msg.type === 'prompt') {
+            setPrompt(msg.prompt ?? null)
+            if (msg.activity) setActivity(msg.activity)
+          } else if (msg.type === 'error') {
+            setError(msg.message)
+          }
+        } catch {
+          // A malformed frame is not worth tearing the feed down for.
+        }
+      }
+
+      socket.onclose = (closed) => {
+        setLive(false)
+        if (disposedRef.current) return
+        // 4xxx are our own refusals; retrying repeats the same answer.
+        if (closed.code >= 4000 && closed.code < 5000) {
+          if (closed.code === 4409) setAvailable(false)
+          return
+        }
+        attempts += 1
+        // After a couple of failures the socket is probably not going to
+        // work here at all; polling is better than an empty screen.
+        if (attempts >= 3) {
+          startPolling()
+          return
+        }
+        reconnectTimer = window.setTimeout(connect, 1000 * attempts)
+      }
+    }
+
+    void connect()
+
+    return () => {
+      disposedRef.current = true
+      window.clearTimeout(pollTimer)
+      window.clearTimeout(reconnectTimer)
+      socketRef.current?.close()
+      socketRef.current = null
+    }
+  }, [projectId, session, running])
 
   useEffect(() => {
     if (pinnedRef.current) bottomRef.current?.scrollIntoView({ block: 'end' })
@@ -93,22 +175,31 @@ export function Feed({ projectId, session, running }: Props) {
     pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
   }
 
-  const send = async (text: string) => {
-    if (!text.trim()) return
-    setSending(true)
-    setError(null)
-    try {
-      await api.answerFeed(projectId, text, session)
-      setMessage('')
-      // Answering usually changes things immediately; waiting for the next
-      // tick makes the UI feel unresponsive.
-      window.setTimeout(() => void poll(), 700)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setSending(false)
-    }
-  }
+  const send = useCallback(
+    async (text: string) => {
+      if (!text.trim()) return
+      setSending(true)
+      setError(null)
+      try {
+        await api.answerFeed(projectId, text, session)
+        setMessage('')
+        // The stream will report the result; clearing the prompt immediately
+        // stops a tapped button sitting there looking unresponsive.
+        setPrompt(null)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err))
+      } finally {
+        setSending(false)
+      }
+    },
+    [projectId, session],
+  )
+
+  // An edit awaiting approval: show its diff with the question, so the answer
+  // is made on the change rather than on a file name.
+  const pendingDiff = prompt
+    ? [...events].reverse().find((e) => e.kind === 'tool' && e.diff?.length)
+    : undefined
 
   return (
     <div className="feed">
@@ -135,6 +226,16 @@ export function Feed({ projectId, session, running }: Props) {
 
       {prompt && (
         <div className="feed-prompt">
+          {pendingDiff && (
+            <Diff
+              lines={pendingDiff.diff ?? []}
+              added={pendingDiff.added}
+              removed={pendingDiff.removed}
+              truncated={pendingDiff.truncated}
+              path={pendingDiff.text}
+              startOpen
+            />
+          )}
           <div className="feed-question">{prompt.question}</div>
           <div className="feed-options">
             {prompt.options.map((option) => (
@@ -162,17 +263,96 @@ export function Feed({ projectId, session, running }: Props) {
         <input
           value={message}
           onChange={(e) => setMessage(e.target.value)}
-          placeholder={
-            activity === 'working' ? 'Claude is working…' : 'Send a message'
-          }
+          placeholder={activity === 'working' ? 'Claude is working…' : 'Send a message'}
           disabled={!running || sending}
         />
-        <button className="primary" type="submit" disabled={!running || sending || !message.trim()}>
+        <button
+          className="primary"
+          type="submit"
+          disabled={!running || sending || !message.trim()}
+        >
           Send
         </button>
+        <span
+          className={`feed-live${live ? ' on' : ''}`}
+          title={live ? 'Streaming live' : 'Polling — the live connection is unavailable'}
+        />
       </form>
     </div>
   )
+}
+
+/**
+ * A change, sized for a phone.
+ *
+ * Collapsed to a one-line summary by default: most edits scroll past and only
+ * the one you are being asked to approve needs reading. Horizontal scrolling
+ * rather than wrapping, because wrapped code stops being scannable.
+ */
+function Diff({
+  lines,
+  added,
+  removed,
+  truncated,
+  path,
+  startOpen = false,
+}: {
+  lines: DiffLine[]
+  added: number
+  removed: number
+  truncated: boolean
+  path: string
+  startOpen?: boolean
+}) {
+  const [open, setOpen] = useState(startOpen)
+
+  return (
+    <div className="diff">
+      <button
+        className={`diff-head${open ? ' open' : ''}`}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="disclose" aria-hidden="true" />
+        <span className="diff-path" title={path}>
+          {shortPath(path)}
+        </span>
+        {added > 0 && <span className="diff-added">+{added}</span>}
+        {removed > 0 && <span className="diff-removed">−{removed}</span>}
+      </button>
+      {open && (
+        <div className="diff-body">
+          {lines.map((line, index) => (
+            <div key={index} className={`diff-line diff-${signClass(line.sign)}`}>
+              <span className="diff-sign">{line.sign === '@' ? '' : line.sign}</span>
+              {line.text}
+            </div>
+          ))}
+          {truncated && (
+            <div className="diff-line diff-meta">
+              … the rest is not shown; the counts above are for the whole change
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Keep the end of a path, which is the part that identifies the file.
+ *
+ * Truncating in JS rather than with `direction: rtl`, which flips the leading
+ * slash to the end and renders "/api/routes.py" as "api/routes.py/".
+ */
+function shortPath(path: string, max = 34): string {
+  return path.length <= max ? path : '…' + path.slice(-(max - 1))
+}
+
+function signClass(sign: string): string {
+  if (sign === '+') return 'add'
+  if (sign === '-') return 'del'
+  if (sign === '@') return 'hunk'
+  return 'ctx'
 }
 
 /**
@@ -192,7 +372,7 @@ function Thinking({ text, dim }: { text: string; dim: string }) {
       onClick={() => setOpen((v) => !v)}
       title={open ? 'Hide reasoning' : 'Show reasoning'}
     >
-      <span className="feed-thinking-mark">{open ? '▾' : '▸'}</span>
+      <span className="disclose" aria-hidden="true" />
       <span className="feed-body">{open ? text : firstLine}</span>
     </button>
   )
@@ -202,6 +382,19 @@ function FeedRow({ event }: { event: FeedEvent }) {
   const dim = event.sidechain ? ' sidechain' : ''
 
   if (event.kind === 'tool') {
+    if (event.diff?.length) {
+      return (
+        <div className={`feed-row${dim}`}>
+          <Diff
+            lines={event.diff}
+            added={event.added}
+            removed={event.removed}
+            truncated={event.truncated}
+            path={event.text}
+          />
+        </div>
+      )
+    }
     return (
       <div className={`feed-row feed-tool${dim}`}>
         <span className="feed-tool-icon">{TOOL_ICON[event.tool ?? ''] ?? '⏺'}</span>

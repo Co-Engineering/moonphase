@@ -73,6 +73,41 @@ def _result_excerpt(content: Any) -> str:
     return " ".join(" ".join(lines[:3]).split())[:200]
 
 
+def _attach_diff(event: Any, name: str, tool_input: Any) -> None:
+    """Give an edit its change, so it can be judged without opening the file.
+
+    "Do you want to make this edit?" is unanswerable from a file path alone,
+    and the file path is all a phone would otherwise have.
+    """
+    from ..transcript import build_diff
+
+    if not isinstance(tool_input, dict):
+        return
+
+    if name == "Edit":
+        before = tool_input.get("old_string")
+        after = tool_input.get("new_string")
+        if not isinstance(before, str) or not isinstance(after, str):
+            return
+    elif name == "Write":
+        # A new file is entirely additions; showing it against nothing is the
+        # honest rendering.
+        before = ""
+        after = tool_input.get("content")
+        if not isinstance(after, str):
+            return
+    else:
+        return
+
+    lines, added, removed, truncated = build_diff(before, after)
+    if not lines:
+        return
+    event.diff = lines
+    event.added = added
+    event.removed = removed
+    event.truncated = truncated
+
+
 def _project_slug(workdir: str) -> str:
     return workdir.replace("/", "-")
 
@@ -223,16 +258,16 @@ class ClaudeCode(Harness):
                     )
             elif block_type == "tool_use":
                 name = str(block.get("name", "tool"))
-                events.append(
-                    TranscriptEvent(
-                        id=block_id,
-                        kind="tool",
-                        tool=name,
-                        text=_summarise_tool(name, block.get("input")),
-                        at=at,
-                        sidechain=sidechain,
-                    )
+                event = TranscriptEvent(
+                    id=block_id,
+                    kind="tool",
+                    tool=name,
+                    text=_summarise_tool(name, block.get("input")),
+                    at=at,
+                    sidechain=sidechain,
                 )
+                _attach_diff(event, name, block.get("input"))
+                events.append(event)
             elif block_type == "tool_result":
                 is_error = bool(block.get("is_error"))
                 excerpt = _result_excerpt(block.get("content"))

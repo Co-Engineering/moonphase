@@ -366,6 +366,34 @@ async def list_clients(
     return result.stdout.split() if result.ok else []
 
 
+async def client_counts(
+    conn: asyncssh.SSHClientConnection, container: str
+) -> dict[str, int]:
+    """Attached client counts for every session, in one call.
+
+    `-a` lists clients across all sessions, so this stays two execs whether a
+    project has one session or ten. Asking per session made listing them cost
+    two SSH round trips each.
+    """
+    live = await docker_remote.exec_capture(
+        conn, container, ["tmux", "list-sessions", "-F", "#{session_name}"], timeout=30
+    )
+    if not live.ok:
+        return {}
+
+    counts = {name: 0 for name in live.stdout.split()}
+
+    clients = await docker_remote.exec_capture(
+        conn, container, ["tmux", "list-clients", "-a", "-F", "#{client_session}"],
+        timeout=30,
+    )
+    if clients.ok:
+        for name in clients.stdout.split():
+            if name in counts:
+                counts[name] += 1
+    return counts
+
+
 async def detach_all_clients(
     conn: asyncssh.SSHClientConnection, container: str, session: str = DEFAULT_SESSION
 ) -> int:

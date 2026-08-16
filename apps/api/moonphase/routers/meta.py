@@ -102,12 +102,9 @@ async def list_environments(
     async with user_session(principal.claims) as conn:
         org_id = await queries.personal_org_id(conn)
         rows = await queries.list_environments(conn)
-        counts: dict[str, int] = {}
-        if org_id is not None:
-            for env in environments.merge(rows):
-                counts[env.key] = await queries.count_projects_using_environment(
-                    conn, org_id, env.key
-                )
+        counts = (
+            await queries.environment_usage(conn, org_id) if org_id is not None else {}
+        )
 
     return [
         EnvironmentOut(

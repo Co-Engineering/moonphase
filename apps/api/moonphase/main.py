@@ -14,7 +14,7 @@ from . import preview, ssh
 from .config import get_settings
 from .db import dispose_engine
 from .monitor import monitor
-from .routers import feed, meta, notifications, projects, servers, terminal
+from .routers import feed, feedsocket, meta, notifications, projects, servers, terminal
 from .routers import preview as preview_router
 from .routers import profile as profile_router
 from .runtime import NotFound
@@ -83,6 +83,7 @@ def create_app() -> FastAPI:
     app.include_router(preview_router.router)
     app.include_router(notifications.router)
     app.include_router(feed.router)
+    app.include_router(feedsocket.router)
     app.include_router(terminal.router)
 
     return app

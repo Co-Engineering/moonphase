@@ -889,6 +889,22 @@ async def count_projects_using_environment(
     return int(result.scalar_one())
 
 
+async def environment_usage(conn: AsyncConnection, org_id: UUID) -> dict[str, int]:
+    """Project counts for every environment at once.
+
+    One grouped query rather than one per environment: the catalogue grows
+    with what users define, and a listing should not get slower as it does.
+    """
+    result = await conn.execute(
+        text(
+            "select environment, count(*) as n from projects "
+            "where org_id = :org_id group by environment"
+        ),
+        {"org_id": org_id},
+    )
+    return {str(row[0]): int(row[1]) for row in result}
+
+
 # ---------------------------------------------------------------------------
 # VCS credentials (privileged)
 # ---------------------------------------------------------------------------

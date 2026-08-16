@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "api"))
 
-from moonphase import push  # noqa: E402
+from moonphase import push
 
 
 def main() -> None:

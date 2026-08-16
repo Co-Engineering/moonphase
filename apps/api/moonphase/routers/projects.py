@@ -355,12 +355,7 @@ async def list_sessions(
         try:
             ctx = await runtime.load_project_context(principal.claims, project_id)
             conn_ssh = await ssh.pool.get(ctx.target)
-            for row in rows:
-                name = str(row["tmux_session"])
-                if await sessions.session_exists(conn_ssh, ctx.container, name):
-                    live[name] = len(
-                        await sessions.list_clients(conn_ssh, ctx.container, name)
-                    )
+            live = await sessions.client_counts(conn_ssh, ctx.container)
         except (SSHError, NotFound) as exc:
             # An unreachable server should not blank the list; the rows are
             # still the truth about which sessions exist.

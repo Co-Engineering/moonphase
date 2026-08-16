@@ -12,7 +12,7 @@ import json
 
 from moonphase.activity import parse_prompt
 from moonphase.harness import get as get_harness
-from moonphase.transcript import Cursor
+from moonphase.transcript import MAX_DIFF_LINES, Cursor, build_diff
 
 CLAUDE = get_harness("claude_code")
 
@@ -160,6 +160,89 @@ def test_malformed_records_do_not_raise() -> None:
     # A transcript is written concurrently; robustness beats strictness.
     for bad in [None, [], "text", {"type": "assistant"}, {"type": "assistant", "message": 3}]:
         assert CLAUDE.parse_transcript_record(bad) == []
+
+
+# --- diffs ------------------------------------------------------------------
+
+
+def test_an_edit_carries_its_diff() -> None:
+    """A file path alone cannot answer "do you want to make this edit?"."""
+    events = CLAUDE.parse_transcript_record(
+        record(
+            message={
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use", "id": "t", "name": "Edit",
+                        "input": {
+                            "file_path": "/workspace/a.py",
+                            "old_string": "x = 1\ny = 2\n",
+                            "new_string": "x = 1\ny = 3\nz = 4\n",
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    event = events[0]
+    assert event.added == 2
+    assert event.removed == 1
+    assert event.diff is not None
+    signs = {line.sign for line in event.diff}
+    assert "+" in signs and "-" in signs
+
+
+def test_a_write_reads_as_all_additions() -> None:
+    events = CLAUDE.parse_transcript_record(
+        record(
+            message={
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use", "id": "t", "name": "Write",
+                        "input": {"file_path": "/w/new.py", "content": "one\ntwo\n"},
+                    }
+                ],
+            }
+        )
+    )
+    assert events[0].added == 2
+    assert events[0].removed == 0
+
+
+def test_tools_without_a_change_carry_no_diff() -> None:
+    events = CLAUDE.parse_transcript_record(
+        record(
+            message={
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "t", "name": "Read",
+                     "input": {"file_path": "/w/a.py"}}
+                ],
+            }
+        )
+    )
+    assert events[0].diff is None
+
+
+def test_a_huge_diff_is_truncated_but_counts_the_whole_change() -> None:
+    """Truncating the lines is fine; truncating the counts would mislead.
+
+    "+800" next to a short diff is honest. A short diff reported as "+120" is
+    not, and it is the number someone approves on.
+    """
+    before = ""
+    after = "\n".join(f"line {i}" for i in range(800)) + "\n"
+    lines, added, removed, truncated = build_diff(before, after)
+    assert added == 800
+    assert removed == 0
+    assert truncated is True
+    assert len(lines) == MAX_DIFF_LINES
+
+
+def test_long_lines_are_clipped() -> None:
+    lines, _, _, _ = build_diff("", "x" * 5000 + "\n")
+    assert all(len(line.text) <= 200 for line in lines)
 
 
 # --- cursors ----------------------------------------------------------------

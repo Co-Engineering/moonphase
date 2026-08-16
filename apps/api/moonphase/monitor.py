@@ -29,6 +29,12 @@ from .ssh import SSHError
 
 log = logging.getLogger(__name__)
 
+# A failing server is usually failing for a reason that will not fix itself in
+# twenty seconds — a rotated key, a stopped box. Back off, but keep checking
+# often enough that a server coming back is noticed within a minute or two.
+BASE_BACKOFF_SECONDS = 60.0
+MAX_BACKOFF_SECONDS = 600.0
+
 
 class SessionMonitor:
     def __init__(self) -> None:
@@ -37,6 +43,12 @@ class SessionMonitor:
         # When each project's pane was last seen to change, so "still for long
         # enough" can be judged without another round trip.
         self._still_since: dict[str, float] = {}
+        # Consecutive failures per server, and when to try it again. A server
+        # whose key no longer works fails identically every sweep; retrying it
+        # on each one wastes a connection attempt per project on it and buries
+        # real problems in the log.
+        self._failures: dict[str, int] = {}
+        self._retry_after: dict[str, float] = {}
 
     def start(self) -> None:
         settings = get_settings()
@@ -74,18 +86,37 @@ class SessionMonitor:
         async with service_session() as conn:
             rows = await _running_projects(conn)
 
+        now = time.monotonic()
         checked = 0
         for row in rows:
+            server = str(row["server_id"])
+            if now < self._retry_after.get(server, 0.0):
+                continue
             try:
                 await self._check(row)
                 checked += 1
+                self._failures.pop(server, None)
+                self._retry_after.pop(server, None)
             except SSHError as exc:
                 # An unreachable server is ordinary; do not let it stop the
                 # sweep for everything else.
-                log.debug("monitor: %s unreachable: %s", row["name"], exc)
+                self._back_off(server, str(row["name"]), exc)
             except Exception as exc:  # noqa: BLE001
                 log.warning("monitor: %s failed: %s", row["name"], exc)
         return checked
+
+    def _back_off(self, server: str, name: str, exc: Exception) -> None:
+        """Wait longer after each consecutive failure, up to a ceiling."""
+        count = self._failures.get(server, 0) + 1
+        self._failures[server] = count
+        delay = min(MAX_BACKOFF_SECONDS, BASE_BACKOFF_SECONDS * (2 ** (count - 1)))
+        self._retry_after[server] = time.monotonic() + delay
+        # Only the first failure is worth a line; after that it is the same
+        # message repeating.
+        if count == 1:
+            log.info("monitor: %s unreachable (%s); backing off", name, exc)
+        else:
+            log.debug("monitor: %s still unreachable after %d tries", name, count)
 
     async def _check(self, row: dict[str, Any]) -> None:
         project_id = str(row["id"])

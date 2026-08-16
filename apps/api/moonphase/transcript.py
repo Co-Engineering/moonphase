@@ -14,6 +14,7 @@ survives is what makes polling cheap: each request ships only what is new.
 
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 import shlex
@@ -34,6 +35,19 @@ MAX_BYTES_PER_READ = 256 * 1024
 INITIAL_LINES = 300
 
 
+# A diff has to fit on a phone and travel over a slow connection. Past a
+# couple of screens nobody reads it anyway; the counts still tell the story.
+MAX_DIFF_LINES = 120
+MAX_DIFF_LINE_CHARS = 200
+
+
+@dataclass
+class DiffLine:
+    # " " context, "+" added, "-" removed.
+    sign: str
+    text: str
+
+
 @dataclass
 class TranscriptEvent:
     """One thing that happened, normalised across harnesses."""
@@ -48,9 +62,50 @@ class TranscriptEvent:
     ok: bool | None = None
     # True for a subagent's traffic, which the UI dims rather than hides.
     sidechain: bool = False
+    # Edits and writes carry their change, so a phone can approve one on its
+    # merits rather than on a file name.
+    diff: list[DiffLine] | None = None
+    added: int = 0
+    removed: int = 0
+    truncated: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def build_diff(before: str, after: str) -> tuple[list[DiffLine], int, int, bool]:
+    """A unified diff reduced to what a small screen can show.
+
+    Returns the lines, the added and removed counts, and whether it was cut
+    short. Counts come from the full diff even when the lines are truncated —
+    "+240 −13, showing the first 120" is honest; a silently short diff is not.
+    """
+    old_lines = before.splitlines()
+    new_lines = after.splitlines()
+
+    lines: list[DiffLine] = []
+    added = removed = 0
+    truncated = False
+
+    for raw in difflib.unified_diff(old_lines, new_lines, n=2, lineterm=""):
+        # The ---/+++ headers name files we do not have; @@ hunk markers are
+        # useful, everything else is content.
+        if raw.startswith(("---", "+++")):
+            continue
+        sign, text = (raw[0], raw[1:]) if raw and raw[0] in "+- @" else (" ", raw)
+        if raw.startswith("@@"):
+            sign, text = "@", raw
+        elif sign == "+":
+            added += 1
+        elif sign == "-":
+            removed += 1
+
+        if len(lines) < MAX_DIFF_LINES:
+            lines.append(DiffLine(sign=sign, text=text[:MAX_DIFF_LINE_CHARS]))
+        else:
+            truncated = True
+
+    return lines, added, removed, truncated
 
 
 @dataclass

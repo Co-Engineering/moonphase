@@ -56,8 +56,10 @@ running.
 - [x] Chat-style read view of the live session, defaulting on narrow screens
 - [x] Tap-to-answer prompts, written back with `tmux send-keys`
 - [x] Installable PWA with push, served by the same backend
-- [ ] Stream events over the existing WebSocket instead of polling every 3s
-- [ ] Render diffs for Edit/Write rather than just the file path
+- [x] Stream events over a WebSocket instead of polling — `tail -f` inside the
+      container, measured at 28–60 ms against a 3000 ms polling floor
+- [x] Render diffs for Edit and Write, shown with the question so an approval
+      is made on the change rather than on a file name
 
 ## v0.5 — teams
 

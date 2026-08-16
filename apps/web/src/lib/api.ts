@@ -235,6 +235,12 @@ export interface PushSubscriptionInput {
   user_agent?: string
 }
 
+export interface DiffLine {
+  /** ' ' context, '+' added, '-' removed, '@' hunk header. */
+  sign: string
+  text: string
+}
+
 export interface FeedEvent {
   id: string
   kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'result' | 'system'
@@ -244,6 +250,11 @@ export interface FeedEvent {
   ok: boolean | null
   /** Subagent traffic, dimmed rather than hidden. */
   sidechain: boolean
+  /** Present on Edit and Write, so a change can be judged on a phone. */
+  diff: DiffLine[] | null
+  added: number
+  removed: number
+  truncated: boolean
 }
 
 export interface Prompt {
@@ -418,6 +429,15 @@ export const api = {
     }),
   unsharePort: (projectId: string, port: number) =>
     request<void>(`/api/projects/${projectId}/ports/${port}/share`, { method: 'DELETE' }),
+}
+
+/** Live feed socket. Falls back to `api.feed` polling if this cannot open. */
+export async function feedUrl(projectId: string, session?: string) {
+  const token = await accessToken()
+  const base = API_URL.replace(/^http/, 'ws')
+  const params = new URLSearchParams({ token: token ?? '' })
+  if (session) params.set('session', session)
+  return `${base}/ws/projects/${projectId}/feed?${params}`
 }
 
 export async function terminalUrl(
