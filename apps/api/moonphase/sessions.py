@@ -73,6 +73,13 @@ set -m
 {argv}
 status=$?
 
+# Once the harness exits, this wrapper is the pane's foreground process again,
+# and a stray Ctrl-C would kill it — closing the pane and destroying the
+# session, which is exactly what `set -m` prevents while the harness is
+# running. A no-op handler (rather than ignoring) survives only until the exec
+# below, so the fallback shell still handles Ctrl-C normally.
+trap : INT
+
 printf '\\n[moonphase] harness exited with status %s.\\n' "$status"
 printf '[moonphase] press enter for a shell, or reattach later to restart.\\n'
 read -r _

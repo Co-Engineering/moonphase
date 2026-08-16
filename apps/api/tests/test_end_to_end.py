@@ -257,6 +257,24 @@ async def test_full_chain(fake_server: str) -> None:
         )
         print("  session survived repeated Ctrl-C")
 
+        # --- 6c. and after the harness exits ---------------------------------
+        # Enough Ctrl-C makes Claude Code quit, which hands the pane back to the
+        # wrapper. A further Ctrl-C there must not close it either: the session
+        # surviving a crashed or exited harness is the whole reason the wrapper
+        # falls through to a shell instead of exec'ing.
+        for _ in range(6):
+            await docker_remote.exec_capture(
+                conn, container,
+                ["tmux", "send-keys", "-t", sessions.DEFAULT_SESSION, "C-c"],
+            )
+            await asyncio.sleep(0.3)
+        await asyncio.sleep(2.0)
+        assert await sessions.session_exists(conn, container), (
+            "the wrapper died to Ctrl-C after the harness exited, taking the "
+            "session with it"
+        )
+        print("  session survived Ctrl-C after the harness exited")
+
         # --- 7. attach a real PTY, exactly as the WebSocket bridge does -----
         attach = sessions.attach_command(container)
         process = await conn.create_process(

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#12141d"/>
+  <!-- A waxing moon: the app is named for the phase you leave it in. -->
+  <circle cx="256" cy="256" r="150" fill="#7aa2f7"/>
+  <path d="M256 106a150 150 0 0 0 0 300 150 150 0 0 1 0-300z" fill="#0b0c12"/>
+</svg>

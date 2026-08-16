@@ -10,6 +10,7 @@ import { NewProject } from './routes/NewProject'
 import { Settings } from './routes/Settings'
 import { Ports } from './components/Ports'
 import { Sessions } from './components/Sessions'
+import { Feed } from './components/Feed'
 
 export function App() {
   const [session, setSession] = useState<AuthSession | null>(null)
@@ -228,6 +229,15 @@ function ProjectView({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [session, setSession] = useState('moonphase')
+  // A terminal is unusable on a phone, and attaching one would also drag the
+  // desktop's tmux window down to phone width. Default by screen size, but
+  // leave it switchable: the feed is genuinely nicer for catching up, and the
+  // terminal is still the only way to do anything unusual.
+  const [view, setView] = useState<'terminal' | 'feed'>(() =>
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 720px)').matches
+      ? 'feed'
+      : 'terminal',
+  )
 
   // Switching project must not leave the tab selection from the previous one.
   useEffect(() => {
@@ -259,6 +269,22 @@ function ProjectView({
         </span>
         {project.status === 'running' && <ActivityChip project={project} />}
         <div className="spacer" />
+        <div className="view-toggle" role="group" aria-label="View">
+          <button
+            className={view === 'feed' ? 'active' : ''}
+            onClick={() => setView('feed')}
+            title="Readable feed — works on a phone, and never resizes the terminal"
+          >
+            Feed
+          </button>
+          <button
+            className={view === 'terminal' ? 'active' : ''}
+            onClick={() => setView('terminal')}
+            title="The real terminal"
+          >
+            Terminal
+          </button>
+        </div>
         <button
           disabled={busy}
           onClick={() => void act(() => api.startSession(project.id, true, session))}
@@ -295,7 +321,15 @@ function ProjectView({
             active={session}
             onSelect={setSession}
           />
-          <ProjectTerminal projectId={project.id} session={session} />
+          {view === 'terminal' ? (
+            <ProjectTerminal projectId={project.id} session={session} />
+          ) : (
+            <Feed
+              projectId={project.id}
+              session={session}
+              running={project.status === 'running'}
+            />
+          )}
           <Ports projectId={project.id} running={project.status === 'running'} />
         </div>
       ) : (

@@ -19,7 +19,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 import asyncssh
@@ -146,6 +146,84 @@ async def probe(
         previous_digest=previous_digest,
         still_for_seconds=still_for_seconds,
     )
+
+
+# A numbered choice in a harness prompt: "❯ 1. Yes, I trust this folder".
+# The marker is optional because only the highlighted line carries it.
+_OPTION = re.compile(r"^\s*[❯>»]?\s*(\d{1,2})[.)]\s+(\S.*?)\s*$")
+
+
+@dataclass
+class Prompt:
+    """A blocking question, reduced to something tappable."""
+
+    question: str
+    options: list[dict[str, str]] = field(default_factory=list)
+
+
+def parse_prompt(pane: str, signals: ActivitySignals) -> Prompt | None:
+    """Extract a question and its numbered options from a still terminal.
+
+    This is what lets a phone answer without a keyboard. Scanning bottom-up
+    matters: a long session's scrollback contains earlier prompts, and the one
+    being asked now is the last one.
+    """
+    matched = _match(pane, signals.prompt_patterns)
+    if matched is None:
+        return None
+
+    lines = pane.splitlines()
+    options: list[dict[str, str]] = []
+    seen: set[str] = set()
+    first_option_index = len(lines)
+
+    for index in range(len(lines) - 1, -1, -1):
+        line = lines[index]
+        found = _OPTION.match(line)
+        if found:
+            key, label = found.group(1), found.group(2)
+            if key in seen:
+                # Reached an earlier prompt's options; stop rather than mixing
+                # two questions into one set of buttons.
+                break
+            seen.add(key)
+            options.append({"key": key, "label": " ".join(label.split())[:80]})
+            first_option_index = index
+        elif options and line.strip():
+            # A non-option line directly above the block ends it.
+            break
+
+    options.reverse()
+
+    # Look upward from the options for the question. Prefer a line containing
+    # '?' — the nearest non-empty line is often chrome ("Security guide", a
+    # link, a separator) — but fall back to it, since not every prompt is
+    # phrased as a question. Bounded, so an unrelated question further up the
+    # scrollback is never mistaken for this one.
+    question = ""
+    fallback = ""
+    for index in range(first_option_index - 1, max(-1, first_option_index - 16), -1):
+        text = " ".join(lines[index].split())
+        if not text or _OPTION.match(lines[index]):
+            continue
+        # Box drawing and separators carry no meaning.
+        if not any(c.isalnum() for c in text):
+            continue
+        if not fallback:
+            fallback = text
+        if "?" in text:
+            question = text
+            break
+
+    question = question or fallback or _question_excerpt(pane, matched)
+
+    # A trailing parenthetical is context, not the question; on a phone the
+    # question itself is what has to be readable at a glance.
+    head, sep, _ = question.partition("? ")
+    if sep:
+        question = head + "?"
+
+    return Prompt(question=question[:200], options=options)
 
 
 def notification_for(

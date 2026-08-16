@@ -64,15 +64,24 @@ than reasoning:
 
 ## Two clients, one session
 
-The desktop attaches to the real PTY. The phone client (planned, v0.4) renders
-a readable feed parsed from the harness's own JSONL transcript, which the
-schema already tracks per session in `project_sessions.transcript_path`, and
-writes back with `tmux send-keys` through `POST /sessions/keys` — an endpoint
-that exists and is tested today.
+The desktop attaches to the real PTY. The phone renders a readable feed parsed
+from the harness's own JSONL transcript, and writes back with `tmux send-keys`.
 
 Both surfaces therefore drive the *same* tmux session. There is no second
 protocol to keep in sync and no risk of the two views disagreeing: a permission
 prompt answered on a phone appears in the desktop terminal as if typed there.
+
+The phone deliberately does **not** attach a terminal, for two reasons. An
+80-column TUI on a 390-pixel screen is unusable. And tmux sizes a window to its
+most recent client, so a phone attaching would squeeze the desktop down to
+phone width — the feed observes without ever becoming a client.
+
+That second point has a sharp edge worth knowing about. `docker exec` does not
+kill the process it started when its client disconnects, so a closed terminal
+leaves `tmux attach` running inside the container forever. Those phantom
+clients accumulate and keep constraining the window size. The attach wrapper
+therefore announces its tty before tmux takes the screen, and the bridge
+consumes that line and detaches itself explicitly on the way out.
 
 ## Security model
 
@@ -131,12 +140,14 @@ answering it is the user's decision, not Moonphase's.
 6. The client opens `WS /ws/projects/{id}/terminal`, which allocates a PTY on a
    new channel of that same SSH connection and pumps bytes both ways.
 
-## Deliberate omissions in v0.1
+## Still missing
 
-* zrok tunnels — the schema carries `preview_port`, `zrok_share_token` and
-  `preview_url` so adding them is not a migration.
-* The phone transcript feed — the write path (`send-keys`) already works.
-* Claude Code OAuth relay — API key auth works; the credential tables already
-  model both modes.
-* Invites and role management UI — orgs, roles and policies exist in the
-  database; only the screens are missing.
+* **zrok tunnels.** Previews work today through a per-port listener on the
+  backend, which is enough when you can reach it. A real public URL — for a
+  webhook, an OAuth callback, or sending a link to someone — still wants zrok.
+* **Invites and role management UI.** Orgs, roles and policies exist in the
+  database and are enforced; only the screens are missing.
+* **WebSocket auth tickets.** The terminal socket takes its token as a query
+  parameter, so access tokens land in proxy logs.
+* **OpenCode.** A second `Harness` subclass, and an enum value that is already
+  in the schema.

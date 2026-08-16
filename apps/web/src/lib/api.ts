@@ -235,6 +235,30 @@ export interface PushSubscriptionInput {
   user_agent?: string
 }
 
+export interface FeedEvent {
+  id: string
+  kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'result' | 'system'
+  text: string
+  at: string | null
+  tool: string | null
+  ok: boolean | null
+  /** Subagent traffic, dimmed rather than hidden. */
+  sidechain: boolean
+}
+
+export interface Prompt {
+  question: string
+  options: { key: string; label: string }[]
+}
+
+export interface FeedPage {
+  events: FeedEvent[]
+  cursor: string
+  available: boolean
+  activity: ActivityState
+  prompt: Prompt | null
+}
+
 export interface DetectedPort {
   port: number
   bind: string
@@ -371,6 +395,20 @@ export const api = {
     request<{ delivered: number; subscriptions: number }>('/api/notifications/test', {
       method: 'POST',
     }),
+
+  // --- phone feed -----------------------------------------------------------
+  feed: (projectId: string, session?: string, cursor?: string) => {
+    const params = new URLSearchParams()
+    if (session) params.set('session', session)
+    if (cursor) params.set('cursor', cursor)
+    const query = params.toString()
+    return request<FeedPage>(`/api/projects/${projectId}/feed${query ? `?${query}` : ''}`)
+  },
+  answerFeed: (projectId: string, key: string, session?: string) =>
+    request<void>(
+      `/api/projects/${projectId}/feed/answer${session ? `?session=${encodeURIComponent(session)}` : ''}`,
+      { method: 'POST', body: JSON.stringify({ key }) },
+    ),
 
   // --- previews -------------------------------------------------------------
   ports: (projectId: string) => request<DetectedPort[]>(`/api/projects/${projectId}/ports`),

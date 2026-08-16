@@ -189,6 +189,44 @@ class SessionCreateIn(BaseModel):
     name: str = Field(min_length=1, max_length=48)
 
 
+class TranscriptEventOut(BaseModel):
+    id: str
+    kind: str
+    text: str = ""
+    at: datetime | None = None
+    tool: str | None = None
+    ok: bool | None = None
+    sidechain: bool = False
+
+
+class PromptOptionOut(BaseModel):
+    key: str
+    label: str
+
+
+class PromptOut(BaseModel):
+    question: str
+    options: list[PromptOptionOut] = Field(default_factory=list)
+
+
+class FeedOut(BaseModel):
+    """One poll's worth of everything the phone client needs."""
+
+    events: list[TranscriptEventOut] = Field(default_factory=list)
+    cursor: str = ""
+    # False until the harness has written a transcript.
+    available: bool = True
+    activity: str = "unknown"
+    # Present only while the agent is blocked on a question.
+    prompt: PromptOut | None = None
+
+
+class AnswerIn(BaseModel):
+    """A tapped option, or typed text, for a waiting prompt."""
+
+    key: str = Field(min_length=1, max_length=64)
+
+
 class SendKeysIn(BaseModel):
     keys: str = Field(min_length=1, max_length=8192)
     enter: bool = True

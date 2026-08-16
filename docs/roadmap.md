@@ -50,12 +50,14 @@ running.
 - [ ] Detect the dev server port instead of asking for it up front
 - [ ] Preview link in the project header, shareable to a phone
 
-## v0.4 — the phone client
+## v0.4 — the phone client ✅
 
-- [ ] Tail the harness transcript JSONL and stream parsed events to clients
-- [ ] Chat-style read view of the live session
-- [ ] Tap-to-answer permission prompts, written back with `tmux send-keys`
-- [ ] Installable PWA with push, served by the same backend
+- [x] Tail the harness transcript JSONL and serve parsed events with a cursor
+- [x] Chat-style read view of the live session, defaulting on narrow screens
+- [x] Tap-to-answer prompts, written back with `tmux send-keys`
+- [x] Installable PWA with push, served by the same backend
+- [ ] Stream events over the existing WebSocket instead of polling every 3s
+- [ ] Render diffs for Edit/Write rather than just the file path
 
 ## v0.5 — teams
 

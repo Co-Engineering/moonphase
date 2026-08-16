@@ -116,6 +116,17 @@ class Harness(abc.ABC):
 
         return ActivitySignals()
 
+    def parse_transcript_record(self, record: Any) -> list[Any]:
+        """Turn one transcript line into zero or more `TranscriptEvent`s.
+
+        Loosely typed for the same reason as `activity_signals`: the transcript
+        module imports the harness registry, so naming its types here would be
+        circular. A harness that writes no transcript returns nothing and the
+        feed simply stays empty.
+        """
+        del record
+        return []
+
     def auth_status_script(self) -> str | None:
         """A `sh` snippet printing the harness's own auth status as JSON.
 

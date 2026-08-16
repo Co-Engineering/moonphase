@@ -1,0 +1,14 @@
+{
+  "name": "Moonphase",
+  "short_name": "Moonphase",
+  "description": "Your coding agents live on servers you own, not on the laptop you need to close.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0c12",
+  "theme_color": "#0b0c12",
+  "orientation": "portrait-primary",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

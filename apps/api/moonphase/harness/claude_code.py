@@ -25,6 +25,54 @@ CLAUDE_HOME = "/home/dev/.claude"
 LOGIN_URL_PATTERN = r"https://claude\.com/\S*oauth\S*"
 
 
+
+# Tools whose most useful one-line summary is a particular input field. Falling
+# back to the first string keeps an unknown tool readable rather than blank.
+_TOOL_SUMMARY_FIELD = {
+    "Read": "file_path",
+    "Edit": "file_path",
+    "Write": "file_path",
+    "NotebookEdit": "notebook_path",
+    "Bash": "command",
+    "Grep": "pattern",
+    "Glob": "pattern",
+    "Task": "description",
+    "WebFetch": "url",
+    "WebSearch": "query",
+    "Skill": "skill",
+}
+
+
+def _summarise_tool(name: str, tool_input: Any) -> str:
+    if not isinstance(tool_input, dict):
+        return ""
+    field = _TOOL_SUMMARY_FIELD.get(name)
+    value = tool_input.get(field) if field else None
+    if value is None:
+        value = next(
+            (v for v in tool_input.values() if isinstance(v, str) and v.strip()), ""
+        )
+    text = " ".join(str(value).split())
+    return text[:160]
+
+
+def _result_excerpt(content: Any) -> str:
+    """A tool result reduced to something that fits on a phone."""
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        parts = [
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        text = "\n".join(p for p in parts if p)
+    else:
+        text = ""
+    lines = [line for line in text.splitlines() if line.strip()]
+    return " ".join(" ".join(lines[:3]).split())[:200]
+
+
 def _project_slug(workdir: str) -> str:
     return workdir.replace("/", "-")
 
@@ -101,6 +149,107 @@ class ClaudeCode(Harness):
             # no stable literal to match. Change detection covers this.
             busy_patterns=(),
         )
+
+
+    def parse_transcript_record(self, record: Any) -> list[Any]:
+        """Normalise one Claude Code transcript line.
+
+        Only `user` and `assistant` records carry conversation; the rest are
+        bookkeeping (file history, modes, titles) that a reader does not want
+        to see. Thinking blocks are emitted but tagged, so the UI can offer
+        them without them dominating a small screen.
+        """
+        from ..transcript import TranscriptEvent
+
+        if not isinstance(record, dict):
+            return []
+
+        kind = record.get("type")
+        if kind not in ("user", "assistant"):
+            return []
+
+        message = record.get("message")
+        if not isinstance(message, dict):
+            return []
+
+        uuid = str(record.get("uuid") or "")
+        at = record.get("timestamp")
+        sidechain = bool(record.get("isSidechain"))
+        content = message.get("content")
+        events: list[TranscriptEvent] = []
+
+        # A plain string is what a typed prompt looks like.
+        if isinstance(content, str):
+            text = content.strip()
+            if text:
+                events.append(
+                    TranscriptEvent(
+                        id=uuid, kind="user", text=text, at=at, sidechain=sidechain
+                    )
+                )
+            return events
+
+        if not isinstance(content, list):
+            return []
+
+        for index, block in enumerate(content):
+            if not isinstance(block, dict):
+                continue
+            block_type = block.get("type")
+            # Blocks share the record's uuid, so index keeps ids unique for
+            # client-side keying and de-duplication.
+            block_id = f"{uuid}:{index}"
+
+            if block_type == "text":
+                text = str(block.get("text", "")).strip()
+                if text:
+                    events.append(
+                        TranscriptEvent(
+                            id=block_id,
+                            kind="user" if kind == "user" else "assistant",
+                            text=text,
+                            at=at,
+                            sidechain=sidechain,
+                        )
+                    )
+            elif block_type == "thinking":
+                text = str(block.get("thinking", "")).strip()
+                if text:
+                    events.append(
+                        TranscriptEvent(
+                            id=block_id, kind="thinking", text=text, at=at,
+                            sidechain=sidechain,
+                        )
+                    )
+            elif block_type == "tool_use":
+                name = str(block.get("name", "tool"))
+                events.append(
+                    TranscriptEvent(
+                        id=block_id,
+                        kind="tool",
+                        tool=name,
+                        text=_summarise_tool(name, block.get("input")),
+                        at=at,
+                        sidechain=sidechain,
+                    )
+                )
+            elif block_type == "tool_result":
+                is_error = bool(block.get("is_error"))
+                excerpt = _result_excerpt(block.get("content"))
+                # A successful result is usually noise; an error never is.
+                if is_error or excerpt:
+                    events.append(
+                        TranscriptEvent(
+                            id=block_id,
+                            kind="result",
+                            text=excerpt,
+                            ok=not is_error,
+                            at=at,
+                            sidechain=sidechain,
+                        )
+                    )
+
+        return events
 
     def auth_probe_script(self) -> str:
         return (
