@@ -728,6 +728,26 @@ async def upsert_session(
     return _row_to_dict(row)
 
 
+async def list_all_sessions(conn: AsyncConnection) -> list[dict[str, Any]]:
+    """Every session in every project the caller can see, in one query.
+
+    The sidebar lists sessions under their projects, and asking per project
+    would be one request each. This touches only the database — no SSH, no
+    container — because listing what exists must not cost a connection to a
+    machine that might be asleep.
+    """
+    result = await conn.execute(
+        text(
+            f"""
+            select {SESSION_COLUMNS}
+            from project_sessions
+            order by project_id, (user_id = auth.uid()) desc, created_at
+            """
+        )
+    )
+    return [_row_to_dict(r) for r in result]
+
+
 async def get_session(
     conn: AsyncConnection, project_id: UUID, tmux_session: str
 ) -> dict[str, Any] | None:

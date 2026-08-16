@@ -21,6 +21,7 @@ from ..schemas import (
     HarnessInfoOut,
     HealthOut,
     OrganizationOut,
+    SessionOut,
 )
 
 log = logging.getLogger(__name__)
@@ -43,6 +44,20 @@ async def health() -> HealthOut:
         version=VERSION,
         database=database,
     )
+
+
+@router.get("/sessions", response_model=list[SessionOut])
+async def list_all_sessions(
+    principal: Principal = Depends(current_principal),
+) -> list[SessionOut]:
+    """Every session the caller can see, across every project.
+
+    One database query for the whole sidebar. Asking per project would be a
+    request each, and none of them would tell you anything the others did not.
+    """
+    async with user_session(principal.claims) as conn:
+        rows = await queries.list_all_sessions(conn)
+    return [SessionOut.model_validate(row) for row in rows]
 
 
 @router.get("/organizations", response_model=list[OrganizationOut])

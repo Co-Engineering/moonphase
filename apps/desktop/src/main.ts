@@ -161,9 +161,61 @@ async function openPreview(request: {
 }
 
 const previews = new Map<string, BrowserWindow>()
+const sessionWindows = new Map<string, BrowserWindow>()
+
+/**
+ * One session in a window of its own.
+ *
+ * People run several agents at once and want to see them at the same time.
+ * Laying that out is a problem an operating system already solves better than
+ * an in-app pane splitter ever will: a tiling window manager arranges these
+ * across as many monitors as there are, and a plain one lets you drag them
+ * wherever you like. So Moonphase makes windows and gets out of the way.
+ *
+ * No proxy here — this is Moonphase's own UI, talking to the API as usual.
+ */
+async function openSessionWindow(request: {
+  projectId: string
+  session: string
+  title: string
+  url: string
+}): Promise<{ ok: boolean; error?: string }> {
+  const invalid = validate({ proxyPort: 1, url: request.url })
+  if (invalid) return { ok: false, error: invalid }
+
+  const key = `${request.projectId}:${request.session}`
+  const existing = sessionWindows.get(key)
+  if (existing && !existing.isDestroyed()) {
+    // Raising the one that exists, rather than making a second view of the
+    // same session, which would attach twice and squeeze the window.
+    if (existing.isMinimized()) existing.restore()
+    existing.focus()
+    return { ok: true }
+  }
+
+  const window = new BrowserWindow({
+    width: 900,
+    height: 720,
+    minWidth: 480,
+    minHeight: 320,
+    backgroundColor: '#0b0c12',
+    title: request.title,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      preload: path.join(__dirname, 'preload.js'),
+    },
+  })
+  sessionWindows.set(key, window)
+  window.on('closed', () => sessionWindows.delete(key))
+  await window.loadURL(request.url)
+  return { ok: true }
+}
 
 void app.whenReady().then(() => {
   ipcMain.handle('preview:open', (_event, request) => openPreview(request))
+  ipcMain.handle('session:open', (_event, request) => openSessionWindow(request))
   createWindow()
 
   app.on('activate', () => {

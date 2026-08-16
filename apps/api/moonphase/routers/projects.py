@@ -420,13 +420,21 @@ async def _profile_or_409(
 
 @router.get("/{project_id}/sessions", response_model=list[SessionOut])
 async def list_sessions(
-    project_id: UUID, principal: Principal = Depends(current_principal)
+    project_id: UUID,
+    live: bool = False,
+    principal: Principal = Depends(current_principal),
 ) -> list[SessionOut]:
     """Every session in this project, yours first.
 
-    Live liveness and attached device counts come from tmux rather than the
-    database on purpose: a stored count goes stale the moment a client drops,
-    and a wrong "2 devices attached" is worse than not showing one.
+    `live` costs an SSH round trip and is off by default. Merely listing what
+    exists must not open a connection to the machine — the sidebar shows every
+    session of every project, and a server that is asleep or unreachable should
+    not make the list slow or empty. Ask for it when you are looking at a
+    session and the attached-device count means something.
+
+    That count comes from tmux rather than the database when it is asked for: a
+    stored one goes stale the moment a client drops, and a wrong "2 devices
+    attached" is worse than none.
     """
     async with user_session(principal.claims) as conn:
         project = await queries.get_project(conn, project_id)
@@ -434,14 +442,14 @@ async def list_sessions(
             raise HTTPException(status_code=404, detail="Project not found.")
         rows = await queries.get_sessions(conn, project_id)
 
-    live: dict[str, int] = {}
-    if project.get("container_name") and project["status"] == "running":
+    live_counts: dict[str, int] = {}
+    if live and project.get("container_name") and project["status"] == "running":
         try:
             ctx = await runtime.load_project_context(
                 principal.claims, project_id, require=CAN_OBSERVE
             )
             conn_ssh = await ssh.pool.get(ctx.target)
-            live = await sessions.client_counts(conn_ssh, ctx.container)
+            live_counts = await sessions.client_counts(conn_ssh, ctx.container)
         except (SSHError, NotFound, Forbidden) as exc:
             # An unreachable server should not blank the list; the rows are
             # still the truth about which sessions exist.
@@ -451,8 +459,8 @@ async def list_sessions(
         SessionOut.model_validate(
             {
                 **row,
-                "alive": row["tmux_session"] in live,
-                "attached_clients": live.get(str(row["tmux_session"]), 0),
+                "alive": row["tmux_session"] in live_counts,
+                "attached_clients": live_counts.get(str(row["tmux_session"]), 0),
             }
         )
         for row in rows

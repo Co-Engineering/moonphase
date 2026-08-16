@@ -9,9 +9,10 @@ import { AddServer } from './routes/AddServer'
 import { NewProject } from './routes/NewProject'
 import { Settings } from './routes/Settings'
 import { Ports } from './components/Ports'
-import { Sessions } from './components/Sessions'
 import { Feed } from './components/Feed'
 import { Share } from './components/Share'
+import { SessionWindow } from './routes/SessionWindow'
+import { openSessionWindow, sessionWindowUrl } from './lib/desktop'
 
 export function App() {
   const [session, setSession] = useState<AuthSession | null>(null)
@@ -30,14 +31,30 @@ export function App() {
 
   if (!ready) return <div className="auth-shell">Loading…</div>
   if (!session) return <Auth />
+
+  // A session opened in its own window renders only that session. Same app,
+  // same components, no second implementation — the window is just a different
+  // entry point, which is also what makes it work as a plain browser popup.
+  const params = new URLSearchParams(window.location.search)
+  if (params.get('window') === 'session') {
+    const projectId = params.get('project')
+    const name = params.get('session')
+    if (projectId && name) {
+      return <SessionWindow projectId={projectId} session={name} />
+    }
+  }
+
   return <Shell email={session.user.email ?? ''} />
 }
 
 type ShareTarget = { kind: 'servers' | 'projects'; id: string; name: string }
 
 function Shell({ email }: { email: string }) {
+  // A session is part of the selection rather than a tab inside a project:
+  // it is the thing you are actually looking at, so it belongs in the place
+  // that says what you are looking at.
   const [selected, setSelected] = useState<
-    { kind: 'server' | 'project'; id: string } | null
+    { kind: 'server'; id: string } | { kind: 'project'; id: string; session?: string } | null
   >(null)
   const [showAddServer, setShowAddServer] = useState(false)
   const [showNewProject, setShowNewProject] = useState(false)
@@ -52,6 +69,9 @@ function Shell({ email }: { email: string }) {
   const harnesses = useResource(() => api.harnesses(), [])
   const profile = useResource(() => api.profile(), [])
   const environments = useResource(() => api.environments(), [])
+  // Every session, in one query and without touching a server. Listing what
+  // exists must not cost a connection to a machine that may be asleep.
+  const sessions = useResource(() => api.allSessions(), [], { pollMs: 10000 })
 
   const reloadAll = useCallback(() => {
     void servers.reload(true)
@@ -59,10 +79,11 @@ function Shell({ email }: { email: string }) {
     void profile.reload(true)
     // Signing in changes which harnesses are usable, so this must refresh too.
     void harnesses.reload(true)
-  }, [servers, projects, profile, harnesses])
+    void sessions.reload(true)
+  }, [servers, projects, profile, harnesses, sessions])
 
-  const selectProject = useCallback((id: string) => {
-    setSelected({ kind: 'project', id })
+  const selectProject = useCallback((id: string, session?: string) => {
+    setSelected({ kind: 'project', id, session })
     setShowSidebar(false)
   }, [])
 
@@ -136,6 +157,14 @@ function Shell({ email }: { email: string }) {
                     key={project.id}
                     project={project}
                     active={activeProject?.id === project.id}
+                    activeSession={
+                      selected?.kind === 'project' && selected.id === project.id
+                        ? selected.session
+                        : undefined
+                    }
+                    sessions={(sessions.data ?? []).filter(
+                      (s) => s.project_id === project.id,
+                    )}
                     onSelect={selectProject}
                   />
                 ))}
@@ -152,6 +181,12 @@ function Shell({ email }: { email: string }) {
                   key={project.id}
                   project={project}
                   active={activeProject?.id === project.id}
+                  activeSession={
+                    selected?.kind === 'project' && selected.id === project.id
+                      ? selected.session
+                      : undefined
+                  }
+                  sessions={(sessions.data ?? []).filter((s) => s.project_id === project.id)}
                   onSelect={selectProject}
                   subtitle={project.server_name ?? undefined}
                 />
@@ -189,6 +224,9 @@ function Shell({ email }: { email: string }) {
         {activeProject ? (
           <ProjectView
             project={activeProject}
+            session={selected?.kind === 'project' ? (selected.session ?? null) : null}
+            sessions={(sessions.data ?? []).filter((s) => s.project_id === activeProject.id)}
+            onEnter={(name) => selectProject(activeProject.id, name)}
             onChanged={reloadAll}
             onToggleSidebar={() => setShowSidebar(true)}
             onShare={() =>
@@ -276,54 +314,100 @@ function Shell({ email }: { email: string }) {
 function ProjectRow({
   project,
   active,
+  activeSession,
+  sessions,
   onSelect,
   subtitle,
 }: {
   project: Project
   active: boolean
-  onSelect: (id: string) => void
+  activeSession?: string
+  sessions: Session[]
+  onSelect: (id: string, session?: string) => void
   subtitle?: string
 }) {
   return (
-    <button
-      className={`tree-row tree-project status-${project.status} activity-${
-        project.status === 'running' ? project.activity : 'stopped'
-      }${active ? ' active' : ''}`}
-      onClick={() => onSelect(project.id)}
-      title={project.activity_detail ?? subtitle}
-    >
-      <span className="dot" />
-      <span className="name">
-        {project.name}
-        {subtitle && <span className="tree-sub">{subtitle}</span>}
-      </span>
-      {project.access === 'read' && (
-        <span className="shared-tag" title="View only">
-          view
+    <>
+      <button
+        className={`tree-row tree-project status-${project.status} activity-${
+          project.status === 'running' ? project.activity : 'stopped'
+        }${active && !activeSession ? ' active' : ''}`}
+        onClick={() => onSelect(project.id)}
+        title={project.activity_detail ?? subtitle}
+      >
+        <span className="dot" />
+        <span className="name">
+          {project.name}
+          {subtitle && <span className="tree-sub">{subtitle}</span>}
         </span>
-      )}
-      {project.access === 'host' && (
-        <span className="shared-tag" title="Runs on your server; not yours">
-          guest
-        </span>
-      )}
-      {project.status === 'running' && project.activity === 'awaiting_input' && (
-        <span className="needs-you" title="Waiting for you">
-          ●
-        </span>
-      )}
-    </button>
+        {project.access === 'read' && (
+          <span className="shared-tag" title="View only">
+            view
+          </span>
+        )}
+        {project.access === 'host' && (
+          <span className="shared-tag" title="Runs on your server; not yours">
+            guest
+          </span>
+        )}
+        {project.status === 'running' && project.activity === 'awaiting_input' && (
+          <span className="needs-you" title="Waiting for you">
+            ●
+          </span>
+        )}
+      </button>
+
+      {/* Sessions belong here rather than in a tab strip: a session is the
+          thing you are actually looking at, so it should be navigable in the
+          same place as everything else, and several projects' sessions should
+          be visible at once. Nothing connects until one is opened. */}
+      {project.status === 'running' &&
+        sessions.map((session) => (
+          <button
+            key={session.id}
+            className={`tree-row tree-session activity-${session.activity}${
+              active && activeSession === session.tmux_session ? ' active' : ''
+            }`}
+            onClick={() => onSelect(project.id, session.tmux_session)}
+            title={
+              session.is_mine
+                ? (session.activity_detail ?? session.branch ?? undefined)
+                : `${session.owner ?? 'Someone else'}'s session`
+            }
+          >
+            <span className="dot" />
+            <span className="name">{session.tmux_session}</span>
+            {!session.is_mine && (
+              <span className="session-theirs">
+                {session.owner?.split('@')[0] ?? 'shared'}
+              </span>
+            )}
+            {session.activity === 'awaiting_input' && (
+              <span className="needs-you" title="Waiting for you">
+                ●
+              </span>
+            )}
+          </button>
+        ))}
+    </>
   )
 }
 
 function ProjectView({
   project,
+  session,
+  sessions,
+  onEnter,
   onChanged,
   onToggleSidebar,
   onShare,
   onRemoved,
 }: {
   project: Project
+  /** Null until a session is entered — and nothing connects before that. */
+  session: string | null
+  sessions: Session[]
+  onEnter: (name: string) => void
   onChanged: () => void
   onToggleSidebar: () => void
   onShare: () => void
@@ -331,8 +415,7 @@ function ProjectView({
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [session, setSession] = useState('')
-  const [active, setActive] = useState<Session | null>(null)
+  const active = sessions.find((s) => s.tmux_session === session) ?? null
   // Set briefly when a keystroke is refused, so the explanation reacts to the
   // attempt instead of sitting there having already been read and dismissed.
   const [nudged, setNudged] = useState(false)
@@ -345,12 +428,6 @@ function ProjectView({
       ? 'feed'
       : 'terminal',
   )
-
-  // Switching project must not leave the tab selection from the previous one.
-  useEffect(() => {
-    setSession('')
-    setActive(null)
-  }, [project.id])
 
   const nudge = useCallback(() => {
     setNudged(true)
@@ -484,20 +561,28 @@ function ProjectView({
             Share{project.share_count > 0 ? ` (${project.share_count})` : ''}
           </button>
         )}
-        {canControl(project.access) && !active && (
+        {session && (
           <button
-            className="primary"
             disabled={busy}
-            onClick={() => void act(() => api.startSession(project.id))}
-            title="Start a session of your own here, on its own branch"
+            title="Open this session in its own window — one per monitor, tiled by your window manager"
+            onClick={() =>
+              void act(() =>
+                openSessionWindow({
+                  projectId: project.id,
+                  session,
+                  title: `${session} — ${project.name}`,
+                  url: sessionWindowUrl(project.id, session),
+                }),
+              )
+            }
           >
-            Start my session
+            Window
           </button>
         )}
         {drivable && (
           <button
             disabled={busy}
-            onClick={() => void act(() => api.startSession(project.id, true, session))}
+            onClick={() => void act(() => api.startSession(project.id, true, session ?? undefined))}
             title="Kill this session and start the harness fresh"
           >
             Restart harness
@@ -525,7 +610,90 @@ function ProjectView({
         </div>
       )}
 
-      {project.status === 'running' ? (
+      {project.status !== 'running' ? (
+        <div className="content">
+          <div className="empty">
+            <h3>Container is {project.status}</h3>
+            {project.status_detail ??
+              (canControl(project.access)
+                ? 'Start it to open a session.'
+                : 'Whoever owns this project needs to start it.')}
+          </div>
+        </div>
+      ) : !session ? (
+        // No session entered, so nothing is connected. Opening a project used
+        // to attach a terminal and a feed immediately, which cost a channel
+        // and a tmux client before anyone had asked to look at anything.
+        <div className="content">
+          <div className="card">
+            <h2>Sessions</h2>
+            <p className="hint">
+              A session is one person&rsquo;s agent — their account, their branch, their
+              commits. Open one to connect; nothing is attached until you do.
+            </p>
+            {sessions.length === 0 ? (
+              <p className="hint">Nothing running here yet.</p>
+            ) : (
+              <div className="session-list">
+                {sessions.map((item) => (
+                  <div className="session-card" key={item.id}>
+                    <button className="session-enter" onClick={() => onEnter(item.tmux_session)}>
+                      <span className={`dot activity-${item.activity}`} />
+                      <span className="session-name">{item.tmux_session}</span>
+                      <span className="session-meta">
+                        {item.is_mine ? 'yours' : (item.owner ?? 'someone else')}
+                        {item.branch ? ` · ${item.branch}` : ''}
+                      </span>
+                      {item.activity === 'awaiting_input' && (
+                        <span className="needs-you" title="Waiting for you">
+                          ●
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      className="ghost"
+                      title="Open in its own window — one per monitor, tiled by your window manager"
+                      onClick={() =>
+                        void act(() =>
+                          openSessionWindow({
+                            projectId: project.id,
+                            session: item.tmux_session,
+                            title: `${item.tmux_session} — ${project.name}`,
+                            url: sessionWindowUrl(project.id, item.tmux_session),
+                          }),
+                        )
+                      }
+                    >
+                      window
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {canControl(project.access) && !sessions.some((s) => s.is_mine) && (
+              <button
+                className="primary"
+                disabled={busy}
+                style={{ marginTop: 12 }}
+                onClick={() =>
+                  void act(async () => {
+                    const created = await api.createSession(project.id)
+                    onEnter(created.tmux_session)
+                  })
+                }
+              >
+                Start my session
+              </button>
+            )}
+          </div>
+          <Ports
+            projectId={project.id}
+            projectName={project.name}
+            running
+            readOnly={!canControl(project.access)}
+          />
+        </div>
+      ) : (
         <div className="content flush terminal-and-ports">
           {watching && (
             <div className={`readonly-bar${nudged ? ' nudged' : ''}`}>
@@ -542,7 +710,7 @@ function ProjectView({
                   onClick={() =>
                     void act(async () => {
                       const created = await api.createSession(project.id)
-                      setSession(created.tmux_session)
+                      onEnter(created.tmux_session)
                     })
                   }
                 >
@@ -551,24 +719,7 @@ function ProjectView({
               )}
             </div>
           )}
-          <Sessions
-            projectId={project.id}
-            running={project.status === 'running'}
-            active={session}
-            onSelect={setSession}
-            readOnly={!canControl(project.access)}
-            onActiveSession={setActive}
-          />
-          {!session ? (
-            // Nothing is attached until we know which session to attach to.
-            // Attaching first and correcting afterwards meant every open cost
-            // two attaches, and on a shared project the first one landed on
-            // whatever the server considers the default — a flash of someone
-            // else's terminal before switching to your own.
-            <div className="terminal-wrap">
-              <div className="empty">Finding your session…</div>
-            </div>
-          ) : view === 'terminal' ? (
+          {view === 'terminal' ? (
             <ProjectTerminal
               projectId={project.id}
               session={session}
@@ -579,7 +730,7 @@ function ProjectView({
             <Feed
               projectId={project.id}
               session={session}
-              running={project.status === 'running'}
+              running
               readOnly={!drivable}
               onRefusedInput={nudge}
             />
@@ -587,19 +738,9 @@ function ProjectView({
           <Ports
             projectId={project.id}
             projectName={project.name}
-            running={project.status === 'running'}
+            running
             readOnly={!drivable}
           />
-        </div>
-      ) : (
-        <div className="content">
-          <div className="empty">
-            <h3>Container is {project.status}</h3>
-            {project.status_detail ??
-              (drivable
-                ? 'Start it to attach a terminal.'
-                : 'Whoever owns this project needs to start it.')}
-          </div>
         </div>
       )}
     </>

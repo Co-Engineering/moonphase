@@ -18,9 +18,20 @@ export interface PreviewRequest {
   url: string
 }
 
+export interface SessionWindowRequest {
+  projectId: string
+  session: string
+  title: string
+  url: string
+}
+
 contextBridge.exposeInMainWorld('moonphase', {
   /** True when running inside the desktop shell, so the web build can adapt. */
   desktop: true,
   openPreview: (request: PreviewRequest): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('preview:open', request),
+  openSessionWindow: (
+    request: SessionWindowRequest,
+  ): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('session:open', request),
 })

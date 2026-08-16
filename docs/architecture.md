@@ -157,6 +157,30 @@ Three consequences worth stating:
   listing query calls `public.server_label()` instead of joining `servers`,
   so the address, the login and the host key stay with the people who own it.
 
+### Sessions are navigable, and connect only when opened
+
+Sessions used to be a tab strip inside a project, which was wrong in two ways.
+A session is the thing you are actually looking at, so it belongs where
+everything else you navigate to lives — the sidebar, where several projects'
+sessions can be visible at once, which tabs could never show. And opening a
+project attached a terminal and a feed immediately, spending an SSH channel and
+a tmux client before anyone had asked to look at anything.
+
+Now a project opens to a list, nothing is connected, and entering a session is
+what attaches. Listing costs one database query for every session the caller
+can see (`GET /api/sessions`) and touches no server at all — a machine that is
+asleep should not make the sidebar slow or empty. The attached-device count
+does need tmux, so it is opt-in via `?live=true` and asked for only when you
+are looking at a session and the number means something.
+
+**Several at once is an operating system problem.** People run more than one
+agent and want to see them side by side, so a session can be opened in a window
+of its own rather than into panes and splitters we would have to build. A
+tiling window manager arranges those across as many monitors as there are, and
+a plain one lets you drag them where you like. The same URL works as a browser
+popup, and renders the same components — the window is an entry point, not a
+second implementation.
+
 ### Sessions are individual
 
 Sharing a project shares the code and the machine. It must not share the coding

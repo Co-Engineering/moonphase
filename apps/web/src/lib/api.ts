@@ -380,7 +380,14 @@ export const api = {
       method: 'DELETE',
     }),
 
-  sessions: (projectId: string) => request<Session[]>(`/api/projects/${projectId}/sessions`),
+  /**
+   * Sessions in one project. `live` costs an SSH round trip for the attached
+   * device count, so it is off unless you are actually looking at a session.
+   */
+  sessions: (projectId: string, live = false) =>
+    request<Session[]>(`/api/projects/${projectId}/sessions${live ? '?live=true' : ''}`),
+  /** Every session the caller can see, in one query. For the sidebar. */
+  allSessions: () => request<Session[]>('/api/sessions'),
   startSession: (projectId: string, restart = false, session?: string) =>
     request<Session>(`/api/projects/${projectId}/sessions/start`, {
       method: 'POST',

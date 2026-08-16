@@ -1587,3 +1587,73 @@ button.linkish:hover:not(:disabled) {
   font-size: 11px;
   padding: 3px 10px;
 }
+
+/* --- sessions ----------------------------------------------------------------
+ *
+ * Sessions live in the sidebar rather than in a tab strip. A session is the
+ * thing you are actually looking at, so it belongs where everything else you
+ * can navigate to lives — and several projects' sessions can be visible at
+ * once, which tabs could never show.
+ */
+
+.tree-session {
+  padding-left: 40px;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.session-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 8px 4px 4px;
+}
+
+.session-enter {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: none;
+  border: none;
+  text-align: left;
+  padding: 8px;
+  cursor: pointer;
+  color: var(--text);
+  min-width: 0;
+}
+
+.session-enter:hover {
+  color: var(--accent);
+}
+
+.session-name {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.session-meta {
+  color: var(--text-faint);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A session in its own window is the whole window. */
+.session-window {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg);
+}
