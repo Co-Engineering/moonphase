@@ -229,6 +229,24 @@ Two details are load-bearing:
   and connects to the first address it gets. Node binds `localhost` to ::1, so
   a request that resolves to 127.0.0.1 first simply fails against Vite.
 
+Two properties of the proxy are deliberate and worth knowing:
+
+- **It binds loopback and cannot be configured otherwise.** The port tunnels
+  take their bind address from settings, because exposing one port of one
+  container to a phone is what they are for. A SOCKS proxy is a general network
+  path *as the container*, with no authentication in front of it — Chromium
+  implements no SOCKS5 auth — so following that setting would mean anyone who
+  enabled phone previews published an open proxy into their container.
+- **Opening one requires control access, not observation.** Whoever holds a
+  preview can POST to the app's own API. Someone shared in to watch a session
+  can see what the agent is doing; acting on it through a side door is a
+  different thing, and view-only has to mean it.
+
+What remains, and is the same trust boundary the tunnels already have: any
+local process on the backend host can use an open proxy. On a desktop install
+that host is your own machine and grants nothing new. On a shared backend it
+means container-level network access for anyone with a local account there.
+
 The limitation is honest and worth stating: a proxy only helps a client whose
 proxy we can set. That is the Electron window. A phone or an external browser
 still gets a forwarded port, which is enough for a single service and cannot be

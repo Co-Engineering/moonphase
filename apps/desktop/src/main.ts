@@ -67,12 +67,41 @@ function createWindow(): void {
  * ports, absolute URLs, websockets and CORS all behave exactly as they would
  * if the code were running on this machine.
  */
+/**
+ * The renderer is our own app, but it renders whatever an agent writes into a
+ * terminal, and this is the one call that can point a window at an arbitrary
+ * address. Both arguments are therefore checked rather than trusted.
+ */
+function validate(request: {
+  proxyPort: number
+  url: string
+}): string | null {
+  if (!Number.isInteger(request.proxyPort) || request.proxyPort < 1 || request.proxyPort > 65535) {
+    return 'Invalid proxy port.'
+  }
+  let parsed: URL
+  try {
+    parsed = new URL(request.url)
+  } catch {
+    return 'Invalid preview URL.'
+  }
+  // http(s) only. `file:` would read the local disk into a window the proxy
+  // does not even apply to, and the other schemes have no business here.
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return `Refusing to preview a ${parsed.protocol} URL.`
+  }
+  return null
+}
+
 async function openPreview(request: {
   projectId: string
   projectName: string
   proxyPort: number
   url: string
 }): Promise<{ ok: boolean; error?: string }> {
+  const invalid = validate(request)
+  if (invalid) return { ok: false, error: invalid }
+
   const existing = previews.get(request.projectId)
   if (existing && !existing.isDestroyed()) {
     existing.focus()
@@ -118,7 +147,12 @@ async function openPreview(request: {
   // navigation, and sending it to the real browser would drop it off the proxy
   // and back onto this machine's localhost.
   preview.webContents.setWindowOpenHandler(({ url }) => {
-    void preview.loadURL(url)
+    // The app's own navigation stays in this window, on the proxy. Sending it
+    // to the real browser would drop it back onto this machine's localhost,
+    // where it means something else entirely.
+    if (validate({ proxyPort: request.proxyPort, url }) === null) {
+      void preview.loadURL(url)
+    }
     return { action: 'deny' }
   })
 

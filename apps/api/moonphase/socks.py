@@ -66,6 +66,19 @@ RELAY_TIMEOUT_SECONDS = 3600
 # A handshake is four small reads. Anything slower is not a browser.
 HANDSHAKE_TIMEOUT_SECONDS = 15.0
 
+# Loopback, always, and not configurable.
+#
+# The port tunnels take their bind address from settings, because a tunnel
+# exposes exactly one port of one container and reaching it from a phone is the
+# point. This is not that. A SOCKS proxy is a general network path *as the
+# container*, unauthenticated — Chromium does not implement SOCKS5
+# username/password, so there is nothing to authenticate with — and the only
+# client that can use it is one whose proxy setting we control, which is on this
+# machine by definition. Following `MOONPHASE_PREVIEW_BIND` would mean anyone
+# who set it to 0.0.0.0 for phone previews, exactly as the sample config
+# suggests, silently published an open proxy into their container.
+BIND_ADDRESS = "127.0.0.1"
+
 
 def relay_command(container: str, host: str, port: int) -> str:
     """Shell command that connects to `host:port` from inside the container.
@@ -134,12 +147,12 @@ class ProjectProxy:
         self._server: asyncio.AbstractServer | None = None
         self._connections = 0
 
-    async def start(self, bind: str = "127.0.0.1") -> int:
-        self._server = await asyncio.start_server(self._handle, bind, 0)
+    async def start(self) -> int:
+        self._server = await asyncio.start_server(self._handle, BIND_ADDRESS, 0)
         self.local_port = self._server.sockets[0].getsockname()[1]
         log.info(
             "socks proxy for %s on %s:%d -> %s",
-            self.project_id, bind, self.local_port, self.container,
+            self.project_id, BIND_ADDRESS, self.local_port, self.container,
         )
         return self.local_port
 
@@ -322,7 +335,7 @@ class ProxyRegistry:
         self._lock = asyncio.Lock()
 
     async def ensure(
-        self, *, project_id: str, container: str, target: SSHTarget, bind: str
+        self, *, project_id: str, container: str, target: SSHTarget
     ) -> ProjectProxy:
         async with self._lock:
             existing = self._proxies.get(project_id)
@@ -335,7 +348,7 @@ class ProxyRegistry:
                 await existing.stop()
 
             proxy = ProjectProxy(project_id, container, target)
-            await proxy.start(bind)
+            await proxy.start()
             self._proxies[project_id] = proxy
             return proxy
 

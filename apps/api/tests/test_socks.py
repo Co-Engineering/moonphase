@@ -47,6 +47,33 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+# --- what it must never become ----------------------------------------------
+
+
+def test_the_proxy_can_only_ever_bind_loopback() -> None:
+    """The one setting that would have turned this into an open relay.
+
+    Port tunnels take their bind address from configuration, because exposing a
+    single port of one container to a phone is the point of them, and the sample
+    config duly suggests 0.0.0.0. A SOCKS proxy is not that: it is a general,
+    unauthenticated network path *as the container* — Chromium implements no
+    SOCKS5 authentication, so there is nothing to put in front of it — and the
+    only client that can use it is one whose proxy setting we set, which is on
+    this machine.
+
+    So the address is a constant and `ensure` takes no bind argument. Following
+    configuration here would mean anyone who enabled phone previews published an
+    open proxy into their own container.
+    """
+    import inspect
+
+    assert socks.BIND_ADDRESS == "127.0.0.1"
+    assert "bind" not in inspect.signature(socks.ProxyRegistry.ensure).parameters, (
+        "a caller must not be able to choose where the proxy listens"
+    )
+    assert "bind" not in inspect.signature(socks.ProjectProxy.start).parameters
+
+
 # --- the protocol, without needing a container ------------------------------
 
 
@@ -191,7 +218,6 @@ async def test_the_container_is_reachable_by_its_own_addresses(fake_server: str)
 
         proxy = await socks.registry.ensure(
             project_id="socks-test", container=container, target=target,
-            bind="127.0.0.1",
         )
         assert proxy.local_port > 0
         print(f"\n  proxy listening on 127.0.0.1:{proxy.local_port}")

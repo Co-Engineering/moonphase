@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from .. import preview, runtime, socks, ssh
 from ..auth import Principal, current_principal
 from ..config import get_settings
-from ..runtime import CAN_OBSERVE, NotFound
+from ..runtime import CAN_CONTROL, CAN_OBSERVE, NotFound
 from ..schemas import DetectedPortOut, PreviewOut, PreviewServiceOut
 from ..ssh import SSHError
 
@@ -78,9 +78,14 @@ async def open_preview(
     be rewritten, nothing has to be declared, and an app that hardcodes a port
     or serves on 80 works the same as one that does everything properly.
     """
+    # Control, not observation. A preview is a live network path into the
+    # container: whoever holds it can POST to the app's own API and change
+    # whatever that API changes. Someone shared in to watch a session can see
+    # what the agent is doing; acting on it through a side door is a different
+    # thing, and view-only has to mean it.
     try:
         ctx = await runtime.load_project_context(
-            principal.claims, project_id, require=CAN_OBSERVE
+            principal.claims, project_id, require=CAN_CONTROL
         )
     except NotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -91,7 +96,6 @@ async def open_preview(
             project_id=str(project_id),
             container=ctx.container,
             target=ctx.target,
-            bind=settings.moonphase_preview_bind,
         )
     except OSError as exc:
         raise HTTPException(
@@ -138,7 +142,7 @@ async def close_preview(
 ) -> None:
     try:
         await runtime.load_project_context(
-            principal.claims, project_id, require=CAN_OBSERVE
+            principal.claims, project_id, require=CAN_CONTROL
         )
     except NotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
