@@ -13,6 +13,7 @@ from .. import harness as harness_registry
 from ..auth import Principal, current_principal
 from ..db import service_session, user_session
 from ..schemas import (
+    EnvironmentIn,
     EnvironmentOut,
     HarnessCredentialIn,
     HarnessCredentialOut,
@@ -89,17 +90,101 @@ async def list_harnesses(
 
 
 @router.get("/environments", response_model=list[EnvironmentOut])
-async def list_environments() -> list[EnvironmentOut]:
-    """Base distributions a project container can run on."""
+async def list_environments(
+    principal: Principal = Depends(current_principal),
+) -> list[EnvironmentOut]:
+    """Base images a project container can run on.
+
+    Moonphase's own entries plus anything this organization has defined. A
+    custom entry sharing a key with a built-in replaces it, which is how you
+    pin a familiar name to a different base.
+    """
+    async with user_session(principal.claims) as conn:
+        org_id = await queries.personal_org_id(conn)
+        rows = await queries.list_environments(conn)
+        counts: dict[str, int] = {}
+        if org_id is not None:
+            for env in environments.merge(rows):
+                counts[env.key] = await queries.count_projects_using_environment(
+                    conn, org_id, env.key
+                )
+
     return [
         EnvironmentOut(
             key=env.key,
             display_name=env.display_name,
             description=env.description,
             base_image=env.base_image,
+            setup_script=env.setup_script,
+            builtin=env.builtin,
+            project_count=counts.get(env.key, 0),
         )
-        for env in environments.available()
+        for env in environments.merge(rows)
     ]
+
+
+@router.put("/environments", response_model=EnvironmentOut)
+async def upsert_environment(
+    payload: EnvironmentIn, principal: Principal = Depends(current_principal)
+) -> EnvironmentOut:
+    """Define or update an environment.
+
+    The image is built on the server the first time a project uses it, so this
+    returns immediately rather than waiting on a build that may take minutes.
+    """
+    async with user_session(principal.claims) as conn:
+        try:
+            org_id = await queries.resolve_org(conn, payload.org_id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        try:
+            row = await queries.upsert_environment(
+                conn,
+                org_id=org_id,
+                key=payload.key,
+                display_name=payload.display_name.strip(),
+                description=(payload.description or "").strip() or None,
+                base_image=payload.base_image,
+                setup_script=(payload.setup_script or "").strip() or None,
+                created_by=principal.user_id,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        count = await queries.count_projects_using_environment(conn, org_id, payload.key)
+
+    env = environments.from_row(row)
+    return EnvironmentOut(
+        key=env.key,
+        display_name=env.display_name,
+        description=env.description,
+        base_image=env.base_image,
+        setup_script=env.setup_script,
+        builtin=False,
+        project_count=count,
+    )
+
+
+@router.delete("/environments/{key}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_environment(
+    key: str, principal: Principal = Depends(current_principal)
+) -> None:
+    """Remove a custom environment.
+
+    Existing projects keep running: their containers are already built, and the
+    project falls back to the default only if it is ever recreated.
+    """
+    async with user_session(principal.claims) as conn:
+        org_id = await queries.resolve_org(conn, None)
+        deleted = await queries.delete_environment(conn, org_id, key)
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No custom environment with that key. Built-in environments "
+                "cannot be deleted, only shadowed by defining one with the "
+                "same key."
+            ),
+        )
 
 
 @router.get("/harness-credentials", response_model=list[HarnessCredentialOut])

@@ -9,7 +9,16 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from .. import docker_remote, environments, preview, queries, runtime, sessions, ssh
+from .. import (
+    docker_remote,
+    environments,
+    imagebuild,
+    preview,
+    queries,
+    runtime,
+    sessions,
+    ssh,
+)
 from .. import harness as harness_registry
 from ..auth import Principal, current_principal
 from ..config import get_settings
@@ -72,15 +81,18 @@ async def create_project(
     settings = get_settings()
     del settings  # image comes from the project's environment, below
 
-    environment = environments.get(payload.environment)
-    if payload.environment and payload.environment not in environments.keys():
+    async with user_session(principal.claims) as conn:
+        environment_rows = await queries.list_environments(conn)
+    known = {env.key for env in environments.merge(environment_rows)}
+    if payload.environment and payload.environment not in known:
         raise HTTPException(
             status_code=422,
             detail=(
                 f"Unknown environment {payload.environment!r}. "
-                f"Available: {', '.join(environments.keys())}."
+                f"Available: {', '.join(sorted(known))}."
             ),
         )
+    environment = environments.resolve(payload.environment, environment_rows)
 
     async with user_session(principal.claims) as conn:
         server = await queries.get_server(conn, payload.server_id)
@@ -158,7 +170,7 @@ async def create_project(
             container=container,
             workspace_volume=workspace_volume,
             home_volume=home_volume,
-            image=environment.image,
+            environment=environment,
             repo_url=payload.repo_url,
             preview_port=None,
             cpus=payload.cpus,
@@ -197,7 +209,7 @@ async def _provision_container(
     container: str,
     workspace_volume: str,
     home_volume: str,
-    image: str,
+    environment: environments.Environment,
     repo_url: str | None,
     preview_port: int | None,
     cpus: str | None,
@@ -206,14 +218,18 @@ async def _provision_container(
     target = await runtime.load_server_target(principal.claims, server_id)
     conn_ssh = await ssh.pool.get(target)
 
-    if not await docker_remote.image_present(conn_ssh, image):
-        log.info("pulling %s on server %s", image, server_id)
-        pulled = await docker_remote.pull(conn_ssh, image)
-        if not pulled.ok:
-            raise SSHError(
-                f"Could not pull image {image}: "
-                f"{(pulled.stderr or pulled.stdout).strip()[:300]}"
-            )
+    # Environments are recipes, not published images: build on the server the
+    # first time one is used. The tag encodes the recipe, so this is a no-op
+    # afterwards and a fresh build whenever the definition changes.
+    built = await imagebuild.ensure_image(
+        conn_ssh,
+        tag=environment.image,
+        base_image=environment.base_image,
+        setup_script=environment.setup_script,
+    )
+    if built:
+        log.info("built %s on server %s", environment.image, server_id)
+    image = environment.image
 
     await docker_remote.volume_create(conn_ssh, workspace_volume)
     await docker_remote.volume_create(conn_ssh, home_volume)

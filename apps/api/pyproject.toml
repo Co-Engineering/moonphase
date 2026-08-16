@@ -46,5 +46,10 @@ ignore = [
     "ASYNC109",
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# Holds a generated Dockerfile as a string literal. Its lines are content, and
+# wrapping them to satisfy a Python line limit would corrupt the recipe.
+"moonphase/imagebuild.py" = ["E501"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

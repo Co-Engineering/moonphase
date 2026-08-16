@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, type GitHubDevice, type HarnessLogin, type WorkspaceProfile } from '../lib/api'
+import {
+  api,
+  type Environment,
+  type GitHubDevice,
+  type HarnessLogin,
+  type WorkspaceProfile,
+} from '../lib/api'
 
 interface Props {
   onClose: () => void
   onSaved: () => void
 }
 
-type Tab = 'accounts' | 'harness' | 'environment'
+type Tab = 'accounts' | 'harness' | 'environments' | 'workspace'
 
 /**
  * Global settings.
@@ -60,13 +66,20 @@ export function Settings({ onClose, onSaved }: Props) {
         </p>
 
         <div className="tabs">
-          {(['accounts', 'harness', 'environment'] as Tab[]).map((t) => (
+          {(
+            [
+              ['accounts', 'Accounts'],
+              ['harness', 'Claude'],
+              ['environments', 'Environments'],
+              ['workspace', 'Workspace'],
+            ] as [Tab, string][]
+          ).map(([key, label]) => (
             <button
-              key={t}
-              className={`tab${tab === t ? ' active' : ''}`}
-              onClick={() => setTab(t)}
+              key={key}
+              className={`tab${tab === key ? ' active' : ''}`}
+              onClick={() => setTab(key)}
             >
-              {t === 'accounts' ? 'Accounts' : t === 'harness' ? 'Claude' : 'Environment'}
+              {label}
             </button>
           ))}
         </div>
@@ -80,8 +93,10 @@ export function Settings({ onClose, onSaved }: Props) {
           <AccountsTab profile={profile} busy={busy} run={run} />
         ) : tab === 'harness' ? (
           <HarnessSettingsTab profile={profile} busy={busy} run={run} />
+        ) : tab === 'environments' ? (
+          <EnvironmentsTab busy={busy} run={run} />
         ) : (
-          <EnvironmentTab profile={profile} busy={busy} run={run} />
+          <WorkspaceTab profile={profile} busy={busy} run={run} />
         )}
 
         <div className="actions" style={{ marginTop: 18 }}>
@@ -548,7 +563,7 @@ function HarnessSettingsTab({
 
 // --- environment ------------------------------------------------------------
 
-function EnvironmentTab({
+function WorkspaceTab({
   profile,
   busy,
   run,
@@ -647,4 +662,246 @@ function EnvironmentTab({
       </div>
     </>
   )
+}
+
+// --- environments -----------------------------------------------------------
+
+const BLANK: EnvironmentInput = {
+  key: '',
+  display_name: '',
+  description: '',
+  base_image: '',
+  setup_script: '',
+}
+
+type EnvironmentInput = {
+  key: string
+  display_name: string
+  description: string
+  base_image: string
+  setup_script: string
+}
+
+/**
+ * Defining an environment.
+ *
+ * An environment is a base image plus optional setup commands; Moonphase
+ * layers tmux, the harness and the rest on top and builds it on the server the
+ * first time a project uses it. There is no registry to push to and nothing to
+ * pre-build, so adding one is data entry.
+ */
+function EnvironmentsTab({ busy, run }: { busy: boolean; run: Runner }) {
+  const [items, setItems] = useState<Environment[]>([])
+  const [draft, setDraft] = useState<EnvironmentInput | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    try {
+      setItems(await api.environments())
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const save = async () => {
+    if (!draft) return
+    await run(async () => {
+      await api.saveEnvironment({
+        key: draft.key,
+        display_name: draft.display_name,
+        description: draft.description || null,
+        base_image: draft.base_image,
+        setup_script: draft.setup_script || null,
+      })
+      await load()
+      setDraft(null)
+    }, 'Environment saved. It builds on the server the first time a project uses it.')
+  }
+
+  const remove = (env: Environment) =>
+    run(async () => {
+      await api.deleteEnvironment(env.key)
+      await load()
+    }, `Removed ${env.display_name}.`)
+
+  if (draft) {
+    return (
+      <>
+        <h3>{items.some((e) => e.key === draft.key && !e.builtin) ? 'Edit' : 'New'} environment</h3>
+        <p className="hint">
+          Any Debian or Ubuntu family image works — Moonphase installs tmux, the harness
+          and its own tooling on top. The image is built on your server, so nothing needs
+          publishing anywhere.
+        </p>
+
+        {error && <div className="banner error">{error}</div>}
+
+        <div className="row">
+          <label>
+            <span>Name</span>
+            <input
+              value={draft.display_name}
+              onChange={(e) => {
+                const display_name = e.target.value
+                setDraft({
+                  ...draft,
+                  display_name,
+                  // Derive the key while it is untouched; it is immutable once saved.
+                  key:
+                    draft.key === '' || draft.key === slugify(draft.display_name)
+                      ? slugify(display_name)
+                      : draft.key,
+                })
+              }}
+              placeholder="Rust nightly"
+              autoFocus
+            />
+          </label>
+          <label>
+            <span>Key</span>
+            <input
+              value={draft.key}
+              onChange={(e) => setDraft({ ...draft, key: e.target.value })}
+              placeholder="rust-nightly"
+            />
+          </label>
+        </div>
+
+        <label>
+          <span>Base image</span>
+          <input
+            value={draft.base_image}
+            onChange={(e) => setDraft({ ...draft, base_image: e.target.value })}
+            placeholder="debian:bookworm-slim"
+          />
+        </label>
+        <p className="hint" style={{ marginTop: -6 }}>
+          For example <code>ubuntu:22.04</code>, <code>python:3.12-bookworm</code>,{' '}
+          <code>node:20-bookworm</code> or <code>nvidia/cuda:12.4.1-devel-ubuntu22.04</code>.
+        </p>
+
+        <label>
+          <span>Description (optional)</span>
+          <input
+            value={draft.description}
+            onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+            placeholder="What this is for"
+          />
+        </label>
+
+        <label>
+          <span>Setup commands (optional)</span>
+          <textarea
+            value={draft.setup_script}
+            onChange={(e) => setDraft({ ...draft, setup_script: e.target.value })}
+            placeholder={
+              'apt-get update\napt-get install -y --no-install-recommends postgresql-client\nrm -rf /var/lib/apt/lists/*'
+            }
+            rows={6}
+          />
+        </label>
+        <p className="hint" style={{ marginTop: -6 }}>
+          Run as root during the build, exactly as written. Anything a Dockerfile{' '}
+          <code>RUN</code> could do.
+        </p>
+
+        <div className="actions">
+          <button
+            className="primary"
+            disabled={busy || !draft.key.trim() || !draft.base_image.trim()}
+            onClick={() => void save()}
+          >
+            Save environment
+          </button>
+          <div className="spacer" />
+          <button onClick={() => setDraft(null)}>Cancel</button>
+        </div>
+      </>
+    )
+  }
+
+  return (
+    <>
+      <p className="hint">
+        What a project&apos;s container is built from. Moonphase adds tmux, git, the
+        harness and its tunnelling tools to whichever base you choose, then builds the
+        image on the server the first time it is needed.
+      </p>
+
+      {error && <div className="banner error">{error}</div>}
+      {loading && <p className="hint">Loading…</p>}
+
+      {items.map((env) => (
+        <div className="card inner" key={env.key}>
+          <div className="row-between">
+            <div style={{ minWidth: 0 }}>
+              <h3>
+                {env.display_name}
+                {env.builtin && <span className="badge">built-in</span>}
+              </h3>
+              <p className="hint">
+                <code>{env.base_image}</code>
+                {env.description ? ` — ${env.description}` : ''}
+              </p>
+              {env.setup_script && (
+                <details className="pane-details">
+                  <summary>Setup commands</summary>
+                  <pre className="pane">{env.setup_script}</pre>
+                </details>
+              )}
+              {env.project_count > 0 && (
+                <p className="hint" style={{ marginBottom: 0 }}>
+                  Used by {env.project_count} project{env.project_count === 1 ? '' : 's'}.
+                </p>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+              <button
+                onClick={() =>
+                  setDraft({
+                    // Editing a built-in creates a custom one with the same key,
+                    // which shadows it everywhere without touching any project.
+                    key: env.key,
+                    display_name: env.display_name,
+                    description: env.description ?? '',
+                    base_image: env.base_image,
+                    setup_script: env.setup_script ?? '',
+                  })
+                }
+              >
+                {env.builtin ? 'Customise' : 'Edit'}
+              </button>
+              {!env.builtin && (
+                <button className="danger" disabled={busy} onClick={() => void remove(env)}>
+                  Delete
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      ))}
+
+      <div className="actions">
+        <button className="primary" onClick={() => setDraft({ ...BLANK })}>
+          New environment
+        </button>
+      </div>
+    </>
+  )
+}
+
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
 }

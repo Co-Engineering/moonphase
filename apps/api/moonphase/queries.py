@@ -698,6 +698,93 @@ async def upsert_profile(
 
 
 # ---------------------------------------------------------------------------
+# Environments
+# ---------------------------------------------------------------------------
+
+
+async def list_environments(conn: AsyncConnection) -> list[dict[str, Any]]:
+    result = await conn.execute(
+        text(
+            """
+            select id, org_id, key, display_name, description, base_image,
+                   setup_script, created_at, updated_at
+            from environments
+            order by display_name
+            """
+        )
+    )
+    return [_row_to_dict(r) for r in result]
+
+
+async def upsert_environment(
+    conn: AsyncConnection,
+    *,
+    org_id: UUID,
+    key: str,
+    display_name: str,
+    description: str | None,
+    base_image: str,
+    setup_script: str | None,
+    created_by: str,
+) -> dict[str, Any]:
+    result = await conn.execute(
+        text(
+            """
+            insert into environments
+              (org_id, key, display_name, description, base_image, setup_script,
+               created_by)
+            values
+              (:org_id, :key, :display_name, :description, :base_image,
+               :setup_script, :created_by)
+            on conflict (org_id, key) do update set
+              display_name = excluded.display_name,
+              description  = excluded.description,
+              base_image   = excluded.base_image,
+              setup_script = excluded.setup_script
+            returning id, org_id, key, display_name, description, base_image,
+                      setup_script, created_at, updated_at
+            """
+        ),
+        {
+            "org_id": org_id,
+            "key": key,
+            "display_name": display_name,
+            "description": description,
+            "base_image": base_image,
+            "setup_script": setup_script,
+            "created_by": created_by,
+        },
+    )
+    row = result.first()
+    if row is None:
+        raise PermissionError("Not allowed to define environments in this organization.")
+    return _row_to_dict(row)
+
+
+async def delete_environment(conn: AsyncConnection, org_id: UUID, key: str) -> bool:
+    result = await conn.execute(
+        text(
+            "delete from environments where org_id = :org_id and key = :key "
+            "returning id"
+        ),
+        {"org_id": org_id, "key": key},
+    )
+    return result.first() is not None
+
+
+async def count_projects_using_environment(
+    conn: AsyncConnection, org_id: UUID, key: str
+) -> int:
+    result = await conn.execute(
+        text(
+            "select count(*) from projects where org_id = :org_id and environment = :key"
+        ),
+        {"org_id": org_id, "key": key},
+    )
+    return int(result.scalar_one())
+
+
+# ---------------------------------------------------------------------------
 # VCS credentials (privileged)
 # ---------------------------------------------------------------------------
 

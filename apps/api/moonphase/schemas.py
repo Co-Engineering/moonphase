@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
@@ -199,6 +200,39 @@ class EnvironmentOut(BaseModel):
     display_name: str
     description: str
     base_image: str
+    setup_script: str | None = None
+    # Ships with Moonphase, so it cannot be deleted (only shadowed).
+    builtin: bool = True
+    # Projects currently using it, so the UI can warn before deleting.
+    project_count: int = 0
+
+
+class EnvironmentIn(BaseModel):
+    org_id: UUID | None = None
+    key: str = Field(min_length=2, max_length=40)
+    display_name: str = Field(min_length=1, max_length=64)
+    description: str | None = None
+    base_image: str = Field(min_length=1, max_length=200)
+    setup_script: str | None = None
+
+    @field_validator("key")
+    @classmethod
+    def _slug(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,38}[a-z0-9]", v):
+            raise ValueError(
+                "Key must be lowercase letters, digits and hyphens, and start "
+                "and end with a letter or digit."
+            )
+        return v
+
+    @field_validator("base_image")
+    @classmethod
+    def _image(cls, v: str) -> str:
+        v = v.strip()
+        if " " in v:
+            raise ValueError("Base image must not contain spaces.")
+        return v
 
 
 # --- workspace profile ------------------------------------------------------

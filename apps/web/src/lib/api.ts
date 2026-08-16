@@ -150,6 +150,18 @@ export interface Environment {
   display_name: string
   description: string
   base_image: string
+  setup_script: string | null
+  /** Ships with Moonphase; cannot be deleted, only shadowed. */
+  builtin: boolean
+  project_count: number
+}
+
+export interface EnvironmentInput {
+  key: string
+  display_name: string
+  description?: string | null
+  base_image: string
+  setup_script?: string | null
 }
 
 export interface WorkspaceProfile {
@@ -210,6 +222,13 @@ export const api = {
   organizations: () => request<Organization[]>('/api/organizations'),
   harnesses: () => request<HarnessInfo[]>('/api/harnesses'),
   environments: () => request<Environment[]>('/api/environments'),
+  saveEnvironment: (input: EnvironmentInput) =>
+    request<Environment>('/api/environments', {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    }),
+  deleteEnvironment: (key: string) =>
+    request<void>(`/api/environments/${key}`, { method: 'DELETE' }),
 
   servers: () => request<Server[]>('/api/servers'),
   server: (id: string) => request<Server>(`/api/servers/${id}`),

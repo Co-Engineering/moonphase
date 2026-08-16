@@ -753,3 +753,18 @@ button.linkish:hover:not(:disabled) {
   word-break: break-all;
   margin: 6px 0 0;
 }
+
+.badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 20px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-input);
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
