@@ -170,10 +170,23 @@ class SessionOut(ORMModel):
     started_at: datetime | None
     last_attached_at: datetime | None
     transcript_path: str | None
+    activity: str = "unknown"
+    activity_detail: str | None = None
+    # Devices currently viewing this session. Live from tmux, not stored:
+    # a stale count would be worse than none.
+    attached_clients: int = 0
+    # True when it exists in tmux right now.
+    alive: bool = False
 
 
 class SessionStartIn(BaseModel):
     restart: bool = False
+    # Which tmux session. Defaults to the project's first.
+    session: str | None = None
+
+
+class SessionCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=48)
 
 
 class SendKeysIn(BaseModel):

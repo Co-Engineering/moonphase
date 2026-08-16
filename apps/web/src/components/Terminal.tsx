@@ -9,6 +9,8 @@ type Status = 'connecting' | 'attached' | 'disconnected' | 'error'
 
 interface Props {
   projectId: string
+  /** Which tmux session to attach to. Changing it reattaches. */
+  session?: string
   onStatusChange?: (status: Status, detail?: string) => void
 }
 
@@ -19,7 +21,7 @@ interface Props {
  * enforced on the server, but it is why reconnecting is cheap and why we
  * reconnect automatically rather than asking the user to.
  */
-export function ProjectTerminal({ projectId, onStatusChange }: Props) {
+export function ProjectTerminal({ projectId, session, onStatusChange }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const termRef = useRef<Terminal | null>(null)
   const socketRef = useRef<WebSocket | null>(null)
@@ -95,7 +97,7 @@ export function ProjectTerminal({ projectId, onStatusChange }: Props) {
       if (disposedRef.current) return
       setStatus('connecting')
 
-      const url = await terminalUrl(projectId, term.cols, term.rows)
+      const url = await terminalUrl(projectId, term.cols, term.rows, session)
       // terminalUrl awaits the auth token; the component may have unmounted
       // in the meantime, and opening a socket now would leak it.
       if (disposedRef.current) return
@@ -192,7 +194,7 @@ export function ProjectTerminal({ projectId, onStatusChange }: Props) {
       window.setTimeout(() => term.dispose(), 0)
       termRef.current = null
     }
-  }, [projectId])
+  }, [projectId, session])
 
   return (
     <div className="terminal-wrap">

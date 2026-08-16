@@ -28,6 +28,7 @@ from ..schemas import (
     ProjectCreate,
     ProjectOut,
     SendKeysIn,
+    SessionCreateIn,
     SessionOut,
     SessionStartIn,
 )
@@ -337,12 +338,177 @@ async def stop_project(
 async def list_sessions(
     project_id: UUID, principal: Principal = Depends(current_principal)
 ) -> list[SessionOut]:
+    """Sessions in this project, with live liveness and attached device counts.
+
+    The counts come from tmux rather than the database on purpose: a stored
+    count goes stale the moment a client drops, and a wrong "2 devices
+    attached" is worse than not showing one.
+    """
     async with user_session(principal.claims) as conn:
         project = await queries.get_project(conn, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found.")
         rows = await queries.get_sessions(conn, project_id)
-    return [SessionOut.model_validate(r) for r in rows]
+
+    live: dict[str, int] = {}
+    if project.get("container_name") and project["status"] == "running":
+        try:
+            ctx = await runtime.load_project_context(principal.claims, project_id)
+            conn_ssh = await ssh.pool.get(ctx.target)
+            for row in rows:
+                name = str(row["tmux_session"])
+                if await sessions.session_exists(conn_ssh, ctx.container, name):
+                    live[name] = len(
+                        await sessions.list_clients(conn_ssh, ctx.container, name)
+                    )
+        except (SSHError, NotFound) as exc:
+            # An unreachable server should not blank the list; the rows are
+            # still the truth about which sessions exist.
+            log.debug("could not read live session state: %s", exc)
+
+    return [
+        SessionOut.model_validate(
+            {
+                **row,
+                "alive": row["tmux_session"] in live,
+                "attached_clients": live.get(str(row["tmux_session"]), 0),
+            }
+        )
+        for row in rows
+    ]
+
+
+@router.post(
+    "/{project_id}/sessions",
+    response_model=SessionOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_session(
+    project_id: UUID,
+    payload: SessionCreateIn,
+    principal: Principal = Depends(current_principal),
+) -> SessionOut:
+    """Add a second agent to a project.
+
+    Sessions share the workspace volume, so two agents can work the same
+    checkout — which is the point, and also why the UI should make it obvious
+    they are not isolated from each other.
+    """
+    name = sessions.sanitise_name(payload.name)
+
+    try:
+        ctx = await runtime.load_project_context(principal.claims, project_id)
+    except NotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    async with user_session(principal.claims) as conn:
+        existing = await queries.get_sessions(conn, project_id)
+    if any(row["tmux_session"] == name for row in existing):
+        raise HTTPException(
+            status_code=409, detail=f"This project already has a session called {name!r}."
+        )
+
+    workspace_profile = await runtime.load_profile(
+        principal.claims, ctx.project["org_id"], project_id, ctx.harness
+    )
+
+    conn_ssh = await ssh.pool.get(ctx.target)
+    container = await docker_remote.inspect(conn_ssh, ctx.container)
+    if container is None:
+        raise HTTPException(status_code=409, detail="The project container is gone.")
+    if container.state != "running":
+        await docker_remote.start(conn_ssh, ctx.container)
+
+    try:
+        await sessions.ensure_session(
+            conn_ssh,
+            ctx.container,
+            harness_kind=ctx.harness,
+            workspace_profile=workspace_profile,
+            session=name,
+        )
+    except SSHError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    async with user_session(principal.claims) as conn:
+        row = await queries.upsert_session(
+            conn,
+            project_id=project_id,
+            harness=ctx.harness,
+            tmux_session=name,
+            state="running",
+            transcript_path=harness_registry.get(ctx.harness).transcript_dir(),
+            mark_started=True,
+        )
+    return SessionOut.model_validate({**row, "alive": True, "attached_clients": 0})
+
+
+@router.delete(
+    "/{project_id}/sessions/{name}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_session(
+    project_id: UUID, name: str, principal: Principal = Depends(current_principal)
+) -> None:
+    """Kill a session and forget it.
+
+    Refuses the last one: a project with no session has no terminal to open and
+    no obvious way back, so removing it would be a trap rather than a choice.
+    Use Stop to shut the whole project down instead.
+    """
+    session_name = sessions.sanitise_name(name)
+
+    async with user_session(principal.claims) as conn:
+        project = await queries.get_project(conn, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found.")
+        total = await queries.count_sessions(conn, project_id)
+
+    if total <= 1:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This is the project's only session. Stop the project instead, or "
+                "add another session first."
+            ),
+        )
+
+    try:
+        ctx = await runtime.load_project_context(principal.claims, project_id)
+        conn_ssh = await ssh.pool.get(ctx.target)
+        await sessions.kill_session(conn_ssh, ctx.container, session_name)
+    except (SSHError, NotFound) as exc:
+        # The row must still go: an unreachable server should not leave a
+        # session the user cannot remove.
+        log.warning("could not kill tmux session %s: %s", session_name, exc)
+
+    async with user_session(principal.claims) as conn:
+        removed = await queries.delete_session_row(conn, project_id, session_name)
+    if not removed:
+        raise HTTPException(status_code=404, detail="No such session.")
+
+
+@router.post(
+    "/{project_id}/sessions/{name}/detach-clients",
+    status_code=status.HTTP_200_OK,
+)
+async def detach_clients(
+    project_id: UUID, name: str, principal: Principal = Depends(current_principal)
+) -> dict[str, int]:
+    """Detach every device from a session, without disturbing the session.
+
+    The escape hatch for phantom clients: `docker exec` leaves its process
+    running when a client vanishes, so a crashed app or a killed backend can
+    leave attachments behind that still constrain the window size.
+    """
+    session_name = sessions.sanitise_name(name)
+    try:
+        ctx = await runtime.load_project_context(principal.claims, project_id)
+    except NotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    conn_ssh = await ssh.pool.get(ctx.target)
+    detached = await sessions.detach_all_clients(conn_ssh, ctx.container, session_name)
+    return {"detached": detached}
 
 
 @router.post("/{project_id}/sessions/start", response_model=SessionOut)
@@ -353,6 +519,7 @@ async def start_session(
 ) -> SessionOut:
     """Ensure the harness is running in tmux. Safe to call on every project open."""
     options = payload or SessionStartIn()
+    session_name = sessions.sanitise_name(options.session or sessions.DEFAULT_SESSION)
     try:
         ctx = await runtime.load_project_context(principal.claims, project_id)
     except NotFound as exc:
@@ -378,6 +545,7 @@ async def start_session(
             ctx.container,
             harness_kind=ctx.harness,
             workspace_profile=workspace_profile,
+            session=session_name,
             restart=options.restart,
         )
     except SSHError as exc:
@@ -392,7 +560,7 @@ async def start_session(
             conn,
             project_id=project_id,
             harness=ctx.harness,
-            tmux_session=sessions.DEFAULT_SESSION,
+            tmux_session=session_name,
             state="running",
             transcript_path=harness_registry.get(ctx.harness).transcript_dir(),
             mark_started=True,

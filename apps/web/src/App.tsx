@@ -9,6 +9,7 @@ import { AddServer } from './routes/AddServer'
 import { NewProject } from './routes/NewProject'
 import { Settings } from './routes/Settings'
 import { Ports } from './components/Ports'
+import { Sessions } from './components/Sessions'
 
 export function App() {
   const [session, setSession] = useState<AuthSession | null>(null)
@@ -226,6 +227,12 @@ function ProjectView({
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [session, setSession] = useState('moonphase')
+
+  // Switching project must not leave the tab selection from the previous one.
+  useEffect(() => {
+    setSession('moonphase')
+  }, [project.id])
 
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true)
@@ -254,8 +261,8 @@ function ProjectView({
         <div className="spacer" />
         <button
           disabled={busy}
-          onClick={() => void act(() => api.startSession(project.id, true))}
-          title="Kill the tmux session and start the harness fresh"
+          onClick={() => void act(() => api.startSession(project.id, true, session))}
+          title="Kill this session and start the harness fresh"
         >
           Restart harness
         </button>
@@ -282,7 +289,13 @@ function ProjectView({
 
       {project.status === 'running' ? (
         <div className="content flush terminal-and-ports">
-          <ProjectTerminal projectId={project.id} />
+          <Sessions
+            projectId={project.id}
+            running={project.status === 'running'}
+            active={session}
+            onSelect={setSession}
+          />
+          <ProjectTerminal projectId={project.id} session={session} />
           <Ports projectId={project.id} running={project.status === 'running'} />
         </div>
       ) : (

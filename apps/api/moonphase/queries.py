@@ -309,13 +309,27 @@ PROJECT_COLUMNS = """
     p.status, p.status_detail, p.preview_port, p.preview_url, p.created_at,
     coalesce(
         (select s.activity::text from project_sessions s
-         where s.project_id = p.id order by s.created_at limit 1),
+         where s.project_id = p.id
+         order by case s.activity
+                    when 'awaiting_input' then 0
+                    when 'working' then 1
+                    when 'idle' then 2
+                    else 3
+                  end, s.created_at
+         limit 1),
         'unknown'
     ) as activity,
     (select s.activity_detail from project_sessions s
-     where s.project_id = p.id order by s.created_at limit 1) as activity_detail,
-    (select s.activity_at from project_sessions s
-     where s.project_id = p.id order by s.created_at limit 1) as activity_at
+     where s.project_id = p.id
+     order by case s.activity
+                when 'awaiting_input' then 0
+                when 'working' then 1
+                when 'idle' then 2
+                else 3
+              end, s.created_at
+     limit 1) as activity_detail,
+    (select max(s.activity_at) from project_sessions s
+     where s.project_id = p.id) as activity_at
 """
 
 
@@ -528,15 +542,37 @@ async def get_sessions(conn: AsyncConnection, project_id: UUID) -> list[dict[str
         text(
             """
             select id, project_id, tmux_session, harness, state, started_at,
-                   last_attached_at, transcript_path
+                   last_attached_at, transcript_path,
+                   activity::text as activity, activity_detail
             from project_sessions
             where project_id = :pid
-            order by tmux_session
+            order by created_at, tmux_session
             """
         ),
         {"pid": project_id},
     )
     return [_row_to_dict(r) for r in result]
+
+
+async def delete_session_row(
+    conn: AsyncConnection, project_id: UUID, tmux_session: str
+) -> bool:
+    result = await conn.execute(
+        text(
+            "delete from project_sessions "
+            "where project_id = :pid and tmux_session = :ts returning id"
+        ),
+        {"pid": project_id, "ts": tmux_session},
+    )
+    return result.first() is not None
+
+
+async def count_sessions(conn: AsyncConnection, project_id: UUID) -> int:
+    result = await conn.execute(
+        text("select count(*) from project_sessions where project_id = :pid"),
+        {"pid": project_id},
+    )
+    return int(result.scalar_one())
 
 
 async def touch_attached(

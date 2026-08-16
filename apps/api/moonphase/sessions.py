@@ -10,6 +10,7 @@ agent keeps working.
 from __future__ import annotations
 
 import logging
+import re
 import shlex
 from typing import Any
 
@@ -23,8 +24,21 @@ from .ssh import SSHError
 log = logging.getLogger(__name__)
 
 DEFAULT_SESSION = "moonphase"
+
+# tmux treats '.' and ':' as target separators, so a session called "a.b" is
+# unaddressable. Restricting the character set keeps every later `-t <name>`
+# unambiguous rather than trying to escape at each call site.
+_NAME_SAFE = re.compile(r"[^a-zA-Z0-9_-]+")
+
+
 MOONPHASE_DIR = "/home/dev/.moonphase"
 ENV_FILE = f"{MOONPHASE_DIR}/env"
+
+
+def sanitise_name(name: str) -> str:
+    """Coerce a user-supplied session name into something tmux can target."""
+    cleaned = _NAME_SAFE.sub("-", (name or "").strip()).strip("-")[:48]
+    return cleaned or DEFAULT_SESSION
 
 
 def launcher_path(session: str) -> str:
@@ -293,12 +307,67 @@ async def capture_pane(
     return result.stdout if result.ok else ""
 
 
+# Printed by the attach wrapper before tmux takes the screen, so the bridge
+# learns which tmux client it owns. Consumed by the bridge, never displayed.
+TTY_MARKER = "MOONPHASE_TTY="
+
+
 def attach_command(container: str, session: str = DEFAULT_SESSION) -> str:
     """Shell command that attaches a client to the session over a PTY.
 
     `-A` creates the session if it vanished, so a race between a health check
     and an attach cannot leave the user staring at an error.
+
+    The wrapper announces its tty first because `docker exec` does not kill the
+    process it started when its client goes away: closing the SSH channel
+    leaves `tmux attach` running inside the container forever. Those phantom
+    clients accumulate on every disconnect, and since tmux sizes a window to
+    the most recent client, a single visit from a phone would pin the desktop
+    to 60 columns permanently. Knowing our own tty lets the bridge detach
+    itself explicitly on the way out.
     """
-    return docker_remote.exec_tty_command(
-        container, ["tmux", "new-session", "-A", "-s", session], workdir="/workspace"
+    inner = (
+        f'printf "{TTY_MARKER}%s\\n" "$(tty)"; '
+        f"exec tmux new-session -A -s {shlex.quote(session)}"
     )
+    return docker_remote.exec_tty_command(
+        container, ["sh", "-c", inner], workdir="/workspace"
+    )
+
+
+async def detach_client(
+    conn: asyncssh.SSHClientConnection, container: str, tty: str
+) -> None:
+    """Detach one tmux client by its tty. Best effort."""
+    if not tty.startswith("/dev/"):
+        return
+    await docker_remote.exec_capture(
+        conn, container, ["tmux", "detach-client", "-t", tty], timeout=30
+    )
+
+
+async def list_clients(
+    conn: asyncssh.SSHClientConnection, container: str, session: str = DEFAULT_SESSION
+) -> list[str]:
+    """The ttys currently attached to a session."""
+    result = await docker_remote.exec_capture(
+        conn,
+        container,
+        ["tmux", "list-clients", "-t", session, "-F", "#{client_tty}"],
+        timeout=30,
+    )
+    return result.stdout.split() if result.ok else []
+
+
+async def detach_all_clients(
+    conn: asyncssh.SSHClientConnection, container: str, session: str = DEFAULT_SESSION
+) -> int:
+    """Detach every client. The escape hatch for phantoms already accumulated.
+
+    Detaching never touches the session itself, so this is safe to offer as a
+    plain button: worst case, an attached device reconnects a second later.
+    """
+    ttys = await list_clients(conn, container, session)
+    for tty in ttys:
+        await detach_client(conn, container, tty)
+    return len(ttys)

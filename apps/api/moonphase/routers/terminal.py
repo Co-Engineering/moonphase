@@ -36,6 +36,50 @@ router = APIRouter(tags=["terminal"])
 
 READ_CHUNK = 65536
 
+# The attach wrapper prints its tty before tmux takes over. Give it a moment,
+# but never let a missing marker stall the terminal.
+MARKER_TIMEOUT_SECONDS = 5.0
+
+
+async def _consume_tty_marker(
+    process: asyncssh.SSHClientProcess,
+) -> tuple[str | None, bytes]:
+    """Read the wrapper's tty announcement without showing it to the user.
+
+    Returns the tty and whatever bytes were read past it, which belong to tmux
+    and must still reach the client. A missing marker is not an error: it just
+    means this attach cannot detach itself precisely later.
+    """
+    buffer = b""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + MARKER_TIMEOUT_SECONDS
+
+    while b"\n" not in buffer and len(buffer) < 512:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            break
+        try:
+            chunk = await asyncio.wait_for(process.stdout.read(512), timeout=remaining)
+        except TimeoutError:
+            break
+        if not chunk:
+            break
+        buffer += chunk if isinstance(chunk, bytes) else chunk.encode()
+
+    marker = sessions.TTY_MARKER.encode()
+    index = buffer.find(marker)
+    if index == -1:
+        return None, buffer
+
+    line_end = buffer.find(b"\n", index)
+    if line_end == -1:
+        return None, buffer
+
+    tty = buffer[index + len(marker) : line_end].decode(errors="replace").strip()
+    # Keep anything before the marker (there should be nothing) and after it.
+    leftover = buffer[:index] + buffer[line_end + 1 :]
+    return tty or None, leftover
+
 
 async def _pump_output(process: asyncssh.SSHClientProcess, websocket: WebSocket) -> None:
     """Remote stdout → client."""
@@ -93,9 +137,11 @@ async def project_terminal(
     project_id: UUID,
     cols: int = Query(default=120, ge=20, le=500),
     rows: int = Query(default=32, ge=5, le=200),
+    session: str = Query(default=sessions.DEFAULT_SESSION, max_length=64),
     principal: Principal = Depends(websocket_principal),
 ) -> None:
     await websocket.accept()
+    session_name = sessions.sanitise_name(session)
 
     try:
         ctx = await runtime.load_project_context(principal.claims, project_id)
@@ -131,13 +177,14 @@ async def project_terminal(
             ctx.container,
             harness_kind=ctx.harness,
             workspace_profile=workspace_profile,
+            session=session_name,
         )
     except SSHError as exc:
         await websocket.send_text(json.dumps({"type": "error", "message": str(exc)}))
         await websocket.close(code=4500)
         return
 
-    attach = sessions.attach_command(ctx.container)
+    attach = sessions.attach_command(ctx.container, session_name)
 
     try:
         process = await conn_ssh.create_process(
@@ -153,8 +200,12 @@ async def project_terminal(
         await websocket.close(code=4500)
         return
 
+    client_tty, leftover = await _consume_tty_marker(process)
+    if leftover:
+        await websocket.send_bytes(leftover)
+
     async with user_session(principal.claims) as conn:
-        await queries.touch_attached(conn, project_id, sessions.DEFAULT_SESSION)
+        await queries.touch_attached(conn, project_id, session_name)
 
     await websocket.send_text(
         json.dumps(
@@ -162,7 +213,7 @@ async def project_terminal(
                 "type": "attached",
                 "project_id": str(project_id),
                 "container": ctx.container,
-                "session": sessions.DEFAULT_SESSION,
+                "session": session_name,
             }
         )
     )
@@ -183,9 +234,13 @@ async def project_terminal(
     except WebSocketDisconnect:
         pass
     finally:
-        # Detach, do not terminate. Closing the channel leaves `tmux attach`'s
-        # parent gone but the tmux *server* — and therefore the harness —
-        # running inside the container, which is exactly what we want.
+        # Detach explicitly, then close. Closing alone is not enough: `docker
+        # exec` leaves the process it started running inside the container, so
+        # the tmux client would linger forever and keep constraining the
+        # window size for everyone else.
+        if client_tty:
+            with contextlib.suppress(Exception):
+                await sessions.detach_client(conn_ssh, ctx.container, client_tty)
         with contextlib.suppress(Exception):
             process.close()
         for task in (output_task, input_task):
@@ -194,4 +249,6 @@ async def project_terminal(
                 await task
         with contextlib.suppress(Exception):
             await websocket.close()
-        log.info("terminal detached from project %s", project_id)
+        log.info(
+            "terminal detached from project %s session %s", project_id, session_name
+        )

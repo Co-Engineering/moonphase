@@ -115,6 +115,11 @@ export interface Session {
   started_at: string | null
   last_attached_at: string | null
   transcript_path: string | null
+  activity: ActivityState
+  activity_detail: string | null
+  /** Devices currently viewing this session, live from tmux. */
+  attached_clients: number
+  alive: boolean
 }
 
 export interface HarnessInfo {
@@ -281,11 +286,25 @@ export const api = {
     }),
 
   sessions: (projectId: string) => request<Session[]>(`/api/projects/${projectId}/sessions`),
-  startSession: (projectId: string, restart = false) =>
+  startSession: (projectId: string, restart = false, session?: string) =>
     request<Session>(`/api/projects/${projectId}/sessions/start`, {
       method: 'POST',
-      body: JSON.stringify({ restart }),
+      body: JSON.stringify({ restart, session: session ?? null }),
     }),
+  createSession: (projectId: string, name: string) =>
+    request<Session>(`/api/projects/${projectId}/sessions`, {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  deleteSession: (projectId: string, name: string) =>
+    request<void>(`/api/projects/${projectId}/sessions/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    }),
+  detachClients: (projectId: string, name: string) =>
+    request<{ detached: number }>(
+      `/api/projects/${projectId}/sessions/${encodeURIComponent(name)}/detach-clients`,
+      { method: 'POST' },
+    ),
   sendKeys: (projectId: string, keys: string, enter = true) =>
     request<void>(`/api/projects/${projectId}/sessions/keys`, {
       method: 'POST',
@@ -363,13 +382,19 @@ export const api = {
     request<void>(`/api/projects/${projectId}/ports/${port}/share`, { method: 'DELETE' }),
 }
 
-export async function terminalUrl(projectId: string, cols: number, rows: number) {
+export async function terminalUrl(
+  projectId: string,
+  cols: number,
+  rows: number,
+  session?: string,
+) {
   const token = await accessToken()
   const base = API_URL.replace(/^http/, 'ws')
   const params = new URLSearchParams({
     token: token ?? '',
     cols: String(cols),
     rows: String(rows),
+    ...(session ? { session } : {}),
   })
   return `${base}/ws/projects/${projectId}/terminal?${params}`
 }

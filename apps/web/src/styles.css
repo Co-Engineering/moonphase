@@ -846,3 +846,110 @@ button.linkish:hover:not(:disabled) {
   padding: 2px 9px 2px 7px;
   white-space: nowrap;
 }
+
+/* --- sessions --------------------------------------------------------------- */
+
+.sessions {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  flex-shrink: 0;
+}
+
+.session-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px;
+  overflow-x: auto;
+}
+
+.session-tab {
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  flex-shrink: 0;
+}
+
+.session-tab.active {
+  background: var(--bg-elev);
+  border-color: var(--border-strong);
+}
+
+.session-open {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 5px 4px 5px 9px;
+}
+
+.session-tab.active .session-open {
+  color: var(--text);
+}
+
+.session-open:hover:not(:disabled) {
+  background: none;
+  color: var(--text);
+}
+
+/* Only shown above one, so its presence is the message: another device is
+   looking at this session too. */
+.session-clients {
+  background: var(--accent-dim);
+  color: #eaf0ff;
+  border-radius: 20px;
+  font-size: 10px;
+  padding: 0 5px;
+  line-height: 15px;
+}
+
+.session-close,
+.session-add {
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font-size: 15px;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: 6px;
+}
+
+.session-close:hover:not(:disabled),
+.session-add:hover:not(:disabled) {
+  background: var(--bg-input);
+  color: var(--text);
+}
+
+.session-new {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.session-new input {
+  width: 140px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: var(--mono);
+}
+
+.session-new button {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.session-detach {
+  font-size: 12px;
+}
+
+.session-error {
+  color: var(--red);
+  font-size: 12px;
+  padding: 0 12px 6px;
+}
