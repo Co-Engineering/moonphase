@@ -12,6 +12,14 @@ interface Props {
   /** Which tmux session to attach to. Changing it reattaches. */
   session?: string
   onStatusChange?: (status: Status, detail?: string) => void
+  /**
+   * Someone else's session: their agent, their account. The server drops our
+   * keystrokes either way, but a terminal that silently swallows typing is the
+   * most confusing thing a terminal can do — so we stop them here and say so.
+   */
+  readOnly?: boolean
+  /** Called when a keystroke was refused, so the caller can react visibly. */
+  onRefusedInput?: () => void
 }
 
 /**
@@ -21,7 +29,13 @@ interface Props {
  * enforced on the server, but it is why reconnecting is cheap and why we
  * reconnect automatically rather than asking the user to.
  */
-export function ProjectTerminal({ projectId, session, onStatusChange }: Props) {
+export function ProjectTerminal({
+  projectId,
+  session,
+  onStatusChange,
+  readOnly = false,
+  onRefusedInput,
+}: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const termRef = useRef<Terminal | null>(null)
   const socketRef = useRef<WebSocket | null>(null)
@@ -31,6 +45,14 @@ export function ProjectTerminal({ projectId, session, onStatusChange }: Props) {
   const disposedRef = useRef(false)
 
   const [status, setStatus] = useState<Status>('connecting')
+
+  // Read through a ref inside the xterm callback: the terminal is rebuilt only
+  // when the project or session changes, so a plain closure over the prop
+  // would still be sending keystrokes after access changed under it.
+  const readOnlyRef = useRef(readOnly)
+  readOnlyRef.current = readOnly
+  const refusedRef = useRef(onRefusedInput)
+  refusedRef.current = onRefusedInput
 
   useEffect(() => {
     onStatusChange?.(status)
@@ -45,7 +67,7 @@ export function ProjectTerminal({ projectId, session, onStatusChange }: Props) {
         '"JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace',
       fontSize: 13,
       lineHeight: 1.2,
-      cursorBlink: true,
+      cursorBlink: !readOnly,
       allowProposedApi: true,
       scrollback: 0, // tmux owns scrollback; a second buffer only fights it
       theme: {
@@ -150,6 +172,10 @@ export function ProjectTerminal({ projectId, session, onStatusChange }: Props) {
     }
 
     const onData = term.onData((data) => {
+      if (readOnlyRef.current) {
+        refusedRef.current?.()
+        return
+      }
       const socket = socketRef.current
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(new TextEncoder().encode(data))
@@ -197,7 +223,12 @@ export function ProjectTerminal({ projectId, session, onStatusChange }: Props) {
   }, [projectId, session])
 
   return (
-    <div className="terminal-wrap">
+    <div className={`terminal-wrap${readOnly ? ' read-only' : ''}`}>
+      {readOnly && (
+        <div className="terminal-readonly" aria-hidden="true">
+          read-only
+        </div>
+      )}
       <div className={`terminal-status terminal-status--${status}`}>
         <span className="dot" />
         {status === 'attached'

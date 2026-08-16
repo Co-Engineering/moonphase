@@ -240,3 +240,105 @@ async def test_two_devices_share_one_session(fake_server: str) -> None:
         except Exception as exc:  # noqa: BLE001 — cleanup must not mask failures
             print(f"  cleanup warning: {exc}")
         await ssh.pool.close_all()
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_client_counts_and_phantom_reaping(fake_server: str) -> None:
+    """The two things that let phantom clients take a project down unseen.
+
+    `client_counts` is what the UI reads to say "2 devices attached". It passed
+    `-a` to `list-clients`, which that command does not accept, so tmux replied
+    "unknown flag" and every count came back zero — no error anywhere, just a
+    number that stayed at 0 while stale clients piled up behind it. Each one
+    holds an SSH channel, sshd allows ten by default, and past that the project
+    is unreachable including to whatever would have cleaned it up.
+    """
+    server_id = str(uuid.uuid4())
+    container = f"mp-counts-{uuid.uuid4().hex[:8]}"
+    name = "counted"
+
+    try:
+        result = await provision.bootstrap(
+            server_id=server_id, server_name="counts-test", host="127.0.0.1",
+            port=SSH_PORT, ssh_user=SSH_USER, auth_mode="password_bootstrap",
+            password=SSH_PASSWORD, auto_install_docker=False,
+        )
+        assert result.status == "online", result.detail
+        target = SSHTarget(
+            server_id=server_id, host="127.0.0.1", port=SSH_PORT, username=SSH_USER,
+            private_key=result.generated_private_key,
+            known_host_key_fp=result.host_key_fingerprint,
+        )
+        conn = await ssh.pool.get(target)
+
+        await docker_remote.volume_create(conn, f"{container}-workspace")
+        await docker_remote.volume_create(conn, f"{container}-home")
+        await docker_remote.run_container(
+            conn, name=container, image=RUNTIME_IMAGE,
+            workspace_volume=f"{container}-workspace",
+            home_volume=f"{container}-home",
+        )
+        await docker_remote.exec_capture(
+            conn, container, ["chown", "-R", "dev:dev", "/home/dev", "/workspace"],
+            user="root", timeout=120,
+        )
+        await docker_remote.exec_capture(
+            conn, container,
+            ["tmux", "new-session", "-d", "-s", name, "-x", "200", "-y", "50", "bash"],
+        )
+
+        assert (await sessions.client_counts(conn, container)).get(name) == 0
+
+        attach = sessions.attach_command(container, name)
+        processes = [
+            await conn.create_process(
+                attach, term_type="xterm-256color", term_size=(100, 30), encoding=None
+            )
+            for _ in range(2)
+        ]
+        await asyncio.sleep(2)
+
+        counts = await sessions.client_counts(conn, container)
+        assert counts.get(name) == 2, f"attached devices were not counted: {counts}"
+        print(f"\n  two attached devices counted as {counts[name]}")
+
+        # One belongs to a bridge we still own; the other is a phantom.
+        ttys = await sessions.list_clients(conn, container, name)
+        assert len(ttys) == 2
+        sessions.register_client(container, ttys[0])
+
+        reaped = await sessions.reap_phantom_clients(conn, container, name)
+        assert reaped == 1, f"expected one phantom to be reaped, got {reaped}"
+        assert await sessions.list_clients(conn, container, name) == [ttys[0]], (
+            "the reaper detached a client a live bridge was using"
+        )
+        print("  the unowned one was detached and the live one left alone")
+
+        # A restarted backend owns nothing, so everything it finds is stale.
+        sessions.release_client(container, ttys[0])
+        assert await sessions.reap_phantom_clients(conn, container, name) == 1
+        assert (await sessions.client_counts(conn, container)).get(name) == 0
+        assert await sessions.session_exists(conn, container, name), (
+            "reaping clients must never touch the session itself"
+        )
+        print("  a restarted backend clears the lot, session untouched")
+
+        for process in processes:
+            process.close()
+    finally:
+        try:
+            cleanup = SSHTarget(
+                server_id=server_id, host="127.0.0.1", port=SSH_PORT,
+                username=SSH_USER, password=SSH_PASSWORD,
+            )
+            conn_c, _ = await ssh.connect(cleanup)
+            await docker_remote.remove(conn_c, container)
+            await docker_remote.volume_remove(conn_c, f"{container}-workspace")
+            await docker_remote.volume_remove(conn_c, f"{container}-home")
+            conn_c.close()
+        except Exception as exc:  # noqa: BLE001
+            print(f"  cleanup warning: {exc}")
+        # Drop this module's pooled connection rather than leaving it for a
+        # later module to trip over: the loop it was made on dies with this
+        # module, and closing it from another one raises.
+        await ssh.pool.drop(server_id)

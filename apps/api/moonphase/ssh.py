@@ -135,8 +135,19 @@ class SSHPool:
                 await conn.wait_closed()
 
     async def close_all(self) -> None:
+        """Close every pooled connection, and let none of them stop the rest.
+
+        This runs at shutdown and in test teardown, where a connection can
+        already be unusable — its event loop gone, its socket dead. Raising
+        here would abandon the connections after it in the list, which is the
+        opposite of what closing everything is for.
+        """
         for server_id in list(self._conns):
-            await self.drop(server_id)
+            try:
+                await self.drop(server_id)
+            except Exception as exc:  # noqa: BLE001
+                log.debug("could not close pooled connection %s: %s", server_id, exc)
+                self._conns.pop(server_id, None)
 
 
 async def connect(target: SSHTarget) -> tuple[asyncssh.SSHClientConnection, str]:

@@ -260,6 +260,13 @@ async def project_terminal(
         await websocket.close(code=4500)
         return
 
+    # Clear out anything left behind by a bridge that died before it could
+    # detach itself. Without this a handful of dropped connections exhausts
+    # sshd's channel limit and the project becomes unreachable — including to
+    # the command that would have cleaned it up.
+    with contextlib.suppress(Exception):
+        await sessions.reap_phantom_clients(conn_ssh, ctx.container, session_name)
+
     attach = sessions.attach_command(
         ctx.container, session_name, read_only=not writable, workdir=space.workdir
     )
@@ -279,6 +286,8 @@ async def project_terminal(
         return
 
     client_tty, leftover = await _consume_tty_marker(process)
+    if client_tty:
+        sessions.register_client(ctx.container, client_tty)
     if leftover:
         await websocket.send_bytes(leftover)
 
@@ -322,6 +331,7 @@ async def project_terminal(
         # the tmux client would linger forever and keep constraining the
         # window size for everyone else.
         if client_tty:
+            sessions.release_client(ctx.container, client_tty)
             with contextlib.suppress(Exception):
                 await sessions.detach_client(conn_ssh, ctx.container, client_tty)
         with contextlib.suppress(Exception):

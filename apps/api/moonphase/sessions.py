@@ -476,9 +476,13 @@ async def client_counts(
 ) -> dict[str, int]:
     """Attached client counts for every session, in one call.
 
-    `-a` lists clients across all sessions, so this stays two execs whether a
-    project has one session or ten. Asking per session made listing them cost
-    two SSH round trips each.
+    With no `-t`, `list-clients` reports every client on the server, so this
+    stays two execs whether a project has one session or ten.
+
+    It used to pass `-a`, which `list-clients` does not accept — tmux answered
+    "unknown flag" and the counts came back all zero. Nothing failed loudly:
+    the UI simply never showed a device count, which also meant it never showed
+    phantom clients piling up until the server ran out of channels.
     """
     live = await docker_remote.exec_capture(
         conn, container, ["tmux", "list-sessions", "-F", "#{session_name}"], timeout=30
@@ -489,7 +493,7 @@ async def client_counts(
     counts = {name: 0 for name in live.stdout.split()}
 
     clients = await docker_remote.exec_capture(
-        conn, container, ["tmux", "list-clients", "-a", "-F", "#{client_session}"],
+        conn, container, ["tmux", "list-clients", "-F", "#{client_session}"],
         timeout=30,
     )
     if clients.ok:
@@ -497,6 +501,50 @@ async def client_counts(
             if name in counts:
                 counts[name] += 1
     return counts
+
+
+# ttys this process is currently bridging, per container. Anything attached to
+# a session that is *not* in here belongs to a bridge that has gone — a crashed
+# client, a killed backend, a dropped connection whose cleanup never ran.
+_live_clients: dict[str, set[str]] = {}
+
+
+def register_client(container: str, tty: str) -> None:
+    _live_clients.setdefault(container, set()).add(tty)
+
+
+def release_client(container: str, tty: str) -> None:
+    _live_clients.get(container, set()).discard(tty)
+
+
+async def reap_phantom_clients(
+    conn: asyncssh.SSHClientConnection, container: str, session: str = DEFAULT_SESSION
+) -> int:
+    """Detach clients of this session that no live bridge owns.
+
+    `docker exec` does not kill the process it started when its client goes
+    away, so every disconnect whose cleanup did not run leaves a `tmux attach`
+    holding a client — and an SSH channel — forever. sshd allows ten channels
+    by default, so about ten stale attaches take the project down: the terminal
+    cannot open a channel, and neither can the command that would clean up.
+
+    The bridge already detaches itself on the way out. This is the backstop for
+    when it could not: it runs before each attach, and because the set of live
+    ttys is process state, a restarted backend correctly considers every client
+    it finds to be stale.
+    """
+    ours = _live_clients.get(container, set())
+    detached = 0
+    for tty in await list_clients(conn, container, session):
+        if tty in ours:
+            continue
+        await detach_client(conn, container, tty)
+        detached += 1
+    if detached:
+        log.info(
+            "detached %d phantom client(s) from %s in %s", detached, session, container
+        )
+    return detached
 
 
 async def detach_all_clients(

@@ -333,6 +333,9 @@ function ProjectView({
   const [error, setError] = useState<string | null>(null)
   const [session, setSession] = useState('')
   const [active, setActive] = useState<Session | null>(null)
+  // Set briefly when a keystroke is refused, so the explanation reacts to the
+  // attempt instead of sitting there having already been read and dismissed.
+  const [nudged, setNudged] = useState(false)
   // A terminal is unusable on a phone, and attaching one would also drag the
   // desktop's tmux window down to phone width. Default by screen size, but
   // leave it switchable: the feed is genuinely nicer for catching up, and the
@@ -348,6 +351,11 @@ function ProjectView({
     setSession('')
     setActive(null)
   }, [project.id])
+
+  const nudge = useCallback(() => {
+    setNudged(true)
+    window.setTimeout(() => setNudged(false), 1200)
+  }, [])
 
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true)
@@ -513,6 +521,30 @@ function ProjectView({
 
       {project.status === 'running' ? (
         <div className="content flush terminal-and-ports">
+          {watching && (
+            <div className={`readonly-bar${nudged ? ' nudged' : ''}`}>
+              <span className="readonly-chip">Read-only</span>
+              <span className="readonly-text">
+                This is <strong>{active?.owner ?? 'someone else'}</strong>&rsquo;s session.
+                It runs on their Claude account, so only they can type into it — you can
+                watch it live.
+              </span>
+              {canControl(project.access) && (
+                <button
+                  className="primary"
+                  disabled={busy}
+                  onClick={() =>
+                    void act(async () => {
+                      const created = await api.createSession(project.id)
+                      setSession(created.tmux_session)
+                    })
+                  }
+                >
+                  Start my own session
+                </button>
+              )}
+            </div>
+          )}
           <Sessions
             projectId={project.id}
             running={project.status === 'running'}
@@ -522,13 +554,19 @@ function ProjectView({
             onActiveSession={setActive}
           />
           {view === 'terminal' ? (
-            <ProjectTerminal projectId={project.id} session={session} />
+            <ProjectTerminal
+              projectId={project.id}
+              session={session}
+              readOnly={!drivable}
+              onRefusedInput={nudge}
+            />
           ) : (
             <Feed
               projectId={project.id}
               session={session}
               running={project.status === 'running'}
               readOnly={!drivable}
+              onRefusedInput={nudge}
             />
           )}
           <Ports

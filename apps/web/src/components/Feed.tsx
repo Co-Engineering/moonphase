@@ -11,6 +11,8 @@ interface Props {
    * putting something *into* the session go away.
    */
   readOnly?: boolean
+  /** Called when an attempt to send was refused, so the caller can react. */
+  onRefusedInput?: () => void
 }
 
 const TOOL_ICON: Record<string, string> = {
@@ -46,7 +48,13 @@ function merge(current: FeedEvent[], incoming: FeedEvent[]): FeedEvent[] {
  * Everything it sends goes through the same session the desktop is attached
  * to, so answering here shows up there as if it had been typed.
  */
-export function Feed({ projectId, session, running, readOnly = false }: Props) {
+export function Feed({
+  projectId,
+  session,
+  running,
+  readOnly = false,
+  onRefusedInput,
+}: Props) {
   const [events, setEvents] = useState<FeedEvent[]>([])
   const [prompt, setPrompt] = useState<Prompt | null>(null)
   const [activity, setActivity] = useState('unknown')
@@ -248,9 +256,13 @@ export function Feed({ projectId, session, running, readOnly = false }: Props) {
               <button
                 key={option.key}
                 className={option.key === '1' ? 'primary' : ''}
-                disabled={sending || readOnly}
-                title={readOnly ? 'View-only access' : undefined}
-                onClick={() => void send(option.key)}
+                disabled={sending}
+                title={
+                  readOnly
+                    ? "This session belongs to someone else — only they can answer"
+                    : undefined
+                }
+                onClick={() => (readOnly ? onRefusedInput?.() : void send(option.key))}
               >
                 <span className="feed-option-key">{option.key}</span>
                 {option.label}
@@ -264,7 +276,8 @@ export function Feed({ projectId, session, running, readOnly = false }: Props) {
         className="feed-compose"
         onSubmit={(e) => {
           e.preventDefault()
-          if (!readOnly) void send(message)
+          if (readOnly) onRefusedInput?.()
+          else void send(message)
         }}
       >
         <input
@@ -272,17 +285,19 @@ export function Feed({ projectId, session, running, readOnly = false }: Props) {
           onChange={(e) => setMessage(e.target.value)}
           placeholder={
             readOnly
-              ? 'View only — you can watch this session'
+              ? 'Read-only — this session is someone else\u2019s'
               : activity === 'working'
                 ? 'Claude is working…'
                 : 'Send a message'
           }
-          disabled={!running || sending || readOnly}
+          readOnly={readOnly}
+          onClick={() => readOnly && onRefusedInput?.()}
+          disabled={!running || sending}
         />
         <button
           className="primary"
           type="submit"
-          disabled={!running || sending || readOnly || !message.trim()}
+          disabled={!running || sending || (!readOnly && !message.trim())}
         >
           Send
         </button>

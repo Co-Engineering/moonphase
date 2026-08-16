@@ -1479,15 +1479,103 @@ button.linkish:hover:not(:disabled) {
   }
 }
 
-/* A session that is not yours: readable, not alarming. The marker matters
- * because the tab looks identical otherwise and the missing keyboard would
- * come as a surprise. */
-.session-theirs {
-  margin-left: 4px;
-  color: var(--text-faint);
-  font-size: 10px;
+
+/* --- read-only ---------------------------------------------------------------
+ *
+ * A terminal that silently swallows typing is the most confusing thing a
+ * terminal can do. Someone else's session is therefore marked before you try,
+ * explained in words, and — because nobody reads a banner twice — reacts when
+ * you do try anyway.
+ */
+
+.readonly-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-dim);
+  transition: background 160ms ease, border-color 160ms ease;
 }
 
-.session-tab:has(.session-theirs) .session-open {
-  font-style: italic;
+.readonly-bar .readonly-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.readonly-bar strong {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.readonly-chip {
+  flex-shrink: 0;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--amber);
+  border: 1px solid var(--amber);
+  border-radius: 20px;
+  padding: 3px 8px;
+}
+
+/* Fired when a keystroke is refused: the explanation is already on screen, so
+ * the useful signal is that it responded to the attempt. */
+.readonly-bar.nudged {
+  background: #2a2113;
+  border-color: var(--amber);
+}
+
+.readonly-bar.nudged .readonly-chip {
+  animation: readonly-pulse 1.2s ease;
+}
+
+@keyframes readonly-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  15% {
+    transform: scale(1.12);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .readonly-bar.nudged .readonly-chip {
+    animation: none;
+  }
+}
+
+/* A corner marker inside the terminal itself, for when the bar has scrolled
+ * out of mind and you are looking only at the pane. */
+.terminal-readonly {
+  position: absolute;
+  top: 8px;
+  left: 10px;
+  z-index: 3;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--amber);
+  background: rgba(15, 16, 23, 0.85);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 2px 8px;
+  pointer-events: none;
+}
+
+.terminal-wrap.read-only .terminal-host {
+  /* Enough to read comfortably, enough to feel unlike your own session. */
+  opacity: 0.88;
+}
+
+.session-theirs {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--text-faint);
+  font-size: 10px;
 }

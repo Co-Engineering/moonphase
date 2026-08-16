@@ -152,8 +152,8 @@ export function Sessions({
                 <span className="dot" />
                 {session.tmux_session}
                 {!session.is_mine && (
-                  <span className="session-theirs" aria-hidden="true">
-                    ◦
+                  <span className="session-theirs">
+                    {session.owner?.split('@')[0] ?? 'shared'}
                   </span>
                 )}
                 {session.attached_clients > 1 && (
