@@ -102,17 +102,16 @@ class Tunnel:
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
         """Bridge one TCP connection into the container."""
-        try:
-            conn = await ssh.pool.get(self.target)
-        except SSHError as exc:
-            log.warning("preview: cannot reach server: %s", exc)
-            writer.close()
-            return
-
+        # A page load opens several TCP connections at once and each takes a
+        # channel for as long as it lives, which makes previews the largest
+        # consumer of a server's channel budget by some margin. Going through
+        # the pool spreads them and retries a refusal on another connection.
         command = _relay_command(self.container, self.container_port)
         try:
-            process = await conn.create_process(command, encoding=None)
-        except asyncssh.Error as exc:
+            process = await ssh.pool.create_process(
+                self.target, command, encoding=None
+            )
+        except (SSHError, asyncssh.Error) as exc:
             log.warning("preview: could not open channel: %s", exc)
             writer.close()
             return

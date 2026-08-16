@@ -64,6 +64,7 @@ async def _stream_transcript(
     harness,
     start_cursor: str,
     space,
+    target,
 ) -> None:
     """Follow the newest transcript file and push events as they are written.
 
@@ -90,7 +91,9 @@ async def _stream_transcript(
             f"docker exec -i {shlex.quote(container)} "
             f"tail -c +{byte_offset + 1} -f {shlex.quote(path)}"
         )
-        return await conn.create_process(command, encoding=None)
+        # Held open for as long as someone is watching, so it goes through the
+        # pool rather than pinning whichever connection happened to be handy.
+        return await ssh.pool.create_process(target, command, encoding=None)
 
     try:
         while True:
@@ -249,7 +252,8 @@ async def project_feed(
     tasks = [
         asyncio.create_task(
             _stream_transcript(
-                websocket, conn_ssh, ctx.container, harness, page.cursor, space
+                websocket, conn_ssh, ctx.container, harness, page.cursor, space,
+                ctx.target,
             )
         ),
         asyncio.create_task(

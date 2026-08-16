@@ -272,13 +272,14 @@ async def project_terminal(
     )
 
     try:
-        process = await conn_ssh.create_process(
+        process = await ssh.pool.create_process(
+            ctx.target,
             attach,
             term_type="xterm-256color",
             term_size=(cols, rows),
             encoding=None,  # binary in both directions; the TUI is not text
         )
-    except asyncssh.Error as exc:
+    except (SSHError, asyncssh.Error) as exc:
         await websocket.send_text(
             json.dumps({"type": "error", "message": f"Could not attach: {exc}"})
         )

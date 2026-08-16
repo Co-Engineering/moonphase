@@ -196,6 +196,26 @@ type could otherwise still squeeze the window for whoever is driving. The
 guarantee that actually holds is server-side, though: the PTY bridge drops
 inbound keystrokes for a non-writable client rather than trusting tmux to.
 
+### One connection is not enough
+
+asyncssh multiplexes channels over a single TCP connection, and sshd allows ten
+concurrent channels on one (`MaxSessions 10`). Everything Moonphase does against
+a server therefore competed for those ten: an attached terminal, a feed
+following a transcript, the activity monitor, port detection — and **one channel
+for every TCP connection a preview tunnel carries**, which is six or more for a
+single page load.
+
+Past ten, `create_process` fails with `ChannelOpenError("open failed")`, the
+terminal stops working, and nothing on screen suggests the cause was something
+else being busy.
+
+Rather than rewrite someone's sshd config, the pool holds several connections
+per server and hands them out round-robin, growing up to a ceiling when they
+all fill. Both paths that open channels recover from a refusal by moving to
+another connection: `pool.create_process` for long-lived ones, and `ssh.run`
+via `pool.another()`, because it is handed a connection rather than a target
+and cannot otherwise ask for a different one.
+
 ## The harness seam
 
 `harness/base.py` defines what Moonphase needs to know about a coding agent:

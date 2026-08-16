@@ -93,46 +93,159 @@ class _PinnedHostKeyPolicy(asyncssh.SSHClient):
         return True
 
 
+# sshd allows ten concurrent channels per connection by default
+# (`MaxSessions 10`), and asyncssh multiplexes everything over one TCP
+# connection. Everything Moonphase does against a server therefore competes for
+# those ten: an attached terminal, a feed following a transcript, the activity
+# monitor, port detection — and one channel for every TCP connection carried by
+# a preview tunnel, so a single page load can take six on its own.
+#
+# Past ten, `create_process` fails with ChannelOpenError("open failed") and the
+# terminal simply stops working. Rather than reconfigure sshd on someone's
+# machine, spread the load over several connections: the limit is per
+# connection, so a handful of them is several times the headroom, and the cost
+# is one extra handshake each.
+CONNECTIONS_PER_SERVER = 4
+
+# Under sustained load — several projects on one machine, each with a terminal,
+# a feed and a preview — even four can fill. Rather than fail, open more, up to
+# a ceiling that exists only so a bug cannot open connections forever.
+MAX_CONNECTIONS_PER_SERVER = 12
+
+
 class SSHPool:
-    """Per-server connection cache with single-flight connect."""
+    """Per-server connection cache with single-flight connect.
+
+    Several connections per server, handed out round-robin. See
+    CONNECTIONS_PER_SERVER for why more than one.
+    """
 
     def __init__(self) -> None:
-        self._conns: dict[str, asyncssh.SSHClientConnection] = {}
+        self._conns: dict[str, list[asyncssh.SSHClientConnection]] = {}
         self._fingerprints: dict[str, str] = {}
+        self._next: dict[str, int] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._guard = asyncio.Lock()
+        # Which server each pooled connection belongs to. `run()` is handed a
+        # connection rather than a target, so without this it cannot ask for a
+        # different one when the one it has is full.
+        self._owner: dict[int, SSHTarget] = {}
 
     async def _lock_for(self, server_id: str) -> asyncio.Lock:
         async with self._guard:
             return self._locks.setdefault(server_id, asyncio.Lock())
 
+    def _live(self, server_id: str) -> list[asyncssh.SSHClientConnection]:
+        conns = [c for c in self._conns.get(server_id, []) if not c.is_closed()]
+        self._conns[server_id] = conns
+        return conns
+
     async def get(self, target: SSHTarget) -> asyncssh.SSHClientConnection:
-        existing = self._conns.get(target.server_id)
-        if existing is not None and not existing.is_closed():
-            return existing
+        """A connection to this server, round-robin over the pooled set."""
+        conns = self._live(target.server_id)
+        if len(conns) >= CONNECTIONS_PER_SERVER:
+            return self._rotate(target.server_id, conns)
 
         lock = await self._lock_for(target.server_id)
         async with lock:
             # Re-check: another waiter may have connected while we queued.
-            existing = self._conns.get(target.server_id)
-            if existing is not None and not existing.is_closed():
-                return existing
+            conns = self._live(target.server_id)
+            if len(conns) >= CONNECTIONS_PER_SERVER:
+                return self._rotate(target.server_id, conns)
             conn, fp = await connect(target)
-            self._conns[target.server_id] = conn
+            conns.append(conn)
+            self._conns[target.server_id] = conns
             self._fingerprints[target.server_id] = fp
+            self._owner[id(conn)] = target
             return conn
+
+    def _rotate(
+        self, server_id: str, conns: list[asyncssh.SSHClientConnection]
+    ) -> asyncssh.SSHClientConnection:
+        index = self._next.get(server_id, 0) % len(conns)
+        self._next[server_id] = index + 1
+        return conns[index]
+
+    async def create_process(
+        self, target: SSHTarget, command: str, **kwargs: Any
+    ) -> asyncssh.SSHClientProcess:
+        """Open a long-lived channel, trying every connection before giving up.
+
+        Round-robin spreads channels, but it does not know how many each
+        connection is already carrying — a terminal and a feed can happen to
+        land on the same one. So a refusal is not fatal here: it means that
+        connection is full, and another almost certainly is not.
+        """
+        last: Exception | None = None
+        for _ in range(CONNECTIONS_PER_SERVER):
+            conn = await self.get(target)
+            try:
+                return await conn.create_process(command, **kwargs)
+            except asyncssh.ChannelOpenError as exc:
+                last = exc
+                log.debug("channel refused on a connection to %s: %s", target.host, exc)
+
+        # Every pooled connection is full. Grow rather than refuse: the caller
+        # is a terminal or a preview, and "your session stopped working because
+        # something else was busy" is not an answer anyone can act on.
+        while len(self._live(target.server_id)) < MAX_CONNECTIONS_PER_SERVER:
+            conn, fp = await connect(target)
+            self._conns[target.server_id].append(conn)
+            self._fingerprints[target.server_id] = fp
+            self._owner[id(conn)] = target
+            log.info(
+                "opened an extra connection to %s (%d in the pool)",
+                target.host,
+                len(self._conns[target.server_id]),
+            )
+            try:
+                return await conn.create_process(command, **kwargs)
+            except asyncssh.ChannelOpenError as exc:
+                last = exc
+
+        raise SSHError(
+            f"Could not open a channel to {target.host}: "
+            f"{MAX_CONNECTIONS_PER_SERVER} connections are all at their limit "
+            f"({last}). Close some terminals or previews, or raise MaxSessions "
+            "in the server's sshd config."
+        )
+
+    async def another(
+        self, conn: asyncssh.SSHClientConnection
+    ) -> asyncssh.SSHClientConnection | None:
+        """A different connection to the same server, opening one if needed.
+
+        For callers that hold a connection rather than a target and have just
+        been refused a channel on it.
+        """
+        target = self._owner.get(id(conn))
+        if target is None:
+            return None
+        conns = self._live(target.server_id)
+        if len(conns) < MAX_CONNECTIONS_PER_SERVER:
+            fresh, fp = await connect(target)
+            conns.append(fresh)
+            self._conns[target.server_id] = conns
+            self._fingerprints[target.server_id] = fp
+            self._owner[id(fresh)] = target
+            return fresh
+        others = [c for c in conns if c is not conn]
+        return self._rotate(target.server_id, others) if others else None
 
     def observed_fingerprint(self, server_id: str) -> str | None:
         return self._fingerprints.get(server_id)
 
     async def drop(self, server_id: str) -> None:
-        conn = self._conns.pop(server_id, None)
+        conns = self._conns.pop(server_id, [])
         self._fingerprints.pop(server_id, None)
-        if conn is not None and not conn.is_closed():
-            conn.close()
-            # A half-dead socket must not turn shutdown into an error.
-            with suppress(Exception):
-                await conn.wait_closed()
+        self._next.pop(server_id, None)
+        for conn in conns:
+            self._owner.pop(id(conn), None)
+            if not conn.is_closed():
+                conn.close()
+                # A half-dead socket must not turn shutdown into an error.
+                with suppress(Exception):
+                    await conn.wait_closed()
 
     async def close_all(self) -> None:
         """Close every pooled connection, and let none of them stop the rest.
@@ -222,15 +335,39 @@ async def run(
     timeout: float = 60.0,
     stdin: str | None = None,
 ) -> CommandResult:
-    """Run a command and collect its output. Never raises on non-zero exit."""
-    try:
-        result = await asyncio.wait_for(
-            conn.run(command, check=False, input=stdin), timeout=timeout
-        )
-    except TimeoutError as exc:
-        raise SSHError(f"Command timed out after {timeout}s: {command[:120]}") from exc
-    except asyncssh.Error as exc:
-        raise SSHError(f"Command failed to execute: {exc}") from exc
+    """Run a command and collect its output. Never raises on non-zero exit.
+
+    A refused channel gets one retry. Short commands are the ones that collide
+    with a burst — a page load through a preview tunnel, or several sessions
+    being probed at once — and by the time a retry lands the burst has usually
+    passed. `create_process` on the pool handles the same problem for
+    long-lived channels by moving to a different connection; this cannot, since
+    it is handed a connection rather than a target.
+    """
+    for attempt in range(3):
+        try:
+            result = await asyncio.wait_for(
+                conn.run(command, check=False, input=stdin), timeout=timeout
+            )
+            break
+        except TimeoutError as exc:
+            raise SSHError(
+                f"Command timed out after {timeout}s: {command[:120]}"
+            ) from exc
+        except asyncssh.ChannelOpenError as exc:
+            # This connection is carrying its ten channels. Ask the pool for
+            # another one before giving up — a refusal here surfaces as a
+            # broken terminal or an empty port list, with nothing to suggest
+            # that something unrelated was merely busy.
+            other = await pool.another(conn) if attempt < 2 else None
+            if other is None:
+                raise SSHError(
+                    "The server is at its limit of concurrent SSH channels "
+                    f"({exc}). Close a terminal or a preview and try again."
+                ) from exc
+            conn = other
+        except asyncssh.Error as exc:
+            raise SSHError(f"Command failed to execute: {exc}") from exc
 
     return CommandResult(
         exit_status=result.exit_status if result.exit_status is not None else -1,

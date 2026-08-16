@@ -342,3 +342,73 @@ async def test_client_counts_and_phantom_reaping(fake_server: str) -> None:
         # later module to trip over: the loop it was made on dies with this
         # module, and closing it from another one raises.
         await ssh.pool.drop(server_id)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_channel_capacity_survives_more_than_one_connections_worth(
+    fake_server: str,
+) -> None:
+    """The ceiling that made the terminal unreliable.
+
+    sshd allows ten concurrent channels per connection, and asyncssh puts
+    everything on one. So an attached terminal, a feed following a transcript,
+    the activity monitor, port detection and a preview tunnel — which takes a
+    channel for every TCP connection it carries, six of them for one page load
+    — all competed for the same ten. Past that, opening a channel fails with
+    "open failed" and the terminal stops working, with no clue as to why.
+
+    The pool spreads channels over several connections instead. This holds open
+    more than one connection's worth at once, which is the case that used to
+    fail outright.
+    """
+    server_id = str(uuid.uuid4())
+    target = SSHTarget(
+        server_id=server_id, host="127.0.0.1", port=SSH_PORT,
+        username=SSH_USER, password=SSH_PASSWORD,
+    )
+
+    # One connection's limit, established rather than assumed.
+    single = await ssh.connect(target)
+    conn_one = single[0]
+    held = []
+    try:
+        for _ in range(30):
+            try:
+                held.append(await conn_one.create_process("sleep 60"))
+            except Exception:
+                break
+        per_connection = len(held)
+        print(f"\n  one connection allows {per_connection} concurrent channels")
+        assert per_connection <= 16, "sshd is unusually permissive; test assumes a cap"
+    finally:
+        for process in held:
+            process.close()
+        conn_one.close()
+
+    processes = []
+    try:
+        # Past what the fixed pool holds, so the growth path is exercised too:
+        # under real load the answer to "every connection is full" has to be
+        # another connection, not a broken terminal.
+        wanted = per_connection * ssh.CONNECTIONS_PER_SERVER + 2
+        for _ in range(wanted):
+            processes.append(
+                await ssh.pool.create_process(target, "sleep 60", encoding=None)
+            )
+        print(
+            f"  the pool held {len(processes)} at once — "
+            f"{wanted // per_connection}x a single connection"
+        )
+        assert len(processes) == wanted
+
+        # And ordinary commands still get through with all of that outstanding.
+        conn = await ssh.pool.get(target)
+        result = await ssh.run(conn, "echo still-working", timeout=30)
+        assert result.stdout.strip() == "still-working", (
+            "a busy server stopped answering ordinary commands"
+        )
+        print("  and ordinary commands still went through")
+    finally:
+        for process in processes:
+            process.close()
+        await ssh.pool.drop(server_id)
