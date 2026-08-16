@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import ProgrammingError
 
-from moonphase import queries
+from moonphase import queries, runtime
 from moonphase.db import service_session, user_session
 
 
@@ -458,3 +458,49 @@ async def test_a_project_cannot_be_attached_to_an_invisible_server(
 
     async with user_session(alice.claims) as conn:
         assert await queries.list_projects(conn) == []
+
+
+# --- what a collaborator's session materialises into the container ------------
+
+
+async def test_a_collaborator_starting_a_session_keeps_the_owners_profile(
+    cast_of_three,
+) -> None:
+    """The workspace profile describes the project, not whoever opened it.
+
+    Starting a session writes CLAUDE.md, the MCP config, the environment and
+    the git identity into the container. Those come from the organization that
+    owns the project — and a collaborator is not a member of it, so reading
+    them through the caller's RLS session yields nothing. Doing that would
+    quietly replace the owner's configuration with an empty one the first time
+    someone they shared with attached a terminal.
+    """
+    alice, bob, _ = cast_of_three
+    server = await _server_for(alice)
+    project = await _project_for(alice, server)
+
+    async with user_session(alice.claims) as conn:
+        alice_org = await queries.personal_org_id(conn)
+        await queries.upsert_profile(
+            conn,
+            alice_org,
+            claude_settings_json=None,
+            claude_md="# House rules\nAlways run the tests.",
+            mcp_json=None,
+            env_vars={"DEPLOY_TARGET": "staging"},
+            git_user_name="Alice",
+            git_user_email="alice@example.test",
+        )
+
+    await _share(alice, "project", project["id"], bob.email, "collaborator")
+
+    # The trap, stated as a fact so it cannot quietly stop being true.
+    async with user_session(bob.claims) as conn:
+        assert await queries.get_profile(conn, alice_org) is None, (
+            "a collaborator can see the project but not the owning org's profile row"
+        )
+
+    profile = await runtime.load_profile(alice_org, project["id"], "claude_code")
+    assert profile.claude_md == "# House rules\nAlways run the tests."
+    assert profile.env_vars == {"DEPLOY_TARGET": "staging"}
+    assert profile.git_user_name == "Alice"

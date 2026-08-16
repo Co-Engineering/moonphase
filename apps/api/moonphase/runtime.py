@@ -169,16 +169,23 @@ async def resolve_credential(
 
 
 async def load_profile(
-    claims: dict[str, Any], org_id: UUID, project_id: UUID | None, harness_kind: str
+    org_id: UUID, project_id: UUID | None, harness_kind: str
 ) -> WorkspaceProfile:
     """Assemble the global profile plus whatever credentials apply.
 
-    Settings are read through the caller's RLS session; secrets through a
-    service session. A project-specific harness credential wins over the
-    org-wide one, so a single project can be pinned to a different account
-    without disturbing the global sign-in.
+    Everything here is read privileged, and deliberately so: this describes the
+    *project*, not the caller. A collaborator on a shared project is not a
+    member of the organization that owns it, so an RLS-scoped read of the
+    profile returns nothing — and starting a session would then materialise an
+    empty profile over the owner's CLAUDE.md, MCP config, environment and git
+    identity. Whether this caller may act on the project at all was already
+    settled by `load_project_context`.
+
+    A project-specific harness credential wins over the org-wide one, so a
+    single project can be pinned to a different account without disturbing the
+    global sign-in.
     """
-    async with user_session(claims) as conn:
+    async with service_session() as conn:
         row = await queries.get_profile(conn, org_id)
 
     if row is None:

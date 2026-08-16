@@ -419,7 +419,7 @@ async def create_session(
         )
 
     workspace_profile = await runtime.load_profile(
-        principal.claims, ctx.project["org_id"], project_id, ctx.harness
+        ctx.project["org_id"], project_id, ctx.harness
     )
 
     conn_ssh = await ssh.pool.get(ctx.target)
@@ -536,7 +536,7 @@ async def start_session(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     workspace_profile = await runtime.load_profile(
-        principal.claims, ctx.project["org_id"], project_id, ctx.harness
+        ctx.project["org_id"], project_id, ctx.harness
     )
 
     conn_ssh = await ssh.pool.get(ctx.target)

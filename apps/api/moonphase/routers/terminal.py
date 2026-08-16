@@ -210,7 +210,7 @@ async def project_terminal(
                 await docker_remote.start(conn_ssh, ctx.container)
 
             workspace_profile = await runtime.load_profile(
-                principal.claims, ctx.project["org_id"], project_id, ctx.harness
+                ctx.project["org_id"], project_id, ctx.harness
             )
             await sessions.ensure_session(
                 conn_ssh,
