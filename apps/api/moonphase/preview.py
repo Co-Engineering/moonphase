@@ -55,6 +55,28 @@ class DetectedPort:
         return self.bind in {"127.0.0.1", "::1", "localhost"}
 
 
+def _relay_command(container: str, port: int) -> str:
+    """Pipe a connection into the container, over IPv4 or IPv6.
+
+    Trying both is not belt-and-braces: Node binds `localhost` to ::1 on a
+    modern system, so Vite — the single most likely thing behind a preview —
+    listens on IPv6 loopback only. `TCP:127.0.0.1` cannot reach it and hangs
+    rather than failing, which reads as a broken preview.
+
+    A `::` wildcard listener accepts IPv4-mapped connections, so IPv4 first
+    covers almost everything and the fallback only runs for a genuinely
+    IPv6-only bind. socat exits without touching stdio when it cannot connect,
+    so the second attempt starts clean.
+    """
+    inner = (
+        f"socat -T 3600 STDIO TCP4:127.0.0.1:{port} 2>/dev/null "
+        f"|| exec socat -T 3600 STDIO TCP6:[::1]:{port}"
+    )
+    return (
+        f"docker exec -i {shlex.quote(container)} sh -c " + shlex.quote(inner)
+    )
+
+
 @dataclass
 class Tunnel:
     """A backend-local listener that forwards into a container port."""
@@ -87,10 +109,7 @@ class Tunnel:
             writer.close()
             return
 
-        command = (
-            f"docker exec -i {shlex.quote(self.container)} "
-            f"socat - TCP:127.0.0.1:{self.container_port}"
-        )
+        command = _relay_command(self.container, self.container_port)
         try:
             process = await conn.create_process(command, encoding=None)
         except asyncssh.Error as exc:

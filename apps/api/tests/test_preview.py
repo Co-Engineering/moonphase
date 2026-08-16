@@ -204,6 +204,45 @@ async def test_detects_and_tunnels_a_loopback_server(fake_server: str) -> None:
         assert preview.registry.get("test-project", 4321) is None
         print("  tunnel closed cleanly")
 
+        # --- an IPv6-only listener ------------------------------------------
+        # Node binds `localhost` to ::1 on a modern system, so Vite — the most
+        # likely thing behind a preview — listens on IPv6 loopback only. A
+        # relay hardcoded to TCP:127.0.0.1 cannot reach it, and hangs rather
+        # than failing, which reads as a broken preview.
+        await docker_remote.exec_capture(
+            conn, container,
+            ["sh", "-c",
+             "echo '<h1>ipv6-only</h1>' > /workspace/six.html && cd /workspace && "
+             "nohup python3 -m http.server 4322 --bind ::1 >/tmp/six.log 2>&1 & echo ok"],
+            timeout=60,
+        )
+
+        found_six = None
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            await asyncio.sleep(1)
+            found_six = next(
+                (p for p in await preview.detect_ports(conn, container) if p.port == 4322),
+                None,
+            )
+            if found_six:
+                break
+        assert found_six is not None, "IPv6-only listener was not detected"
+        assert found_six.bind in ("::1", "::"), f"unexpected bind {found_six.bind}"
+        print(f"  detected an IPv6-only listener on {found_six.bind}")
+
+        six_tunnel = await preview.registry.ensure(
+            project_id="test-project", container=container, port=4322, target=target
+        )
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.get(
+                f"http://127.0.0.1:{six_tunnel.local_port}/six.html"
+            )
+        assert response.status_code == 200, response.text
+        assert "ipv6-only" in response.text
+        print("  reached it through the tunnel")
+        await preview.registry.close("test-project", 4322)
+
     finally:
         await preview.registry.close_all()
         try:
