@@ -504,3 +504,81 @@ async def test_a_collaborator_starting_a_session_keeps_the_owners_profile(
     assert profile.claude_md == "# House rules\nAlways run the tests."
     assert profile.env_vars == {"DEPLOY_TARGET": "staging"}
     assert profile.git_user_name == "Alice"
+
+
+# --- signing in again must replace, not accumulate ----------------------------
+
+
+async def test_signing_in_again_replaces_the_org_credential(cast_of_three) -> None:
+    """Storing the org-wide credential was an insert, not an upsert.
+
+    Every sign-in appended a row, and resolution ordered only by
+    `project_id nulls last`, which does not distinguish between several
+    org-wide rows — so Postgres could hand back whichever it liked. The symptom
+    is the one that wastes the most time: the UI says you are connected, and
+    the container still comes up unauthenticated. Signing in again to fix it
+    made it worse.
+    """
+    alice, _, _ = cast_of_three
+    async with user_session(alice.claims) as conn:
+        org = await queries.personal_org_id(conn)
+
+    async with service_session() as conn:
+        for label, key in (("first", "sk-ant-old-key"), ("second", "sk-ant-new-key")):
+            await queries.upsert_harness_credential_privileged(
+                conn,
+                org_id=org,
+                project_id=None,
+                harness="claude_code",
+                auth_mode="api_key",
+                label=label,
+                api_key=key,
+                oauth_blob=None,
+                created_by=alice.id,
+            )
+
+        rows = list(
+            await conn.execute(
+                text(
+                    "select label from private.harness_credentials "
+                    "where org_id = :o and project_id is null"
+                ),
+                {"o": org},
+            )
+        )
+        assert len(rows) == 1, f"a second sign-in left {len(rows)} rows behind"
+
+        resolved = await queries.resolve_harness_credential_privileged(
+            conn, org_id=org, project_id=org, harness="claude_code"
+        )
+    assert resolved is not None
+    assert resolved["api_key"] == "sk-ant-new-key", "the older credential won"
+
+
+async def test_a_project_credential_still_overrides_the_org_one(cast_of_three) -> None:
+    """The override is the reason resolution is ordered rather than unique."""
+    alice, _, _ = cast_of_three
+    server = await _server_for(alice)
+    project = await _project_for(alice, server)
+    async with user_session(alice.claims) as conn:
+        org = await queries.personal_org_id(conn)
+
+    async with service_session() as conn:
+        await queries.upsert_harness_credential_privileged(
+            conn, org_id=org, project_id=None, harness="claude_code",
+            auth_mode="api_key", label="org", api_key="sk-ant-org",
+            oauth_blob=None, created_by=alice.id,
+        )
+        await queries.upsert_harness_credential_privileged(
+            conn, org_id=org, project_id=project["id"], harness="claude_code",
+            auth_mode="api_key", label="pinned", api_key="sk-ant-pinned",
+            oauth_blob=None, created_by=alice.id,
+        )
+        pinned = await queries.resolve_harness_credential_privileged(
+            conn, org_id=org, project_id=project["id"], harness="claude_code"
+        )
+        other = await queries.resolve_harness_credential_privileged(
+            conn, org_id=org, project_id=org, harness="claude_code"
+        )
+    assert pinned is not None and pinned["api_key"] == "sk-ant-pinned"
+    assert other is not None and other["api_key"] == "sk-ant-org"

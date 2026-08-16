@@ -771,6 +771,10 @@ async def upsert_harness_credential_privileged(
             ),
             {"pid": project_id, "h": harness},
         )
+    # The org-wide row is replaced in place. It used to be a plain insert, which
+    # meant signing in again appended a second row and resolution could keep
+    # handing back the old one — "I signed in and nothing changed", with the UI
+    # insisting it had worked.
     result = await conn.execute(
         text(
             """
@@ -781,6 +785,13 @@ async def upsert_harness_credential_privileged(
               (:org_id, :project_id, cast(:harness as harness_kind),
                cast(:auth_mode as harness_auth_mode), :label, :api_key,
                :oauth_token, :oauth, :created_by)
+            on conflict (org_id, harness) where project_id is null do update set
+              auth_mode       = excluded.auth_mode,
+              label           = excluded.label,
+              api_key_enc     = excluded.api_key_enc,
+              oauth_token_enc = excluded.oauth_token_enc,
+              oauth_blob_enc  = excluded.oauth_blob_enc,
+              created_by      = excluded.created_by
             returning id, org_id, project_id, harness, auth_mode, label, created_at
             """
         ),
@@ -813,7 +824,9 @@ async def resolve_harness_credential_privileged(
             from private.harness_credentials
             where harness = cast(:h as harness_kind)
               and (project_id = :pid or (project_id is null and org_id = :org_id))
-            order by project_id nulls last
+            -- Project-specific first, then newest. The tiebreaker is belt and
+            -- braces now that a unique index rules out sibling org-wide rows.
+            order by project_id nulls last, updated_at desc
             limit 1
             """
         ),
