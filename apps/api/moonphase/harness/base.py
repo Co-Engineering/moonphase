@@ -32,11 +32,17 @@ class HarnessAuthMode(StrEnum):
 
 @dataclass
 class HarnessCredential:
-    """Decrypted credential material on its way into a container."""
+    """Decrypted credential material on its way into a container.
+
+    An OAuth sign-in yields one of two shapes depending on the flow: a
+    long-lived token meant to be exported as an environment variable, or the
+    harness's own credential file to be written verbatim. Both are modelled,
+    because which one you get is not ours to choose.
+    """
 
     mode: HarnessAuthMode
     api_key: str | None = None
-    # The harness's own credential file, verbatim (e.g. .credentials.json).
+    oauth_token: str | None = None
     oauth_blob: str | None = None
 
 

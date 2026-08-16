@@ -234,5 +234,6 @@ def credential_from_row(row: dict[str, Any] | None) -> HarnessCredential | None:
     return HarnessCredential(
         mode=HarnessAuthMode(row["auth_mode"]),
         api_key=row.get("api_key"),
+        oauth_token=row.get("oauth_token"),
         oauth_blob=row.get("oauth_blob"),
     )

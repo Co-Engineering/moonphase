@@ -100,12 +100,9 @@ class ProjectCreate(BaseModel):
     server_id: UUID
     name: str = Field(min_length=1, max_length=64)
     harness: HarnessKindStr = "claude_code"
+    # Base distribution for the container. Validated against the catalogue.
+    environment: str = "debian"
     repo_url: str | None = None
-    # Optional per-project harness credential. Omitted means "inherit the
-    # organization default".
-    harness_auth_mode: HarnessAuthModeStr | None = None
-    api_key: str | None = None
-    preview_port: int | None = Field(default=None, ge=1, le=65535)
     cpus: str | None = None
     memory: str | None = None
 
@@ -130,6 +127,7 @@ class ProjectOut(ORMModel):
     name: str
     slug: str
     harness: HarnessKindStr
+    environment: str = "debian"
     repo_url: str | None
     container_name: str | None
     status: str
@@ -189,7 +187,18 @@ class HarnessInfoOut(BaseModel):
     kind: str
     display_name: str
     supported_auth_modes: list[str]
+    # Implemented by this build of Moonphase.
     available: bool = True
+    # Signed in, so projects using it will actually work.
+    configured: bool = False
+    login_supported: bool = False
+
+
+class EnvironmentOut(BaseModel):
+    key: str
+    display_name: str
+    description: str
+    base_image: str
 
 
 # --- workspace profile ------------------------------------------------------
@@ -250,6 +259,9 @@ class HarnessLoginOut(BaseModel):
     state: str
     url: str | None = None
     detail: str | None = None
+    # Live terminal contents. Shown while verifying and on failure, so a flow
+    # that stalls is diagnosable instead of opaque.
+    pane: str | None = None
 
 
 class HarnessLoginCode(BaseModel):

@@ -40,6 +40,9 @@ class Settings(BaseSettings):
 
     # --- containers --------------------------------------------------------
     moonphase_runtime_image: str = "moonphase/runtime-claude:latest"
+    # Resolved per project from its chosen environment. The catalogue lives in
+    # moonphase/environments.py; this only says where the images are published.
+    moonphase_runtime_image_template: str = "moonphase/runtime-claude:{environment}"
 
     # --- previews ----------------------------------------------------------
     # Interface the per-port preview listeners bind to. Loopback is right when

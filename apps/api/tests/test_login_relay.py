@@ -1,0 +1,275 @@
+"""The relayed sign-in machinery.
+
+The real flow needs a Claude account, so these tests stand a scripted
+interactive program in the harness's place. That is the point: it isolates the
+part Moonphase owns — scrape a URL from a PTY, type a code back into it, and
+harvest whatever credential appears — from the part Anthropic owns.
+
+Both harvest shapes are covered, because which one a given flow produces is not
+something Moonphase gets to decide: a credentials file on disk, or a long-lived
+token printed to the terminal.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import subprocess
+import time
+import uuid
+
+import pytest
+
+from moonphase import login, provision, ssh
+from moonphase.harness import Harness, HarnessAuthMode, HarnessCredential, HarnessKind
+from moonphase.harness.base import LaunchSpec
+from moonphase.ssh import SSHTarget
+
+FAKE_SERVER_IMAGE = "moonphase/fake-server:latest"
+RUNTIME_IMAGE = "moonphase/runtime-claude:latest"
+SSH_PORT = 22722
+SSH_USER = "deploy"
+SSH_PASSWORD = "moonphase-test"
+
+SCRIPT_PATH = "/home/dev/fake-login.sh"
+GOOD_CODE = "GOODCODE-123"
+
+# Mimics the shape of the real flow: banner, URL, prompt, then an outcome that
+# depends on what was typed.
+FILE_FLOW = f"""#!/bin/sh
+echo "Welcome to the harness"
+echo ""
+echo "Browser didn't open? Use the url below to sign in"
+echo "https://claude.com/cai/oauth/authorize?code=xyz&client_id=test&scope=user"
+echo ""
+printf 'Paste code here if prompted > '
+read code
+if [ "$code" = "{GOOD_CODE}" ]; then
+  mkdir -p /home/dev/.claude
+  printf '%s' '{{"claudeAiOauth":{{"accessToken":"fake-token"}}}}' \
+    > /home/dev/.claude/.credentials.json
+  echo "Login successful"
+else
+  echo "Invalid code supplied"
+fi
+"""
+
+TOKEN_FLOW = f"""#!/bin/sh
+echo "Welcome to the harness"
+echo "https://claude.com/cai/oauth/authorize?code=xyz&client_id=test&scope=user"
+printf 'Paste code here if prompted > '
+read code
+if [ "$code" = "{GOOD_CODE}" ]; then
+  echo ""
+  echo "Your long-lived token (set CLAUDE_CODE_OAUTH_TOKEN):"
+  echo "sk-ant-oat01-FAKEfake0123456789abcdefghijklmnop"
+else
+  echo "Invalid code supplied"
+fi
+"""
+
+
+class ScriptedHarness(Harness):
+    """A harness whose 'login' is a shell script we control."""
+
+    kind = HarnessKind.CLAUDE_CODE
+    display_name = "Scripted"
+    supported_auth_modes = (HarnessAuthMode.OAUTH,)
+
+    def __init__(self, script: str) -> None:
+        self.script = script
+
+    def launch_spec(self) -> LaunchSpec:
+        return LaunchSpec(command=["sh"])
+
+    def credential_files(self, credential: HarnessCredential) -> dict[str, str]:
+        return {}
+
+    def credential_env(self, credential: HarnessCredential) -> dict[str, str]:
+        return {}
+
+    def seed_config_files(self) -> dict[str, str]:
+        return {SCRIPT_PATH: self.script}
+
+    def auth_probe_script(self) -> str:
+        return "true"
+
+    def auth_status_script(self) -> str:
+        return 'echo {"loggedIn":false}'
+
+    def login_command(self) -> list[str]:
+        return ["sh", SCRIPT_PATH]
+
+    def login_url_pattern(self) -> str:
+        return r"https://claude\.com/\S*oauth\S*"
+
+    def credential_paths(self) -> list[str]:
+        return ["/home/dev/.claude/.credentials.json"]
+
+    def transcript_dir(self, workdir: str = "/workspace") -> str:
+        return "/home/dev/.claude/projects"
+
+    def version_command(self) -> list[str]:
+        return ["true"]
+
+
+def _docker(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["docker", *args], capture_output=True, text=True, check=check)
+
+
+def _docker_available() -> bool:
+    try:
+        return _docker("info", "--format", "{{.ServerVersion}}", check=False).returncode == 0
+    except FileNotFoundError:
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _docker_available(), reason="Docker daemon is not reachable"
+)
+
+
+@pytest.fixture(scope="module")
+def fake_server():
+    name = f"moonphase-login-{uuid.uuid4().hex[:8]}"
+    _docker("rm", "-f", name, check=False)
+    _docker(
+        "run", "-d", "--name", name,
+        "-p", f"127.0.0.1:{SSH_PORT}:22",
+        "-v", "/var/run/docker.sock:/var/run/docker.sock",
+        FAKE_SERVER_IMAGE,
+    )
+    deadline = time.time() + 45
+    while time.time() < deadline:
+        logs = _docker("logs", name, check=False)
+        if "Server listening on 0.0.0.0" in (logs.stdout + logs.stderr):
+            break
+        time.sleep(0.4)
+    else:
+        _docker("rm", "-f", name, check=False)
+        pytest.fail("fake server never started")
+    yield name
+    _docker("rm", "-f", name, check=False)
+    for cid in _docker(
+        "ps", "-aq", "--filter", "label=moonphase.login=1", check=False
+    ).stdout.split():
+        _docker("rm", "-f", cid, check=False)
+
+
+async def _connect() -> SSHTarget:
+    result = await provision.bootstrap(
+        server_id=str(uuid.uuid4()),
+        server_name="login-test",
+        host="127.0.0.1",
+        port=SSH_PORT,
+        ssh_user=SSH_USER,
+        auth_mode="password_bootstrap",
+        password=SSH_PASSWORD,
+        auto_install_docker=False,
+    )
+    assert result.status == "online", result.detail
+    return SSHTarget(
+        server_id=str(uuid.uuid4()),
+        host="127.0.0.1",
+        port=SSH_PORT,
+        username=SSH_USER,
+        private_key=result.generated_private_key,
+        known_host_key_fp=result.host_key_fingerprint,
+    )
+
+
+async def _drive(conn, harness: ScriptedHarness, code: str) -> login.LoginSession:
+    session = await login.start(
+        conn,
+        org_id=str(uuid.uuid4()),
+        server_id=str(uuid.uuid4()),
+        harness=harness,
+        image=RUNTIME_IMAGE,
+    )
+    assert session.state == "awaiting_code", f"{session.state}: {session.detail}"
+    assert session.url and session.url.startswith("https://claude.com/")
+
+    await login.submit_code(conn, session, code)
+    # Returning immediately is the contract: a request that blocked for the
+    # whole exchange is indistinguishable from a hang, which is what the first
+    # implementation did.
+    assert session.state == "verifying"
+
+    deadline = time.time() + 60
+    while time.time() < deadline and session.state == "verifying":
+        session = await login.advance(conn, session, harness)
+        if session.state != "verifying":
+            break
+        await asyncio.sleep(1)
+    return session
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_captures_a_credentials_file(fake_server: str) -> None:
+    target = await _connect()
+    conn = await ssh.pool.get(target)
+    try:
+        harness = ScriptedHarness(FILE_FLOW)
+        session = await _drive(conn, harness, GOOD_CODE)
+
+        assert session.state == "complete", f"{session.detail}\n{session.pane}"
+        assert session.oauth_blob and "accessToken" in session.oauth_blob
+        assert session.oauth_token is None
+        print(f"\n  captured credentials file: {session.oauth_blob[:40]}…")
+
+        # The throwaway container must not outlive the flow.
+        remaining = _docker(
+            "ps", "-aq", "--filter", f"name={session.container}", check=False
+        ).stdout.strip()
+        assert not remaining, "login container was left running"
+        print("  throwaway container cleaned up")
+    finally:
+        await ssh.pool.close_all()
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_captures_a_printed_token(fake_server: str) -> None:
+    """The `setup-token` shape: nothing on disk, a token on the screen.
+
+    The first implementation only looked for a file, so this flow polled until
+    it timed out — reporting a successful sign-in as a failure.
+    """
+    target = await _connect()
+    conn = await ssh.pool.get(target)
+    try:
+        harness = ScriptedHarness(TOKEN_FLOW)
+        session = await _drive(conn, harness, GOOD_CODE)
+
+        assert session.state == "complete", f"{session.detail}\n{session.pane}"
+        assert session.oauth_token == "sk-ant-oat01-FAKEfake0123456789abcdefghijklmnop"
+        assert session.oauth_blob is None
+        print(f"\n  scraped token: {session.oauth_token[:24]}…")
+
+        # And it must reach the harness as the variable it reads.
+        from moonphase.harness import get as get_harness
+
+        env = get_harness("claude_code").credential_env(
+            HarnessCredential(mode=HarnessAuthMode.OAUTH, oauth_token=session.oauth_token)
+        )
+        assert env == {"CLAUDE_CODE_OAUTH_TOKEN": session.oauth_token}
+        print("  exported as CLAUDE_CODE_OAUTH_TOKEN")
+    finally:
+        await ssh.pool.close_all()
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_a_rejected_code_fails_fast_with_the_terminal_shown(
+    fake_server: str,
+) -> None:
+    target = await _connect()
+    conn = await ssh.pool.get(target)
+    try:
+        harness = ScriptedHarness(FILE_FLOW)
+        session = await _drive(conn, harness, "WRONG-CODE")
+
+        assert session.state == "error", session.state
+        assert session.detail and "rejected" in session.detail.lower()
+        # Without the pane the user has no idea what happened.
+        assert "Invalid code supplied" in session.pane
+        print(f"\n  rejected cleanly: {session.detail}")
+    finally:
+        await ssh.pool.close_all()

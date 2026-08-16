@@ -159,6 +159,43 @@ async def _pick_login_server(
     return online[0]
 
 
+def _login_out(session: login.LoginSession) -> HarnessLoginOut:
+    # The pane is only useful once something is happening; sending it during
+    # the URL step would just be noise.
+    show_pane = session.state in {"verifying", "error"}
+    return HarnessLoginOut(
+        session_id=session.id,
+        state=session.state,
+        url=session.url,
+        detail=session.detail,
+        pane=session.pane if show_pane else None,
+    )
+
+
+async def _store_login_credential(
+    principal: Principal, session: login.LoginSession
+) -> None:
+    """Persist whatever the flow produced, org-wide.
+
+    Stored verbatim and unparsed: a token becomes an environment variable and a
+    credentials file becomes a file, and neither needs Moonphase to understand
+    its contents.
+    """
+    async with service_session() as conn:
+        await queries.upsert_harness_credential_privileged(
+            conn,
+            org_id=UUID(session.org_id),
+            project_id=None,
+            harness=session.harness_kind,
+            auth_mode="oauth",
+            label="Signed in",
+            api_key=None,
+            oauth_token=session.oauth_token,
+            oauth_blob=session.oauth_blob,
+            created_by=principal.user_id,
+        )
+
+
 @router.post("/harness/login/start", response_model=HarnessLoginOut)
 async def start_harness_login(
     payload: HarnessLoginStart, principal: Principal = Depends(current_principal)
@@ -182,28 +219,39 @@ async def start_harness_login(
     except (SSHError, NotFound) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    return HarnessLoginOut(
-        session_id=session.id,
-        state=session.state,
-        url=session.url,
-        detail=session.detail,
-    )
+    return _login_out(session)
 
 
 @router.get("/harness/login/{session_id}", response_model=HarnessLoginOut)
 async def poll_harness_login(
     session_id: str, principal: Principal = Depends(current_principal)
 ) -> HarnessLoginOut:
-    del principal
+    """Advance a sign-in by one step and report where it got to.
+
+    The OAuth exchange happens on the harness's own schedule, so progress is
+    made here rather than in a long-lived request. Each poll does one bounded
+    check and returns.
+    """
     session = login.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="No such sign-in.")
-    return HarnessLoginOut(
-        session_id=session.id,
-        state=session.state,
-        url=session.url,
-        detail=session.detail,
-    )
+
+    if session.state == "verifying":
+        harness = get_harness(session.harness_kind)
+        try:
+            target = await runtime.load_server_target(
+                principal.claims, UUID(session.server_id)
+            )
+            conn_ssh = await ssh.pool.get(target)
+            session = await login.advance(conn_ssh, session, harness)
+        except (SSHError, NotFound) as exc:
+            session.state = "error"
+            session.detail = str(exc)
+
+        if session.state == "complete":
+            await _store_login_credential(principal, session)
+
+    return _login_out(session)
 
 
 @router.post("/harness/login/code", response_model=HarnessLoginOut)
@@ -215,43 +263,17 @@ async def submit_harness_code(
     if session is None:
         raise HTTPException(status_code=404, detail="No such sign-in.")
 
-    harness = get_harness(session.harness_kind)
     try:
         target = await runtime.load_server_target(
             principal.claims, UUID(session.server_id)
         )
         conn_ssh = await ssh.pool.get(target)
-        session = await login.submit_code(conn_ssh, session, harness, payload.code)
+        # Types the code and returns at once; the client polls for the result.
+        session = await login.submit_code(conn_ssh, session, payload.code)
     except (SSHError, NotFound) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    if session.state == "complete":
-        # Store the harness's own credential file verbatim. Not parsing it is
-        # deliberate: the flow keeps working if the token format changes.
-        blob = next(iter(session.credential_files.values()), None)
-        if blob:
-            async with service_session() as conn:
-                await queries.upsert_harness_credential_privileged(
-                    conn,
-                    org_id=UUID(session.org_id),
-                    project_id=None,
-                    harness=session.harness_kind,
-                    auth_mode="oauth",
-                    label="Signed in",
-                    api_key=None,
-                    oauth_blob=blob,
-                    created_by=principal.user_id,
-                )
-        else:
-            session.state = "error"
-            session.detail = "Sign-in reported success but produced no credential."
-
-    return HarnessLoginOut(
-        session_id=session.id,
-        state=session.state,
-        url=session.url,
-        detail=session.detail,
-    )
+    return _login_out(session)
 
 
 @router.post("/harness/api-key", response_model=WorkspaceProfileOut)

@@ -93,6 +93,7 @@ export interface Project {
   name: string
   slug: string
   harness: HarnessKind
+  environment: string
   repo_url: string | null
   container_name: string | null
   status: 'creating' | 'running' | 'stopped' | 'error'
@@ -118,6 +119,9 @@ export interface HarnessInfo {
   display_name: string
   supported_auth_modes: string[]
   available: boolean
+  /** Signed in, so projects using it will actually work. */
+  configured: boolean
+  login_supported: boolean
 }
 
 export interface CreateServerInput {
@@ -137,7 +141,15 @@ export interface CreateProjectInput {
   server_id: string
   name: string
   harness: HarnessKind
+  environment: string
   repo_url?: string | null
+}
+
+export interface Environment {
+  key: string
+  display_name: string
+  description: string
+  base_image: string
 }
 
 export interface WorkspaceProfile {
@@ -169,6 +181,8 @@ export interface HarnessLogin {
   state: 'starting' | 'awaiting_code' | 'verifying' | 'complete' | 'error'
   url: string | null
   detail: string | null
+  /** Live terminal output, shown while verifying and on failure. */
+  pane: string | null
 }
 
 export interface GitHubDevice {
@@ -195,6 +209,7 @@ export interface DetectedPort {
 export const api = {
   organizations: () => request<Organization[]>('/api/organizations'),
   harnesses: () => request<HarnessInfo[]>('/api/harnesses'),
+  environments: () => request<Environment[]>('/api/environments'),
 
   servers: () => request<Server[]>('/api/servers'),
   server: (id: string) => request<Server>(`/api/servers/${id}`),

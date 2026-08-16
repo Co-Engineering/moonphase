@@ -49,6 +49,10 @@ class ClaudeCode(Harness):
     def credential_env(self, credential: HarnessCredential) -> dict[str, str]:
         if credential.mode is HarnessAuthMode.API_KEY and credential.api_key:
             return {"ANTHROPIC_API_KEY": credential.api_key}
+        if credential.oauth_token:
+            # What `claude setup-token` produces. Scoped to inference only,
+            # which is exactly what a coding session needs.
+            return {"CLAUDE_CODE_OAUTH_TOKEN": credential.oauth_token}
         return {}
 
     def seed_config_files(self) -> dict[str, str]:
@@ -79,7 +83,11 @@ class ClaudeCode(Harness):
         return files
 
     def auth_probe_script(self) -> str:
-        return f'test -s "{CLAUDE_HOME}/.credentials.json" || test -n "$ANTHROPIC_API_KEY"'
+        return (
+            f'test -s "{CLAUDE_HOME}/.credentials.json" '
+            '|| test -n "$ANTHROPIC_API_KEY" '
+            '|| test -n "$CLAUDE_CODE_OAUTH_TOKEN"'
+        )
 
     def auth_status_script(self) -> str:
         # Authoritative, unlike checking for a file: it reports whether the

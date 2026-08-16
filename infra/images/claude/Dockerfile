@@ -4,9 +4,17 @@
 # It is a development environment, not a minimal service image: the agent needs
 # a real toolchain to be useful, and shaving layers here buys nothing because
 # the container never scales out.
-FROM node:22-bookworm-slim
+#
+# The base is a build argument so the same recipe produces every environment
+# Moonphase offers. Node is installed from the official tarball rather than a
+# distro package precisely so this stays base-agnostic — Debian and Ubuntu ship
+# very different Node versions, and the harness should not care which host
+# distribution the user picked.
+ARG BASE_IMAGE=debian:bookworm-slim
+FROM ${BASE_IMAGE}
 
 ARG DEBIAN_FRONTEND=noninteractive
+ARG NODE_VERSION=22.20.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \
@@ -23,6 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       iproute2 \
       procps \
       unzip \
+      xz-utils \
       build-essential \
       python3 \
       python3-pip \
@@ -33,16 +42,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen \
     && rm -rf /var/lib/apt/lists/*
 
-# Debian ships fd as fdfind; the agent (and muscle memory) expects `fd`.
-RUN ln -s "$(command -v fdfind)" /usr/local/bin/fd
+# Debian and Ubuntu both ship fd as fdfind; the agent (and muscle memory)
+# expects `fd`.
+RUN ln -sf "$(command -v fdfind)" /usr/local/bin/fd
+
+# Node from the official tarball, so the version is identical across bases.
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) node_arch='x64' ;; \
+      arm64) node_arch='arm64' ;; \
+      *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \
+      -o /tmp/node.tar.xz; \
+    tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 --no-same-owner; \
+    rm /tmp/node.tar.xz; \
+    node --version; npm --version
 
 ENV LANG=en_US.UTF-8 \
     LC_ALL=en_US.UTF-8 \
     TERM=xterm-256color
 
 # GitHub CLI, so the agent can open PRs and read issues with the same token
-# git uses. Installed from GitHub's own apt repo rather than Debian's, which
-# does not carry it.
+# git uses. From GitHub's own apt repo, which serves both Debian and Ubuntu.
 RUN mkdir -p -m 755 /etc/apt/keyrings \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
          -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
@@ -61,8 +84,10 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | \
       env UV_INSTALL_DIR=/usr/local/bin sh
 
 # Non-root by default. The uid matters: /workspace and /home/dev are named
-# volumes, and the API chowns them to this user after first start.
-RUN useradd --create-home --shell /bin/bash --uid 1001 dev \
+# volumes, and the API chowns them to this user after first start. Ubuntu
+# images ship a uid 1000 user of their own, so 1001 keeps both bases identical.
+RUN userdel -r ubuntu 2>/dev/null || true; \
+    useradd --create-home --shell /bin/bash --uid 1001 dev \
     && echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/dev \
     && chmod 0440 /etc/sudoers.d/dev \
     && mkdir -p /workspace /home/dev/.claude /home/dev/.moonphase \

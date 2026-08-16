@@ -129,6 +129,9 @@ function ClaudeAccount({
   const [apiKey, setApiKey] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [working, setWorking] = useState(false)
+  const pollRef = useRef<number | undefined>(undefined)
+
+  useEffect(() => () => window.clearInterval(pollRef.current), [])
 
   const start = async () => {
     setWorking(true)
@@ -142,25 +145,51 @@ function ClaudeAccount({
     }
   }
 
+  /**
+   * Submitting only types the code; the exchange happens on the harness's own
+   * schedule and each poll advances it one step. Waiting for the whole thing
+   * inside one request is what made this look like it had hung.
+   */
   const submit = async () => {
     if (!login) return
     setWorking(true)
     setError(null)
     try {
-      const next = await api.submitHarnessCode(login.session_id, code)
-      setLogin(next)
-      if (next.state === 'complete') {
-        setCode('')
-        setLogin(null)
-        await run(async () => {}, 'Signed in to Claude. Every project will use it.')
-      } else if (next.state === 'error') {
-        setError(next.detail ?? 'Sign-in failed.')
-      }
+      const started = await api.submitHarnessCode(login.session_id, code)
+      setLogin(started)
+      window.clearInterval(pollRef.current)
+      pollRef.current = window.setInterval(async () => {
+        try {
+          const next = await api.pollHarnessLogin(started.session_id)
+          setLogin(next)
+          if (next.state === 'complete' || next.state === 'error') {
+            window.clearInterval(pollRef.current)
+            setWorking(false)
+            if (next.state === 'complete') {
+              setCode('')
+              setLogin(null)
+              await run(async () => {}, 'Signed in to Claude. Every project will use it.')
+            } else {
+              setError(next.detail ?? 'Sign-in failed.')
+            }
+          }
+        } catch (err) {
+          window.clearInterval(pollRef.current)
+          setWorking(false)
+          setError(err instanceof Error ? err.message : String(err))
+        }
+      }, 2000)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
       setWorking(false)
+      setError(err instanceof Error ? err.message : String(err))
     }
+  }
+
+  const cancel = () => {
+    window.clearInterval(pollRef.current)
+    setLogin(null)
+    setWorking(false)
+    setCode('')
   }
 
   if (profile.harness_connected) {
@@ -172,8 +201,11 @@ function ClaudeAccount({
               <span className="dot connected" /> Claude
             </h3>
             <p className="hint">
-              Connected via {profile.harness_auth_mode === 'oauth' ? 'your Claude subscription' : 'an API key'}.
-              Every project uses this — no per-project sign-in.
+              Connected via{' '}
+              {profile.harness_auth_mode === 'oauth'
+                ? 'your Claude subscription'
+                : 'an API key'}
+              . Every project uses this — no per-project sign-in.
             </p>
           </div>
           <button
@@ -188,6 +220,8 @@ function ClaudeAccount({
     )
   }
 
+  const verifying = login?.state === 'verifying'
+
   return (
     <div className="card inner">
       <h3>
@@ -200,18 +234,27 @@ function ClaudeAccount({
 
       {error && <div className="banner error">{error}</div>}
 
-      {login?.state === 'awaiting_code' && login.url ? (
+      {/* The terminal is shown whenever something is happening or went wrong,
+          so a flow that stalls is diagnosable rather than a spinner. */}
+      {(verifying || error) && login?.pane && (
+        <details className="pane-details" open={Boolean(error)}>
+          <summary>Terminal output</summary>
+          <pre className="pane">{login.pane}</pre>
+        </details>
+      )}
+
+      {login?.state === 'awaiting_code' || verifying ? (
         <>
           <p className="hint">
             <strong>1.</strong> Open this URL and approve:
           </p>
           <div className="keyblock">
-            <a href={login.url} target="_blank" rel="noreferrer">
-              {login.url}
+            <a href={login?.url ?? ''} target="_blank" rel="noreferrer">
+              {login?.url}
             </a>
           </div>
           <div className="actions" style={{ marginBottom: 12 }}>
-            <button onClick={() => void navigator.clipboard.writeText(login.url ?? '')}>
+            <button onClick={() => void navigator.clipboard.writeText(login?.url ?? '')}>
               Copy URL
             </button>
           </div>
@@ -223,14 +266,19 @@ function ClaudeAccount({
               value={code}
               onChange={(e) => setCode(e.target.value)}
               placeholder="Authorization code"
+              disabled={verifying}
               autoFocus
             />
           </label>
           <div className="actions">
-            <button className="primary" disabled={working || !code.trim()} onClick={submit}>
-              {working ? 'Verifying…' : 'Finish sign-in'}
+            <button
+              className="primary"
+              disabled={working || verifying || !code.trim()}
+              onClick={submit}
+            >
+              {verifying ? 'Waiting for Claude…' : 'Finish sign-in'}
             </button>
-            <button onClick={() => setLogin(null)}>Cancel</button>
+            <button onClick={cancel}>Cancel</button>
           </div>
         </>
       ) : (

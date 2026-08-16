@@ -9,7 +9,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from .. import docker_remote, preview, queries, runtime, sessions, ssh
+from .. import docker_remote, environments, preview, queries, runtime, sessions, ssh
 from .. import harness as harness_registry
 from ..auth import Principal, current_principal
 from ..config import get_settings
@@ -70,6 +70,17 @@ async def create_project(
     disk) and retry without re-entering anything.
     """
     settings = get_settings()
+    del settings  # image comes from the project's environment, below
+
+    environment = environments.get(payload.environment)
+    if payload.environment and payload.environment not in environments.keys():
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Unknown environment {payload.environment!r}. "
+                f"Available: {', '.join(environments.keys())}."
+            ),
+        )
 
     async with user_session(principal.claims) as conn:
         server = await queries.get_server(conn, payload.server_id)
@@ -84,6 +95,24 @@ async def create_project(
                 ),
             )
 
+        org_id_for_check = server["org_id"]
+
+    async with service_session() as conn:
+        credential = await queries.resolve_harness_credential_privileged(
+            conn, org_id=org_id_for_check, project_id=org_id_for_check,
+            harness=payload.harness,
+        )
+    if credential is None:
+        harness_name = harness_registry.get(payload.harness).display_name
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{harness_name} is not connected. Sign in once in Settings and "
+                "every project will use it."
+            ),
+        )
+
+    async with user_session(principal.claims) as conn:
         base_slug = queries.slugify(payload.name)
         slug = base_slug
         suffix = 1
@@ -99,11 +128,12 @@ async def create_project(
                 name=payload.name.strip(),
                 slug=slug,
                 harness=payload.harness,
+                environment=environment.key,
                 repo_url=payload.repo_url,
                 container_name="",  # filled in below, once we know the id
                 workspace_volume="",
                 home_volume="",
-                preview_port=payload.preview_port,
+                preview_port=None,
                 created_by=principal.user_id,
             )
         except PermissionError as exc:
@@ -121,22 +151,6 @@ async def create_project(
             home_volume=home_volume,
         )
 
-    # Optional per-project credential, stored before provisioning so the very
-    # first session already has it.
-    if payload.harness_auth_mode == "api_key" and payload.api_key:
-        async with service_session() as conn:
-            await queries.upsert_harness_credential_privileged(
-                conn,
-                org_id=server["org_id"],
-                project_id=project_id,
-                harness=payload.harness,
-                auth_mode="api_key",
-                label="Project key",
-                api_key=payload.api_key,
-                oauth_blob=None,
-                created_by=principal.user_id,
-            )
-
     try:
         container_id = await _provision_container(
             principal,
@@ -144,9 +158,9 @@ async def create_project(
             container=container,
             workspace_volume=workspace_volume,
             home_volume=home_volume,
-            image=settings.moonphase_runtime_image,
+            image=environment.image,
             repo_url=payload.repo_url,
-            preview_port=payload.preview_port,
+            preview_port=None,
             cpus=payload.cpus,
             memory=payload.memory,
         )

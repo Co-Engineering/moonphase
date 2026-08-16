@@ -8,11 +8,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import text
 
+from .. import environments, queries
 from .. import harness as harness_registry
-from .. import queries
 from ..auth import Principal, current_principal
 from ..db import service_session, user_session
 from ..schemas import (
+    EnvironmentOut,
     HarnessCredentialIn,
     HarnessCredentialOut,
     HarnessInfoOut,
@@ -52,16 +53,52 @@ async def list_organizations(
 
 
 @router.get("/harnesses", response_model=list[HarnessInfoOut])
-async def list_harnesses() -> list[HarnessInfoOut]:
-    """What Moonphase can run. Today: Claude Code."""
+async def list_harnesses(
+    principal: Principal = Depends(current_principal),
+) -> list[HarnessInfoOut]:
+    """What Moonphase can run, and which of it is actually usable.
+
+    `configured` is the one the UI cares about: offering a harness nobody has
+    signed into produces a project whose terminal comes up unable to do
+    anything, with no clue why.
+    """
+    async with user_session(principal.claims) as conn:
+        org_id = await queries.personal_org_id(conn)
+
+    configured: set[str] = set()
+    if org_id is not None:
+        async with service_session() as conn:
+            for harness in harness_registry.available():
+                row = await queries.resolve_harness_credential_privileged(
+                    conn, org_id=org_id, project_id=org_id, harness=str(harness.kind)
+                )
+                if row is not None:
+                    configured.add(str(harness.kind))
+
     return [
         HarnessInfoOut(
             kind=h.kind.value,
             display_name=h.display_name,
             supported_auth_modes=[m.value for m in h.supported_auth_modes],
             available=True,
+            configured=h.kind.value in configured,
+            login_supported=h.login_command() is not None,
         )
         for h in harness_registry.available()
+    ]
+
+
+@router.get("/environments", response_model=list[EnvironmentOut])
+async def list_environments() -> list[EnvironmentOut]:
+    """Base distributions a project container can run on."""
+    return [
+        EnvironmentOut(
+            key=env.key,
+            display_name=env.display_name,
+            description=env.description,
+            base_image=env.base_image,
+        )
+        for env in environments.available()
     ]
 
 

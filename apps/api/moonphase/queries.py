@@ -304,7 +304,7 @@ async def load_ssh_target_privileged(
 
 
 PROJECT_COLUMNS = """
-    p.id, p.org_id, p.server_id, p.name, p.slug, p.harness, p.repo_url,
+    p.id, p.org_id, p.server_id, p.name, p.slug, p.harness, p.environment, p.repo_url,
     p.container_name, p.container_id, p.workspace_volume, p.home_volume,
     p.status, p.status_detail, p.preview_port, p.preview_url, p.created_at
 """
@@ -361,6 +361,7 @@ async def insert_project(
     name: str,
     slug: str,
     harness: str,
+    environment: str,
     repo_url: str | None,
     container_name: str,
     workspace_volume: str,
@@ -372,15 +373,17 @@ async def insert_project(
         text(
             """
             insert into projects
-              (org_id, server_id, name, slug, harness, repo_url, container_name,
-               workspace_volume, home_volume, preview_port, status, created_by)
+              (org_id, server_id, name, slug, harness, environment, repo_url,
+               container_name, workspace_volume, home_volume, preview_port,
+               status, created_by)
             values
               (:org_id, :server_id, :name, :slug, cast(:harness as harness_kind),
-               :repo_url, :container_name, :workspace_volume, :home_volume,
-               :preview_port, 'creating', :created_by)
-            returning id, org_id, server_id, name, slug, harness, repo_url,
-                      container_name, container_id, workspace_volume, home_volume,
-                      status, status_detail, preview_port, preview_url, created_at
+               :environment, :repo_url, :container_name, :workspace_volume,
+               :home_volume, :preview_port, 'creating', :created_by)
+            returning id, org_id, server_id, name, slug, harness, environment,
+                      repo_url, container_name, container_id, workspace_volume,
+                      home_volume, status, status_detail, preview_port,
+                      preview_url, created_at
             """
         ),
         {
@@ -389,6 +392,7 @@ async def insert_project(
             "name": name,
             "slug": slug,
             "harness": harness,
+            "environment": environment,
             "repo_url": repo_url,
             "container_name": container_name,
             "workspace_volume": workspace_volume,
@@ -554,6 +558,7 @@ async def upsert_harness_credential_privileged(
     api_key: str | None,
     oauth_blob: str | None,
     created_by: str,
+    oauth_token: str | None = None,
 ) -> dict[str, Any]:
     if project_id is not None:
         # One credential per (project, harness); replacing is the common case.
@@ -569,10 +574,11 @@ async def upsert_harness_credential_privileged(
             """
             insert into private.harness_credentials
               (org_id, project_id, harness, auth_mode, label, api_key_enc,
-               oauth_blob_enc, created_by)
+               oauth_token_enc, oauth_blob_enc, created_by)
             values
               (:org_id, :project_id, cast(:harness as harness_kind),
-               cast(:auth_mode as harness_auth_mode), :label, :api_key, :oauth, :created_by)
+               cast(:auth_mode as harness_auth_mode), :label, :api_key,
+               :oauth_token, :oauth, :created_by)
             returning id, org_id, project_id, harness, auth_mode, label, created_at
             """
         ),
@@ -583,6 +589,7 @@ async def upsert_harness_credential_privileged(
             "auth_mode": auth_mode,
             "label": label,
             "api_key": encrypt(api_key),
+            "oauth_token": encrypt(oauth_token),
             "oauth": encrypt(oauth_blob),
             "created_by": created_by,
         },
@@ -600,7 +607,7 @@ async def resolve_harness_credential_privileged(
     result = await conn.execute(
         text(
             """
-            select auth_mode, api_key_enc, oauth_blob_enc
+            select auth_mode, api_key_enc, oauth_token_enc, oauth_blob_enc
             from private.harness_credentials
             where harness = cast(:h as harness_kind)
               and (project_id = :pid or (project_id is null and org_id = :org_id))
@@ -617,6 +624,7 @@ async def resolve_harness_credential_privileged(
     return {
         "auth_mode": data["auth_mode"],
         "api_key": decrypt(data["api_key_enc"]),
+        "oauth_token": decrypt(data["oauth_token_enc"]),
         "oauth_blob": decrypt(data["oauth_blob_enc"]),
     }
 

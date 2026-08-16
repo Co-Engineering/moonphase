@@ -724,3 +724,32 @@ button.linkish:hover:not(:disabled) {
     padding: 16px;
   }
 }
+
+/* Terminal output from a relayed sign-in. Shown when the flow is working or
+   has failed, so a stall is something the user can read rather than guess at. */
+.pane-details {
+  margin-bottom: 12px;
+}
+
+.pane-details summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 4px 0;
+}
+
+.pane {
+  background: #0f1017;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 6px 0 0;
+}

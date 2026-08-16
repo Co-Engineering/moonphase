@@ -45,12 +45,15 @@ function Shell({ email }: { email: string }) {
   const projects = useResource<Project[]>(() => api.projects(), [], { pollMs: 15000 })
   const harnesses = useResource(() => api.harnesses(), [])
   const profile = useResource(() => api.profile(), [])
+  const environments = useResource(() => api.environments(), [])
 
   const reloadAll = useCallback(() => {
     void servers.reload(true)
     void projects.reload(true)
     void profile.reload(true)
-  }, [servers, projects, profile])
+    // Signing in changes which harnesses are usable, so this must refresh too.
+    void harnesses.reload(true)
+  }, [servers, projects, profile, harnesses])
 
   const selectProject = useCallback((id: string) => {
     setSelected({ kind: 'project', id })
@@ -186,8 +189,8 @@ function Shell({ email }: { email: string }) {
         <NewProject
           servers={servers.data ?? []}
           harnesses={harnesses.data ?? []}
+          environments={environments.data ?? []}
           defaultServerId={activeServer?.id ?? activeProject?.server_id}
-          connected={profile.data?.harness_connected ?? false}
           onOpenSettings={() => {
             setShowNewProject(false)
             setShowSettings(true)
@@ -236,7 +239,7 @@ function ProjectView({
         </button>
         <h1>{project.name}</h1>
         <span className="sub">
-          {project.server_name} · {project.container_name}
+          {project.server_name} · {project.environment} · {project.container_name}
         </span>
         <div className="spacer" />
         <button

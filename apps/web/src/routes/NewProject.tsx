@@ -1,11 +1,11 @@
 import { useState, type FormEvent } from 'react'
-import { api, type HarnessInfo, type Server } from '../lib/api'
+import { api, type Environment, type HarnessInfo, type Server } from '../lib/api'
 
 interface Props {
   servers: Server[]
   harnesses: HarnessInfo[]
+  environments: Environment[]
   defaultServerId?: string
-  connected: boolean
   onClose: () => void
   onCreated: (projectId: string) => void
   onOpenSettings: () => void
@@ -21,16 +21,22 @@ interface Props {
 export function NewProject({
   servers,
   harnesses,
+  environments,
   defaultServerId,
-  connected,
   onClose,
   onCreated,
   onOpenSettings,
 }: Props) {
   const online = servers.filter((s) => s.status === 'online')
+  // Only harnesses that are both implemented and signed into. Offering one you
+  // have not connected produces a project whose terminal comes up unable to do
+  // anything, with nothing on screen explaining why.
+  const usable = harnesses.filter((h) => h.available && h.configured)
+
   const [serverId, setServerId] = useState(defaultServerId ?? online[0]?.id ?? '')
   const [name, setName] = useState('')
-  const [harness, setHarness] = useState(harnesses[0]?.kind ?? 'claude_code')
+  const [harness, setHarness] = useState(usable[0]?.kind ?? '')
+  const [environment, setEnvironment] = useState(environments[0]?.key ?? 'debian')
   const [repoUrl, setRepoUrl] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -44,6 +50,7 @@ export function NewProject({
         server_id: serverId,
         name,
         harness: harness as 'claude_code' | 'opencode',
+        environment,
         repo_url: repoUrl.trim() || null,
       })
       // The API returns the row even when provisioning failed, so the user can
@@ -77,6 +84,33 @@ export function NewProject({
     )
   }
 
+  if (usable.length === 0) {
+    const loginable = harnesses.filter((h) => h.available)
+    return (
+      <div className="modal-backdrop" onClick={onClose}>
+        <div className="card modal" onClick={(e) => e.stopPropagation()}>
+          <h2>Connect a harness first</h2>
+          <p className="hint">
+            A project runs a coding agent, and none are connected yet. Sign in once
+            and every project from then on uses it — you will not be asked again.
+          </p>
+          {loginable.length > 0 && (
+            <p className="hint">
+              Available: {loginable.map((h) => h.display_name).join(', ')}.
+            </p>
+          )}
+          <div className="actions">
+            <button className="primary" onClick={onOpenSettings}>
+              Open Settings
+            </button>
+            <div className="spacer" />
+            <button onClick={onClose}>Cancel</button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="card modal" onClick={(e) => e.stopPropagation()}>
@@ -88,16 +122,6 @@ export function NewProject({
 
         <form onSubmit={submit}>
           {error && <div className="banner error">{error}</div>}
-
-          {!connected && (
-            <div className="banner warn">
-              Claude is not connected yet, so the harness will start signed out.{' '}
-              <button type="button" className="linkish" onClick={onOpenSettings}>
-                Sign in once in Settings
-              </button>{' '}
-              and every project picks it up.
-            </div>
-          )}
 
           <label>
             <span>Server</span>
@@ -120,16 +144,35 @@ export function NewProject({
             />
           </label>
 
-          <label>
-            <span>Harness</span>
-            <select value={harness} onChange={(e) => setHarness(e.target.value)}>
-              {harnesses.map((h) => (
-                <option key={h.kind} value={h.kind} disabled={!h.available}>
-                  {h.display_name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="row">
+            <label>
+              <span>Harness</span>
+              <select value={harness} onChange={(e) => setHarness(e.target.value)}>
+                {usable.map((h) => (
+                  <option key={h.kind} value={h.kind}>
+                    {h.display_name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label>
+              <span>Environment</span>
+              <select
+                value={environment}
+                onChange={(e) => setEnvironment(e.target.value)}
+              >
+                {environments.map((env) => (
+                  <option key={env.key} value={env.key}>
+                    {env.display_name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <p className="hint" style={{ marginTop: -6 }}>
+            {environments.find((e) => e.key === environment)?.description}
+          </p>
 
           <label>
             <span>Repository (optional)</span>
