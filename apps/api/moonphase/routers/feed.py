@@ -58,11 +58,17 @@ async def get_feed(
         return FeedOut(available=False, activity="stopped", cursor=cursor or "")
 
     harness = harness_registry.get(ctx.harness)
+    try:
+        space, _row = await runtime.load_session_space(
+            principal.claims, project_id, session_name
+        )
+    except NotFound:
+        return FeedOut(available=False, activity="unknown", cursor=cursor or "")
 
     try:
         conn_ssh = await ssh.pool.get(ctx.target)
         page = await transcript_reader.read(
-            conn_ssh, ctx.container, harness, cursor=cursor
+            conn_ssh, ctx.container, harness, cursor=cursor, space=space
         )
         pane = await sessions.capture_pane(
             conn_ssh, ctx.container, session=session_name, lines=80

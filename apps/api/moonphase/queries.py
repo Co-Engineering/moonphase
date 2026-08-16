@@ -310,9 +310,12 @@ PROJECT_COLUMNS = """
     p.id, p.org_id, p.server_id, p.name, p.slug, p.harness, p.environment, p.repo_url,
     p.container_name, p.container_id, p.workspace_volume, p.home_volume,
     p.status, p.status_detail, p.preview_port, p.preview_url, p.created_at,
+    -- Scoped to the caller's own sessions. In a shared project "waiting for
+    -- you" must mean you: someone else's agent needing its owner is not a
+    -- thing you can act on, and a sidebar dot you cannot clear is noise.
     coalesce(
         (select s.activity::text from project_sessions s
-         where s.project_id = p.id
+         where s.project_id = p.id and s.user_id = auth.uid()
          order by case s.activity
                     when 'awaiting_input' then 0
                     when 'working' then 1
@@ -323,7 +326,7 @@ PROJECT_COLUMNS = """
         'unknown'
     ) as activity,
     (select s.activity_detail from project_sessions s
-     where s.project_id = p.id
+     where s.project_id = p.id and s.user_id = auth.uid()
      order by case s.activity
                 when 'awaiting_input' then 0
                 when 'working' then 1
@@ -332,7 +335,7 @@ PROJECT_COLUMNS = """
               end, s.created_at
      limit 1) as activity_detail,
     (select max(s.activity_at) from project_sessions s
-     where s.project_id = p.id) as activity_at,
+     where s.project_id = p.id and s.user_id = auth.uid()) as activity_at,
     public.project_access(p.id) as access,
     not public.is_org_member(p.org_id) as shared,
     (select count(*) from project_shares ph where ph.project_id = p.id) as share_count,
@@ -651,6 +654,15 @@ async def delete_project(conn: AsyncConnection, project_id: UUID) -> bool:
 # ---------------------------------------------------------------------------
 
 
+SESSION_COLUMNS = """
+    id, project_id, tmux_session, harness, state, started_at, last_attached_at,
+    transcript_path, user_id, workdir, home_dir, branch,
+    activity::text as activity, activity_detail,
+    (user_id = auth.uid()) as is_mine,
+    public.session_owner_label(user_id) as owner
+"""
+
+
 async def upsert_session(
     conn: AsyncConnection,
     *,
@@ -658,25 +670,40 @@ async def upsert_session(
     harness: str,
     tmux_session: str,
     state: str,
+    user_id: str,
+    workdir: str,
+    home_dir: str,
+    branch: str | None = None,
     transcript_path: str | None = None,
     mark_started: bool = False,
 ) -> dict[str, Any]:
+    """Create or refresh a session row.
+
+    `user_id` is not defaulted and not optional: a session with no owner is a
+    session running on nobody's account, and the whole point of the ownership
+    column is that there is no such thing. The insert policy checks it matches
+    the caller, so passing someone else's is refused by the database.
+    """
     result = await conn.execute(
         text(
-            """
+            f"""
             insert into project_sessions
-              (project_id, tmux_session, harness, state, transcript_path, started_at)
+              (project_id, tmux_session, harness, state, transcript_path,
+               user_id, workdir, home_dir, branch, started_at)
             values
               (:project_id, :tmux_session, cast(:harness as harness_kind), :state,
-               :transcript_path, case when :mark_started then now() else null end)
+               :transcript_path, cast(:user_id as uuid), :workdir, :home_dir,
+               :branch, case when :mark_started then now() else null end)
             on conflict (project_id, tmux_session) do update set
               state = excluded.state,
               transcript_path = coalesce(excluded.transcript_path,
                                          project_sessions.transcript_path),
+              workdir  = excluded.workdir,
+              home_dir = excluded.home_dir,
+              branch   = coalesce(excluded.branch, project_sessions.branch),
               started_at = case when :mark_started then now()
                                 else project_sessions.started_at end
-            returning id, project_id, tmux_session, harness, state, started_at,
-                      last_attached_at, transcript_path
+            returning {SESSION_COLUMNS}
             """
         ),
         {
@@ -685,25 +712,47 @@ async def upsert_session(
             "harness": harness,
             "state": state,
             "transcript_path": transcript_path,
+            "user_id": user_id,
+            "workdir": workdir,
+            "home_dir": home_dir,
+            "branch": branch,
             "mark_started": mark_started,
         },
     )
     row = result.first()
     if row is None:
-        raise PermissionError("Not allowed to manage sessions for this project.")
+        raise PermissionError(
+            "Not allowed to run a session in this project, or that session "
+            "belongs to someone else."
+        )
     return _row_to_dict(row)
+
+
+async def get_session(
+    conn: AsyncConnection, project_id: UUID, tmux_session: str
+) -> dict[str, Any] | None:
+    result = await conn.execute(
+        text(
+            f"select {SESSION_COLUMNS} from project_sessions "
+            "where project_id = :pid and tmux_session = :ts"
+        ),
+        {"pid": project_id, "ts": tmux_session},
+    )
+    row = result.first()
+    return _row_to_dict(row) if row else None
 
 
 async def get_sessions(conn: AsyncConnection, project_id: UUID) -> list[dict[str, Any]]:
     result = await conn.execute(
         text(
-            """
-            select id, project_id, tmux_session, harness, state, started_at,
-                   last_attached_at, transcript_path,
-                   activity::text as activity, activity_detail
+            f"""
+            select {SESSION_COLUMNS}
             from project_sessions
             where project_id = :pid
-            order by created_at, tmux_session
+            -- Yours first: in a shared project the list is mostly other
+            -- people's, and the one you can actually type into should not be
+            -- something you have to hunt for.
+            order by (user_id = auth.uid()) desc, created_at, tmux_session
             """
         ),
         {"pid": project_id},
@@ -722,6 +771,14 @@ async def delete_session_row(
         {"pid": project_id, "ts": tmux_session},
     )
     return result.first() is not None
+
+
+async def mark_sessions_stopped(conn: AsyncConnection, project_id: UUID) -> None:
+    """Whole container went down, so every session in it did too."""
+    await conn.execute(
+        text("update project_sessions set state = 'stopped' where project_id = :pid"),
+        {"pid": project_id},
+    )
 
 
 async def count_sessions(conn: AsyncConnection, project_id: UUID) -> int:

@@ -223,6 +223,14 @@ class SessionOut(ORMModel):
     transcript_path: str | None
     activity: str = "unknown"
     activity_detail: str | None = None
+    # Who it runs as. A session is one person's: their credentials, their
+    # branch, their commits.
+    user_id: UUID | None = None
+    owner: str | None = None
+    is_mine: bool = False
+    # The git worktree this session works in, and the branch it is on.
+    workdir: str = "/workspace"
+    branch: str | None = None
     # Devices currently viewing this session. Live from tmux, not stored:
     # a stale count would be worse than none.
     attached_clients: int = 0
@@ -232,12 +240,15 @@ class SessionOut(ORMModel):
 
 class SessionStartIn(BaseModel):
     restart: bool = False
-    # Which tmux session. Defaults to the project's first.
+    # Which tmux session. Left out, it resolves to the caller's own — never
+    # somebody else's, which would run their subscription on your keystrokes.
     session: str | None = None
 
 
 class SessionCreateIn(BaseModel):
-    name: str = Field(min_length=1, max_length=48)
+    # Optional: left out, the name is derived from who is asking, which is now
+    # the useful default because names identify people in a shared project.
+    name: str | None = Field(default=None, max_length=48)
 
 
 class TranscriptEventOut(BaseModel):

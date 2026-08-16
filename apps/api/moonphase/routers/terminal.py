@@ -24,7 +24,7 @@ from uuid import UUID
 import asyncssh
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 
-from .. import docker_remote, queries, runtime, sessions, ssh
+from .. import docker_remote, queries, runtime, sessions, ssh, workspaces
 from ..auth import Principal, websocket_principal
 from ..db import user_session
 from ..runtime import CAN_CONTROL, CAN_OBSERVE, Forbidden, NotFound
@@ -170,8 +170,30 @@ async def project_terminal(
         await websocket.close(code=4404)
         return
 
-    # A viewer gets the same live picture and none of the keyboard.
-    writable = ctx.access in CAN_CONTROL
+    # Writable only if this session is the caller's own. Watching someone
+    # else's work is deliberate and fine; typing into it is not, because their
+    # harness is authenticated as them and every keystroke would run on their
+    # subscription under their name.
+    try:
+        space, session_row = await runtime.load_session_space(
+            principal.claims, project_id, session_name
+        )
+        writable = bool(session_row.get("is_mine")) and ctx.access in CAN_CONTROL
+    except NotFound:
+        # No such session yet. Only somebody who could start one should be told
+        # to; for everyone else it does not exist.
+        if ctx.access not in CAN_CONTROL:
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "message": f"There is no session called {session_name!r} here.",
+                    }
+                )
+            )
+            await websocket.close(code=4404)
+            return
+        space, session_row, writable = sessions.space_for(session_name), {}, True
 
     try:
         conn_ssh = await ssh.pool.get(ctx.target)
@@ -209,15 +231,29 @@ async def project_terminal(
             if container.state != "running":
                 await docker_remote.start(conn_ssh, ctx.container)
 
-            workspace_profile = await runtime.load_profile(
-                ctx.project["org_id"], project_id, ctx.harness
+            workspace_profile = await runtime.load_session_profile(
+                principal.claims, ctx.project, ctx.harness
             )
+            if not session_row:
+                # First attach for this person: give them a worktree before
+                # tmux tries to start in it.
+                workdir, _branch = await workspaces.ensure_worktree(
+                    conn_ssh,
+                    ctx.container,
+                    session_name,
+                    author_name=workspace_profile.git_user_name
+                    or (principal.email or "Moonphase"),
+                    author_email=workspace_profile.git_user_email
+                    or (principal.email or "moonphase@localhost"),
+                )
+                space = sessions.space_for(session_name, workdir)
             await sessions.ensure_session(
                 conn_ssh,
                 ctx.container,
                 harness_kind=ctx.harness,
                 workspace_profile=workspace_profile,
                 session=session_name,
+                space=space,
             )
     except SSHError as exc:
         await websocket.send_text(json.dumps({"type": "error", "message": str(exc)}))
@@ -225,7 +261,7 @@ async def project_terminal(
         return
 
     attach = sessions.attach_command(
-        ctx.container, session_name, read_only=not writable
+        ctx.container, session_name, read_only=not writable, workdir=space.workdir
     )
 
     try:

@@ -24,7 +24,7 @@ from typing import Any
 import asyncssh
 
 from . import docker_remote
-from .harness import Harness
+from .harness import Harness, SessionSpace
 
 log = logging.getLogger(__name__)
 
@@ -161,10 +161,14 @@ async def read(
     harness: Harness,
     *,
     cursor: str | None = None,
-    workdir: str = "/workspace",
+    space: SessionSpace | None = None,
 ) -> TranscriptPage:
-    """Everything written since `cursor`, plus a cursor for next time."""
-    directory = harness.transcript_dir(workdir)
+    """Everything written since `cursor`, plus a cursor for next time.
+
+    The space matters: each session writes its transcript under its own HOME,
+    so reading the wrong one shows you somebody else's conversation.
+    """
+    directory = harness.transcript_dir(space or SessionSpace())
     path = await _newest_file(conn, container, directory)
     if path is None:
         return TranscriptPage(available=False)

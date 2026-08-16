@@ -53,6 +53,33 @@ class AuthStatus:
     detail: str | None = None
 
 
+@dataclass(frozen=True)
+class SessionSpace:
+    """Where one session keeps its private state inside a shared container.
+
+    Two people in one project run two agents in one container, and neither
+    one's credentials, history or commit identity may leak into the other's. A
+    session therefore gets its own HOME — which isolates a harness's config, its
+    transcripts and `~/.gitconfig` in one move, without depending on any
+    particular tool honouring any particular override variable — and its own
+    working directory, which is a git worktree on its own branch.
+
+    The defaults describe the shared layout every session used before sessions
+    had owners, so a row written back then still resolves to where its files are.
+    """
+
+    home: str = "/home/dev"
+    workdir: str = "/workspace"
+
+    @property
+    def env_file(self) -> str:
+        return f"{self.home}/.moonphase-env"
+
+    @property
+    def git_config(self) -> str:
+        return f"{self.home}/.gitconfig"
+
+
 @dataclass
 class LaunchSpec:
     """How to start the harness inside an already-running container."""
@@ -74,7 +101,9 @@ class Harness(abc.ABC):
         """Argv and environment for the interactive session."""
 
     @abc.abstractmethod
-    def credential_files(self, credential: HarnessCredential) -> dict[str, str]:
+    def credential_files(
+        self, credential: HarnessCredential, space: SessionSpace
+    ) -> dict[str, str]:
         """Files to materialise in the container home, as {path: contents}.
 
         Written with mode 0600 before the session starts.
@@ -84,7 +113,7 @@ class Harness(abc.ABC):
     def credential_env(self, credential: HarnessCredential) -> dict[str, str]:
         """Environment variables the harness reads for authentication."""
 
-    def seed_config_files(self) -> dict[str, str]:
+    def seed_config_files(self, space: SessionSpace) -> dict[str, str]:
         """First-run config to write, as {path: contents}, only if absent.
 
         For skipping cosmetic first-run wizards so a user attaching from a
@@ -94,7 +123,7 @@ class Harness(abc.ABC):
         """
         return {}
 
-    def profile_files(self, profile: Any) -> dict[str, str]:
+    def profile_files(self, profile: Any, space: SessionSpace) -> dict[str, str]:
         """The user's global configuration, as {path: contents}.
 
         Written on every session start, so editing the profile reaches every
@@ -149,7 +178,7 @@ class Harness(abc.ABC):
         return None
 
     @abc.abstractmethod
-    def auth_probe_script(self) -> str:
+    def auth_probe_script(self, space: SessionSpace) -> str:
         """A `sh` snippet whose exit status reveals whether auth is present.
 
         A snippet rather than an argv, because the caller runs it in a shell
@@ -159,7 +188,7 @@ class Harness(abc.ABC):
         """
 
     @abc.abstractmethod
-    def transcript_dir(self, workdir: str = "/workspace") -> str:
+    def transcript_dir(self, space: SessionSpace) -> str:
         """Directory the harness writes JSONL session transcripts into.
 
         The phone client tails this rather than scraping the terminal, so the

@@ -157,6 +157,39 @@ Three consequences worth stating:
   listing query calls `public.server_label()` instead of joining `servers`,
   so the address, the login and the host key stay with the people who own it.
 
+### Sessions are individual
+
+Sharing a project shares the code and the machine. It must not share the coding
+subscription behind them — that is a licensing question before it is a billing
+one, and "whose account is this running on" should never be ambiguous.
+
+So a session belongs to exactly one person, a project may hold several, and the
+rule is simply: **you drive your own sessions and may watch anyone's.** Typing
+into someone else's is refused, because their harness is authenticated as them.
+
+Isolation is by `HOME`. Each session gets `/home/dev/sessions/<name>/`, which is
+enough to separate a harness's credentials, settings, history and transcripts
+*and* `~/.gitconfig` in one move — without depending on any particular tool
+honouring any particular override variable. (Claude Code has no
+`CLAUDE_CONFIG_DIR` in the version we ship against; `HOME` works for every
+harness that will ever exist.) `git config` runs with `GIT_CONFIG_GLOBAL`
+pointed there rather than `--global`, which would resolve to the container's
+shared home and let the last session to start decide who everybody commits as.
+
+Each session also gets a **git worktree** at `<home>/work`, on a branch named
+`moonphase/<session>`. `/workspace` stays the repository. Two agents editing one
+checkout would overwrite each other mid-thought and the damage would be
+invisible until something failed to build; with worktrees, sharing work is a
+merge, which is a problem git already solved. Closing a session removes its
+checkout and keeps its branch, because that branch may hold the only copy of
+something.
+
+A session's home and workdir are fixed when it is created and recorded on the
+row. Moving a running session would point it at a directory its harness has
+never seen and orphan its real state, so only a restart — which recreates it
+anyway — adopts a new layout. That is also the upgrade path for sessions made
+before sessions had owners.
+
 A viewer attached to a terminal gets `tmux attach -r -f ignore-size`. The
 `-r` is the read-only part; `ignore-size` is there because a viewer who cannot
 type could otherwise still squeeze the window for whoever is driving. The

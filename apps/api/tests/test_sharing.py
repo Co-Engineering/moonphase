@@ -122,6 +122,22 @@ async def _project_for(
         )
 
 
+async def _session_for(conn, person: Person, project_id, name: str | None = None) -> dict:
+    """A session owned by `person`, with its own home and worktree."""
+    name = name or person.email.split("@")[0]
+    return await queries.upsert_session(
+        conn,
+        project_id=project_id,
+        harness="claude_code",
+        tmux_session=name,
+        state="running",
+        user_id=person.id,
+        workdir=f"/workspace-{name}",
+        home_dir=f"/home/dev/sessions/{name}",
+        branch=f"moonphase/{name}",
+    )
+
+
 async def _share(owner: Person, kind: str, resource_id, to: str, role: str) -> dict:
     async with user_session(owner.claims) as conn:
         async with service_session() as svc:
@@ -232,13 +248,7 @@ async def test_the_host_can_see_that_it_exists_but_not_what_it_is_doing(
     project = await _project_for(bob, server, org_id=bob_org)
 
     async with user_session(bob.claims) as conn:
-        await queries.upsert_session(
-            conn,
-            project_id=project["id"],
-            harness="claude_code",
-            tmux_session="moonphase",
-            state="running",
-        )
+        await _session_for(conn, bob, project["id"])
         assert len(await queries.get_sessions(conn, project["id"])) == 1
 
     # The transcript, the activity state and the terminal all hang off sessions.
@@ -274,13 +284,7 @@ async def test_a_project_viewer_can_watch_and_nothing_else(cast_of_three) -> Non
         await queries.update_project_state(conn, project["id"], status="stopped")
         assert await queries.delete_project(conn, project["id"]) is False
         with pytest.raises(ProgrammingError):
-            await queries.upsert_session(
-                conn,
-                project_id=project["id"],
-                harness="claude_code",
-                tmux_session="moonphase",
-                state="running",
-            )
+            await _session_for(conn, bob, project["id"])
 
     async with user_session(alice.claims) as conn:
         unchanged = await queries.get_project(conn, project["id"])
@@ -296,13 +300,7 @@ async def test_a_project_collaborator_can_drive_it(cast_of_three) -> None:
 
     async with user_session(bob.claims) as conn:
         assert await queries.access_level(conn, "project", project["id"]) == "write"
-        await queries.upsert_session(
-            conn,
-            project_id=project["id"],
-            harness="claude_code",
-            tmux_session="moonphase",
-            state="running",
-        )
+        await _session_for(conn, bob, project["id"])
         await queries.update_project_state(conn, project["id"], status="running")
         # Driving is not owning.
         assert await queries.delete_project(conn, project["id"]) is False
@@ -460,50 +458,107 @@ async def test_a_project_cannot_be_attached_to_an_invisible_server(
         assert await queries.list_projects(conn) == []
 
 
-# --- what a collaborator's session materialises into the container ------------
+# --- whose account a session runs on -----------------------------------------
 
 
-async def test_a_collaborator_starting_a_session_keeps_the_owners_profile(
+async def test_a_collaborator_brings_their_own_account_not_the_owners(
     cast_of_three,
 ) -> None:
-    """The workspace profile describes the project, not whoever opened it.
+    """Sharing a project shares the code, never the subscription behind it.
 
-    Starting a session writes CLAUDE.md, the MCP config, the environment and
-    the git identity into the container. Those come from the organization that
-    owns the project — and a collaborator is not a member of it, so reading
-    them through the caller's RLS session yields nothing. Doing that would
-    quietly replace the owner's configuration with an empty one the first time
-    someone they shared with attached a terminal.
+    Alice and Bob both work in Alice's project. Bob's session must authenticate
+    as Bob, commit as Bob, and be configured as Bob — running his keystrokes on
+    her Claude account would be a licensing problem before it was a billing one.
     """
     alice, bob, _ = cast_of_three
     server = await _server_for(alice)
     project = await _project_for(alice, server)
+    await _share(alice, "project", project["id"], bob.email, "collaborator")
+
+    for person, claude_md, key in (
+        (alice, "# Alice's rules", "sk-ant-alice"),
+        (bob, "# Bob's rules", "sk-ant-bob"),
+    ):
+        async with user_session(person.claims) as conn:
+            org = await queries.personal_org_id(conn)
+            await queries.upsert_profile(
+                conn,
+                org,
+                claude_settings_json=None,
+                claude_md=claude_md,
+                mcp_json=None,
+                env_vars={},
+                git_user_name=person.email.split("@")[0],
+                git_user_email=person.email,
+            )
+        async with service_session() as conn:
+            await queries.upsert_harness_credential_privileged(
+                conn,
+                org_id=org,
+                project_id=None,
+                harness="claude_code",
+                auth_mode="api_key",
+                label="test",
+                api_key=key,
+                oauth_blob=None,
+                created_by=person.id,
+            )
+
+    alice_profile = await runtime.load_session_profile(
+        alice.claims, project, "claude_code"
+    )
+    bob_profile = await runtime.load_session_profile(bob.claims, project, "claude_code")
+
+    assert alice_profile.claude_md == "# Alice's rules"
+    assert bob_profile.claude_md == "# Bob's rules"
+    assert alice_profile.harness_credential is not None
+    assert bob_profile.harness_credential is not None
+    assert alice_profile.harness_credential.api_key == "sk-ant-alice"
+    assert bob_profile.harness_credential.api_key == "sk-ant-bob", (
+        "Bob's session would have run on Alice's subscription"
+    )
+    assert bob_profile.git_user_email == bob.email, "commits would be attributed to Alice"
+
+
+async def test_a_project_override_does_not_leak_into_someone_elses_session(
+    cast_of_three,
+) -> None:
+    """A per-project credential is the project owner's choice for themselves.
+
+    It must not be handed to a collaborator: that is the same account-sharing
+    the ownership rule exists to prevent, arriving by a side door.
+    """
+    alice, bob, _ = cast_of_three
+    server = await _server_for(alice)
+    project = await _project_for(alice, server)
+    await _share(alice, "project", project["id"], bob.email, "collaborator")
 
     async with user_session(alice.claims) as conn:
         alice_org = await queries.personal_org_id(conn)
-        await queries.upsert_profile(
-            conn,
-            alice_org,
-            claude_settings_json=None,
-            claude_md="# House rules\nAlways run the tests.",
-            mcp_json=None,
-            env_vars={"DEPLOY_TARGET": "staging"},
-            git_user_name="Alice",
-            git_user_email="alice@example.test",
-        )
-
-    await _share(alice, "project", project["id"], bob.email, "collaborator")
-
-    # The trap, stated as a fact so it cannot quietly stop being true.
     async with user_session(bob.claims) as conn:
-        assert await queries.get_profile(conn, alice_org) is None, (
-            "a collaborator can see the project but not the owning org's profile row"
+        bob_org = await queries.personal_org_id(conn)
+
+    async with service_session() as conn:
+        await queries.upsert_harness_credential_privileged(
+            conn, org_id=alice_org, project_id=project["id"], harness="claude_code",
+            auth_mode="api_key", label="pinned", api_key="sk-ant-alice-pinned",
+            oauth_blob=None, created_by=alice.id,
+        )
+        await queries.upsert_harness_credential_privileged(
+            conn, org_id=bob_org, project_id=None, harness="claude_code",
+            auth_mode="api_key", label="bob", api_key="sk-ant-bob",
+            oauth_blob=None, created_by=bob.id,
         )
 
-    profile = await runtime.load_profile(alice_org, project["id"], "claude_code")
-    assert profile.claude_md == "# House rules\nAlways run the tests."
-    assert profile.env_vars == {"DEPLOY_TARGET": "staging"}
-    assert profile.git_user_name == "Alice"
+    alice_profile = await runtime.load_session_profile(
+        alice.claims, project, "claude_code"
+    )
+    bob_profile = await runtime.load_session_profile(bob.claims, project, "claude_code")
+
+    assert alice_profile.harness_credential is not None
+    assert alice_profile.harness_credential.api_key == "sk-ant-alice-pinned"
+    assert bob_profile.harness_credential is not None
+    assert bob_profile.harness_credential.api_key == "sk-ant-bob"
 
 
 # --- signing in again must replace, not accumulate ----------------------------

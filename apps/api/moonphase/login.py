@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 import asyncssh
 
 from . import docker_remote, ssh
-from .harness import Harness
+from .harness import Harness, SessionSpace
 from .ssh import SSHError
 
 log = logging.getLogger(__name__)
@@ -167,7 +167,9 @@ async def start(
         return session
 
     # Skip the first-run wizard, or it swallows the login prompt.
-    for path, contents in harness.seed_config_files().items():
+    # The relay runs in a throwaway container of its own, so the plain
+    # single-user layout is the right one here.
+    for path, contents in harness.seed_config_files(SessionSpace()).items():
         quoted = shlex.quote(path)
         await ssh.run(
             conn,

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Session as AuthSession } from '@supabase/supabase-js'
 import { supabase } from './lib/supabase'
-import { api, canControl, type Project, type Server } from './lib/api'
+import { api, canControl, type Project, type Server, type Session } from './lib/api'
 import { useResource } from './lib/useResource'
 import { ProjectTerminal } from './components/Terminal'
 import { Auth } from './routes/Auth'
@@ -331,7 +331,8 @@ function ProjectView({
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [session, setSession] = useState('moonphase')
+  const [session, setSession] = useState('')
+  const [active, setActive] = useState<Session | null>(null)
   // A terminal is unusable on a phone, and attaching one would also drag the
   // desktop's tmux window down to phone width. Default by screen size, but
   // leave it switchable: the feed is genuinely nicer for catching up, and the
@@ -344,7 +345,8 @@ function ProjectView({
 
   // Switching project must not leave the tab selection from the previous one.
   useEffect(() => {
-    setSession('moonphase')
+    setSession('')
+    setActive(null)
   }, [project.id])
 
   const act = async (fn: () => Promise<unknown>) => {
@@ -360,7 +362,13 @@ function ProjectView({
     }
   }
 
-  const drivable = canControl(project.access)
+  // Two conditions, and they are different questions. Project access decides
+  // whether you may run anything here at all; session ownership decides whether
+  // this particular agent is yours to type into. Someone else's session is
+  // read-only however much access you have to the project, because it is
+  // authenticated as them.
+  const drivable = canControl(project.access) && (active?.is_mine ?? false)
+  const watching = active !== null && !active.is_mine
 
   // Someone else's project on your machine. You are told it is there and can
   // take the resources back; the conversation is not yours to read.
@@ -430,10 +438,15 @@ function ProjectView({
           {project.server_name} · {project.environment}
         </span>
         {project.status === 'running' && <ActivityChip project={project} />}
-        {!drivable && (
-          <span className="shared-tag" title="You can watch this, but not type into it">
-            view only
+        {watching ? (
+          <span
+            className="shared-tag"
+            title={`This session runs on ${active?.owner ?? 'someone else'}'s account, so only they can type into it`}
+          >
+            watching {active?.owner?.split('@')[0] ?? 'someone else'}
           </span>
+        ) : (
+          active?.branch && <span className="shared-tag">{active.branch}</span>
         )}
         <div className="spacer" />
         <div className="view-toggle" role="group" aria-label="View">
@@ -455,6 +468,16 @@ function ProjectView({
         {project.access === 'admin' && (
           <button onClick={onShare} title="Give someone else access to this session">
             Share{project.share_count > 0 ? ` (${project.share_count})` : ''}
+          </button>
+        )}
+        {canControl(project.access) && !active && (
+          <button
+            className="primary"
+            disabled={busy}
+            onClick={() => void act(() => api.startSession(project.id))}
+            title="Start a session of your own here, on its own branch"
+          >
+            Start my session
           </button>
         )}
         {drivable && (
@@ -495,7 +518,8 @@ function ProjectView({
             running={project.status === 'running'}
             active={session}
             onSelect={setSession}
-            readOnly={!drivable}
+            readOnly={!canControl(project.access)}
+            onActiveSession={setActive}
           />
           {view === 'terminal' ? (
             <ProjectTerminal projectId={project.id} session={session} />

@@ -18,6 +18,7 @@ import asyncssh
 
 from . import queries, ssh
 from .db import service_session, user_session
+from .harness import SessionSpace
 from .profile import (
     VcsCredential,
     WorkspaceProfile,
@@ -150,6 +151,26 @@ async def load_server_target(
     return target
 
 
+async def load_session_space(
+    claims: dict[str, Any], project_id: UUID, name: str
+) -> tuple[SessionSpace, dict[str, Any]]:
+    """Where a named session keeps its state, and the row that says so.
+
+    Read from the database rather than derived from the name, because sessions
+    created before sessions had owners still live in the shared home and
+    checkout, and their transcripts are not where a freshly derived path would
+    look for them.
+    """
+    async with user_session(claims) as conn:
+        row = await queries.get_session(conn, project_id, name)
+    if row is None:
+        raise NotFound(f"No session called {name!r} in this project.")
+    return (
+        SessionSpace(home=str(row["home_dir"]), workdir=str(row["workdir"])),
+        row,
+    )
+
+
 async def connection_for(target: SSHTarget) -> asyncssh.SSHClientConnection:
     """Pooled connection, reconnecting once if the cached one has gone stale."""
     try:
@@ -168,25 +189,38 @@ async def resolve_credential(
         )
 
 
-async def load_profile(
-    org_id: UUID, project_id: UUID | None, harness_kind: str
+class NoCredential(Exception):
+    """The person starting this session has not connected the harness."""
+
+
+async def load_session_profile(
+    claims: dict[str, Any], project: dict[str, Any], harness_kind: str
 ) -> WorkspaceProfile:
-    """Assemble the global profile plus whatever credentials apply.
+    """Everything one person brings to a session they are about to start.
 
-    Everything here is read privileged, and deliberately so: this describes the
-    *project*, not the caller. A collaborator on a shared project is not a
-    member of the organization that owns it, so an RLS-scoped read of the
-    profile returns nothing — and starting a session would then materialise an
-    empty profile over the owner's CLAUDE.md, MCP config, environment and git
-    identity. Whether this caller may act on the project at all was already
-    settled by `load_project_context`.
+    Read against the *caller*, not the project. A session belongs to whoever
+    started it and runs on their coding subscription — nobody's work may run on
+    someone else's account, which is both a licensing matter and the only way
+    usage means anything. So the settings, the harness credential and the git
+    identity all come from the caller's own organization, and a collaborator
+    joining a shared project brings their own.
 
-    A project-specific harness credential wins over the org-wide one, so a
-    single project can be pinned to a different account without disturbing the
-    global sign-in.
+    RLS is the right scope here for exactly that reason: the caller reading
+    their own organization is the whole intent, and a row they cannot see is a
+    row that is not theirs to use.
+
+    A project-specific harness credential still wins over the org-wide one, but
+    only when the project is the caller's own. Otherwise a project override set
+    by its owner would quietly pull their account back into someone else's
+    session, which is the thing this exists to prevent.
     """
-    async with service_session() as conn:
+    async with user_session(claims) as conn:
+        org_id = await queries.personal_org_id(conn)
+        if org_id is None:
+            raise NotFound("You have no personal organization.")
         row = await queries.get_profile(conn, org_id)
+
+    project_id = project["id"] if project.get("org_id") == org_id else None
 
     if row is None:
         # The signup trigger creates one, so this only happens for orgs made

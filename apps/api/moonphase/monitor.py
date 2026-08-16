@@ -119,7 +119,9 @@ class SessionMonitor:
             log.debug("monitor: %s still unreachable after %d tries", name, count)
 
     async def _check(self, row: dict[str, Any]) -> None:
-        project_id = str(row["id"])
+        # Keyed by session, not project: a project can hold several people's
+        # agents, and "the pane stopped changing" is a fact about one of them.
+        session_key = str(row["session_id"])
 
         async with service_session() as conn:
             target = await queries.load_ssh_target_privileged(conn, row["server_id"])
@@ -130,7 +132,7 @@ class SessionMonitor:
         harness = harness_registry.get(str(row["harness"]))
 
         previous = ActivityState(row["activity"] or "unknown")
-        still_since = self._still_since.get(project_id, time.monotonic())
+        still_since = self._still_since.get(session_key, time.monotonic())
 
         snapshot = await activity.probe(
             conn_ssh,
@@ -138,10 +140,11 @@ class SessionMonitor:
             harness,
             previous_digest=row.get("pane_digest"),
             still_for_seconds=time.monotonic() - still_since,
+            session=str(row["tmux_session"]),
         )
 
         if snapshot.digest and snapshot.digest != row.get("pane_digest"):
-            self._still_since[project_id] = time.monotonic()
+            self._still_since[session_key] = time.monotonic()
 
         if snapshot.state == previous and snapshot.digest == row.get("pane_digest"):
             return  # nothing to write
@@ -183,9 +186,7 @@ class SessionMonitor:
             return
 
         async with service_session() as conn:
-            subscriptions = await _subscriptions_for_project(
-                conn, row["org_id"], row["id"]
-            )
+            subscriptions = await _subscriptions_for_session(conn, row.get("user_id"))
 
         dead: list[str] = []
         for sub in subscriptions:
@@ -221,7 +222,8 @@ async def _running_projects(conn: Any) -> list[dict[str, Any]]:
         text(
             """
             select p.id, p.org_id, p.name, p.server_id, p.harness, p.container_name,
-                   s.id as session_id, s.activity, s.pane_digest, s.notified_state
+                   s.id as session_id, s.tmux_session, s.user_id,
+                   s.activity, s.pane_digest, s.notified_state
             from projects p
             join project_sessions s on s.project_id = p.id
             join servers v on v.id = p.server_id
@@ -253,36 +255,22 @@ async def _record_activity(
     )
 
 
-async def _subscriptions_for_project(
-    conn: Any, org_id: Any, project_id: Any
-) -> list[dict[str, Any]]:
-    """Everyone who could answer, and who has enabled notifications somewhere.
+async def _subscriptions_for_session(conn: Any, user_id: Any) -> list[dict[str, Any]]:
+    """The devices of the one person who can answer.
 
-    The org that owns the project, plus anyone it was shared with as a
-    collaborator. Viewers are deliberately left out: "Claude needs you" sent to
-    someone who cannot type is a notification they can do nothing about.
-
-    `distinct` because one person can be reachable both ways, and two identical
-    pushes to the same device is a bug the user experiences directly.
+    A session runs on its owner's account and only its owner can type into it,
+    so "Claude is waiting for you" is addressed to exactly one person. Telling
+    the rest of the project would be a notification they can do nothing about,
+    and the useful signal drowns quickly.
     """
+    if user_id is None:
+        return []
     result = await conn.execute(
         text(
-            """
-            select distinct ps.endpoint, ps.p256dh, ps.auth
-            from push_subscriptions ps
-            where exists (
-                    select 1 from org_members m
-                    where m.user_id = ps.user_id and m.org_id = :org_id
-                  )
-               or exists (
-                    select 1 from project_shares sh
-                    where sh.user_id = ps.user_id
-                      and sh.project_id = :project_id
-                      and sh.role = 'collaborator'
-                  )
-            """
+            "select endpoint, p256dh, auth from push_subscriptions "
+            "where user_id = :user_id"
         ),
-        {"org_id": org_id, "project_id": project_id},
+        {"user_id": user_id},
     )
     return [dict(r._mapping) for r in result]
 

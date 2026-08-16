@@ -81,16 +81,16 @@ class ScriptedHarness(Harness):
     def launch_spec(self) -> LaunchSpec:
         return LaunchSpec(command=["sh"])
 
-    def credential_files(self, credential: HarnessCredential) -> dict[str, str]:
+    def credential_files(self, credential, space) -> dict[str, str]:
         return {}
 
     def credential_env(self, credential: HarnessCredential) -> dict[str, str]:
         return {}
 
-    def seed_config_files(self) -> dict[str, str]:
+    def seed_config_files(self, space) -> dict[str, str]:
         return {SCRIPT_PATH: self.script}
 
-    def auth_probe_script(self) -> str:
+    def auth_probe_script(self, space) -> str:
         return "true"
 
     def auth_status_script(self) -> str:
@@ -105,7 +105,7 @@ class ScriptedHarness(Harness):
     def credential_paths(self) -> list[str]:
         return ["/home/dev/.claude/.credentials.json"]
 
-    def transcript_dir(self, workdir: str = "/workspace") -> str:
+    def transcript_dir(self, space) -> str:
         return "/home/dev/.claude/projects"
 
     def version_command(self) -> list[str]:

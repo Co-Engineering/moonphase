@@ -20,13 +20,15 @@ from typing import Any
 import asyncssh
 
 from . import docker_remote, ssh
-from .harness import Harness, HarnessAuthMode, HarnessCredential
+from .harness import Harness, HarnessAuthMode, HarnessCredential, SessionSpace
 
 log = logging.getLogger(__name__)
 
 MOONPHASE_DIR = "/home/dev/.moonphase"
 ENV_FILE = f"{MOONPHASE_DIR}/env"
-GIT_CREDENTIALS_FILE = "/home/dev/.git-credentials"
+def git_credentials_file(space: SessionSpace) -> str:
+    """Per session: a token is a person's, not a container's."""
+    return f"{space.home}/.git-credentials"
 
 
 @dataclass
@@ -115,23 +117,42 @@ async def apply(
     container: str,
     harness: Harness,
     profile: WorkspaceProfile,
+    space: SessionSpace | None = None,
 ) -> None:
-    """Materialise the profile into a container.
+    """Materialise one person's profile into one session's private state.
 
-    Ordering matters: harness config first (so a fresh container is usable
-    even if credentials fail), then credentials, then git.
+    Everything below is written under the session's own HOME. Two sessions in
+    the same container therefore hold two different accounts, two different
+    tokens and two different commit identities, and neither can see the other's
+    — which is the whole reason a session has an owner.
+
+    `git config` is run with GIT_CONFIG_GLOBAL pointed at that HOME rather than
+    `--global`, which would resolve to the container's shared /home/dev and let
+    the last session to start decide who everybody commits as.
+
+    Ordering matters: harness config first (so a fresh container is usable even
+    if credentials fail), then credentials, then git.
     """
+    space = space or SessionSpace()
+    git_env = f"GIT_CONFIG_GLOBAL={shlex.quote(space.git_config)}"
+
     # --- harness configuration ---------------------------------------------
-    for path, contents in harness.profile_files(profile).items():
+    for path, contents in harness.profile_files(profile, space).items():
         await write_file(conn, container, path, contents, mode="600")
 
     # --- harness credentials ------------------------------------------------
     if profile.harness_credential is not None:
-        for path, contents in harness.credential_files(profile.harness_credential).items():
+        for path, contents in harness.credential_files(
+            profile.harness_credential, space
+        ).items():
             await write_file(conn, container, path, contents, mode="600")
 
     # --- environment ---------------------------------------------------------
     env: dict[str, str] = dict(profile.env_vars)
+    # HOME is what separates one session's harness state from another's, and
+    # GIT_CONFIG_GLOBAL does the same for identity and credential helpers.
+    env["HOME"] = space.home
+    env["GIT_CONFIG_GLOBAL"] = space.git_config
     if profile.harness_credential is not None:
         env.update(harness.credential_env(profile.harness_credential))
     if profile.vcs_credential is not None:
@@ -140,13 +161,8 @@ async def apply(
         env["GH_TOKEN"] = profile.vcs_credential.token
         env["GITHUB_TOKEN"] = profile.vcs_credential.token
 
-    if env:
-        body = "".join(f"{k}={shlex.quote(v)}\n" for k, v in env.items())
-        await write_file(conn, container, ENV_FILE, body, mode="600")
-    else:
-        # An empty file rather than a missing one, so the launcher's source is
-        # unconditional and cannot half-apply a previous profile.
-        await write_file(conn, container, ENV_FILE, "", mode="600")
+    body = "".join(f"{k}={shlex.quote(v)}\n" for k, v in env.items())
+    await write_file(conn, container, space.env_file, body, mode="600")
 
     # --- git ------------------------------------------------------------------
     git_config: list[str] = []
@@ -161,11 +177,14 @@ async def apply(
         await write_file(
             conn,
             container,
-            GIT_CREDENTIALS_FILE,
+            git_credentials_file(space),
             _git_credentials_line(profile.vcs_credential) + "\n",
             mode="600",
         )
-        git_config.append("git config --global credential.helper store")
+        git_config.append(
+            "git config --global credential.helper "
+            + shlex.quote(f"store --file={git_credentials_file(space)}")
+        )
         # Rewrite ssh and bare git URLs to authenticated https, so a repo the
         # agent discovers in a README clones without a second credential.
         #
@@ -195,12 +214,15 @@ async def apply(
             "2>/dev/null || true"
         )
         await docker_remote.exec_capture(
-            conn, container, ["rm", "-f", GIT_CREDENTIALS_FILE], timeout=30
+            conn, container, ["rm", "-f", git_credentials_file(space)], timeout=30
         )
 
     if git_config:
         await docker_remote.exec_capture(
-            conn, container, ["sh", "-c", "; ".join(git_config)], timeout=60
+            conn,
+            container,
+            ["sh", "-c", f"export {git_env}; " + "; ".join(git_config)],
+            timeout=60,
         )
 
 

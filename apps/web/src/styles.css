@@ -1478,3 +1478,16 @@ button.linkish:hover:not(:disabled) {
     flex-basis: 100%;
   }
 }
+
+/* A session that is not yours: readable, not alarming. The marker matters
+ * because the tab looks identical otherwise and the missing keyboard would
+ * come as a surprise. */
+.session-theirs {
+  margin-left: 4px;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.session-tab:has(.session-theirs) .session-open {
+  font-style: italic;
+}

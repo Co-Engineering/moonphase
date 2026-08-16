@@ -12,14 +12,19 @@ from .base import (
     HarnessCredential,
     HarnessKind,
     LaunchSpec,
+    SessionSpace,
     register,
 )
 
 __all__ = ["ClaudeCode", "AuthStatus"]
 
-# Claude Code stores per-project transcripts under ~/.claude/projects/<slug>,
-# where <slug> is the working directory with every '/' turned into '-'.
-CLAUDE_HOME = "/home/dev/.claude"
+# Claude Code keeps everything — credentials, settings, history and per-project
+# transcripts — under $HOME/.claude, which is why giving each session its own
+# HOME is enough to keep two people's accounts apart in one container.
+# Transcripts land in <config>/projects/<slug>, where <slug> is the working
+# directory with every '/' turned into '-'.
+def _claude_home(space: SessionSpace) -> str:
+    return f"{space.home}/.claude"
 
 # The OAuth authorization URL `claude setup-token` prints for the user to open.
 LOGIN_URL_PATTERN = r"https://claude\.com/\S*oauth\S*"
@@ -124,9 +129,11 @@ class ClaudeCode(Harness):
         # harness exiting and drops to a shell instead of killing the window.
         return LaunchSpec(command=["claude"], workdir="/workspace", env={})
 
-    def credential_files(self, credential: HarnessCredential) -> dict[str, str]:
+    def credential_files(
+        self, credential: HarnessCredential, space: SessionSpace
+    ) -> dict[str, str]:
         if credential.mode is HarnessAuthMode.OAUTH and credential.oauth_blob:
-            return {f"{CLAUDE_HOME}/.credentials.json": credential.oauth_blob}
+            return {f"{_claude_home(space)}/.credentials.json": credential.oauth_blob}
         return {}
 
     def credential_env(self, credential: HarnessCredential) -> dict[str, str]:
@@ -138,31 +145,32 @@ class ClaudeCode(Harness):
             return {"CLAUDE_CODE_OAUTH_TOKEN": credential.oauth_token}
         return {}
 
-    def seed_config_files(self) -> dict[str, str]:
+    def seed_config_files(self, space: SessionSpace) -> dict[str, str]:
         # Skips the theme picker on first attach. Deliberately does NOT set
         # the per-project trust flag: that prompt guards against hostile
         # content in a cloned repo, and answering it is the user's call, not
         # something Moonphase should quietly do for them.
         return {
-            "/home/dev/.claude.json": json.dumps(
+            f"{space.home}/.claude.json": json.dumps(
                 {"hasCompletedOnboarding": True, "theme": "dark"}
             )
         }
 
-    def profile_files(self, profile: Any) -> dict[str, str]:
+    def profile_files(self, profile: Any, space: SessionSpace) -> dict[str, str]:
         """The user's global Claude Code configuration.
 
         `settings.json` and the global `CLAUDE.md` are exactly the things
         people expect to set once and have everywhere, so they are owned by
         the profile and overwritten on each session start.
         """
+        home = _claude_home(space)
         files: dict[str, str] = {}
         if profile.claude_settings_json:
-            files[f"{CLAUDE_HOME}/settings.json"] = profile.claude_settings_json
+            files[f"{home}/settings.json"] = profile.claude_settings_json
         if profile.claude_md:
-            files[f"{CLAUDE_HOME}/CLAUDE.md"] = profile.claude_md
+            files[f"{home}/CLAUDE.md"] = profile.claude_md
         if profile.mcp_json:
-            files[f"{CLAUDE_HOME}/.mcp.json"] = profile.mcp_json
+            files[f"{home}/.mcp.json"] = profile.mcp_json
         return files
 
     def activity_signals(self) -> Any:
@@ -286,9 +294,9 @@ class ClaudeCode(Harness):
 
         return events
 
-    def auth_probe_script(self) -> str:
+    def auth_probe_script(self, space: SessionSpace) -> str:
         return (
-            f'test -s "{CLAUDE_HOME}/.credentials.json" '
+            f'test -s "{_claude_home(space)}/.credentials.json" '
             '|| test -n "$ANTHROPIC_API_KEY" '
             '|| test -n "$CLAUDE_CODE_OAUTH_TOKEN"'
         )
@@ -306,12 +314,16 @@ class ClaudeCode(Harness):
     def login_url_pattern(self) -> str:
         return LOGIN_URL_PATTERN
 
-    def transcript_dir(self, workdir: str = "/workspace") -> str:
-        return f"{CLAUDE_HOME}/projects/{_project_slug(workdir)}"
+    def transcript_dir(self, space: SessionSpace) -> str:
+        return f"{_claude_home(space)}/projects/{_project_slug(space.workdir)}"
 
     def credential_paths(self) -> list[str]:
-        """Files to harvest after an interactive login succeeds."""
-        return [f"{CLAUDE_HOME}/.credentials.json"]
+        """Files to harvest after an interactive login succeeds.
+
+        The sign-in relay runs in a throwaway container of its own, not in a
+        session, so this is the plain default location.
+        """
+        return [f"{_claude_home(SessionSpace())}/.credentials.json"]
 
     def version_command(self) -> list[str]:
         return ["claude", "--version"]

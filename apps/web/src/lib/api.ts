@@ -149,6 +149,17 @@ export interface Session {
   transcript_path: string | null
   activity: ActivityState
   activity_detail: string | null
+  /**
+   * Who this session runs as. A session is one person's — their Claude
+   * account, their git identity, their branch — so only its owner can type
+   * into it. Everyone else in the project can watch.
+   */
+  user_id: string | null
+  owner: string | null
+  is_mine: boolean
+  /** The git worktree this session works in, and the branch it is on. */
+  workdir: string
+  branch: string | null
   /** Devices currently viewing this session, live from tmux. */
   attached_clients: number
   alive: boolean
@@ -358,10 +369,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ restart, session: session ?? null }),
     }),
-  createSession: (projectId: string, name: string) =>
+  /** Omit the name and it is derived from you, which is the useful default. */
+  createSession: (projectId: string, name?: string) =>
     request<Session>(`/api/projects/${projectId}/sessions`, {
       method: 'POST',
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name: name ?? null }),
     }),
   deleteSession: (projectId: string, name: string) =>
     request<void>(`/api/projects/${projectId}/sessions/${encodeURIComponent(name)}`, {
@@ -372,11 +384,13 @@ export const api = {
       `/api/projects/${projectId}/sessions/${encodeURIComponent(name)}/detach-clients`,
       { method: 'POST' },
     ),
-  sendKeys: (projectId: string, keys: string, enter = true) =>
-    request<void>(`/api/projects/${projectId}/sessions/keys`, {
-      method: 'POST',
-      body: JSON.stringify({ keys, enter }),
-    }),
+  sendKeys: (projectId: string, keys: string, enter = true, session?: string) =>
+    request<void>(
+      `/api/projects/${projectId}/sessions/keys${
+        session ? `?session=${encodeURIComponent(session)}` : ''
+      }`,
+      { method: 'POST', body: JSON.stringify({ keys, enter }) },
+    ),
 
   // --- global profile -------------------------------------------------------
   profile: () => request<WorkspaceProfile>('/api/profile'),

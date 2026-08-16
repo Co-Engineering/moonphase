@@ -51,6 +51,17 @@ their Claude account, their transcript. You see that it exists and can reclaim t
 resources; you do not get to read it. Shares never grant administration: only the owner
 can bootstrap, test, delete, or decide who else gets in.
 
+### Sessions are individual
+
+Sharing a project never shares the Claude subscription behind it. A session belongs to
+one person, a project can hold several, and **you drive your own and may watch anyone's**.
+
+Each session gets its own `HOME` inside the container — its own credentials, settings,
+history and git identity — and its own **git worktree** on branch `moonphase/<session>`.
+So two people work the same repository without their agents overwriting each other, and
+merging is ordinary git. Commits carry the right author. Nobody's work ever runs on
+somebody else's account.
+
 ## Architecture
 
 ```

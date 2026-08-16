@@ -63,6 +63,7 @@ async def _stream_transcript(
     container: str,
     harness,
     start_cursor: str,
+    space,
 ) -> None:
     """Follow the newest transcript file and push events as they are written.
 
@@ -70,7 +71,7 @@ async def _stream_transcript(
     top of the file instead would replay everything the client just received,
     and following from the end would drop anything written in between.
     """
-    directory = harness.transcript_dir()
+    directory = harness.transcript_dir(space)
     position = transcript_reader.Cursor.decode(start_cursor)
     current: str | None = position.filename or None
     process: asyncssh.SSHClientProcess | None = None
@@ -215,10 +216,21 @@ async def project_feed(
     harness = harness_registry.get(ctx.harness)
 
     try:
+        space, _row = await runtime.load_session_space(
+            principal.claims, project_id, session_name
+        )
+    except NotFound as exc:
+        await _send(websocket, {"type": "error", "message": str(exc)})
+        await websocket.close(code=4404)
+        return
+
+    try:
         conn_ssh = await ssh.pool.get(ctx.target)
         # Send history first, so the client has something to render before the
         # stream produces anything.
-        page = await transcript_reader.read(conn_ssh, ctx.container, harness)
+        page = await transcript_reader.read(
+            conn_ssh, ctx.container, harness, space=space
+        )
     except SSHError as exc:
         await _send(websocket, {"type": "error", "message": str(exc)})
         await websocket.close(code=4503)
@@ -237,7 +249,7 @@ async def project_feed(
     tasks = [
         asyncio.create_task(
             _stream_transcript(
-                websocket, conn_ssh, ctx.container, harness, page.cursor
+                websocket, conn_ssh, ctx.container, harness, page.cursor, space
             )
         ),
         asyncio.create_task(

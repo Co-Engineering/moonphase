@@ -22,6 +22,7 @@ import uuid
 import pytest
 
 from moonphase import docker_remote, provision, sessions, ssh  # noqa: E402
+from moonphase.harness import SessionSpace
 from moonphase.ssh import SSHTarget  # noqa: E402
 
 FAKE_SERVER_IMAGE = "moonphase/fake-server:latest"
@@ -175,7 +176,7 @@ async def test_full_chain(fake_server: str) -> None:
         )
         assert await sessions.is_authenticated(conn, container, harness)
         perms = await docker_remote.exec_capture(
-            conn, container, ["stat", "-c", "%a", sessions.ENV_FILE]
+            conn, container, ["stat", "-c", "%a", SessionSpace().env_file]
         )
         assert perms.stdout.strip() == "600", f"env file mode was {perms.stdout.strip()}"
         print("  credential written, mode 600, auth probe passes")

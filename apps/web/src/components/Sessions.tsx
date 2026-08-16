@@ -8,6 +8,8 @@ interface Props {
   onSelect: (session: string) => void
   /** Shared with view-only access: pick a session to watch, change nothing. */
   readOnly?: boolean
+  /** Whichever session is selected, so the view above knows whose it is. */
+  onActiveSession?: (session: Session | null) => void
 }
 
 const ACTIVITY_TITLE: Record<string, string> = {
@@ -21,12 +23,22 @@ const ACTIVITY_TITLE: Record<string, string> = {
 /**
  * Sessions within a project, as tabs.
  *
- * A project is one workspace; a session is one agent working in it. Several
- * can run at once and they share the same checkout — which is the point, and
- * also worth being explicit about, since it is not the isolation people
- * assume from separate tabs.
+ * A session is one person's agent: their Claude account, their git identity,
+ * their branch. Several run side by side in one project, and you may watch any
+ * of them but type only into your own — sharing a project shares the code, not
+ * the subscription behind it.
+ *
+ * Yours come first, and someone else's is marked with their name and opens
+ * read-only, so the missing keyboard is explained rather than mysterious.
  */
-export function Sessions({ projectId, running, active, onSelect, readOnly = false }: Props) {
+export function Sessions({
+  projectId,
+  running,
+  active,
+  onSelect,
+  readOnly = false,
+  onActiveSession,
+}: Props) {
   const [items, setItems] = useState<Session[]>([])
   const [adding, setAdding] = useState(false)
   const [name, setName] = useState('')
@@ -64,11 +76,17 @@ export function Sessions({ projectId, running, active, onSelect, readOnly = fals
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active])
 
+  // Whether the view above should offer a keyboard depends on whose session
+  // this is, which only this component knows.
+  useEffect(() => {
+    onActiveSession?.(items.find((s) => s.tmux_session === active) ?? null)
+  }, [items, active, onActiveSession])
+
   const create = async () => {
     setBusy(true)
     setError(null)
     try {
-      const created = await api.createSession(projectId, name.trim())
+      const created = await api.createSession(projectId, name.trim() || undefined)
       setName('')
       setAdding(false)
       await load()
@@ -123,10 +141,21 @@ export function Sessions({ projectId, running, active, onSelect, readOnly = fals
               <button
                 className="session-open"
                 onClick={() => onSelect(session.tmux_session)}
-                title={session.activity_detail ?? ACTIVITY_TITLE[session.activity]}
+                title={
+                  session.is_mine
+                    ? (session.activity_detail ?? ACTIVITY_TITLE[session.activity])
+                    : `${session.owner ?? 'Someone else'}'s session${
+                        session.branch ? ` on ${session.branch}` : ''
+                      } — you can watch it, not type into it`
+                }
               >
                 <span className="dot" />
                 {session.tmux_session}
+                {!session.is_mine && (
+                  <span className="session-theirs" aria-hidden="true">
+                    ◦
+                  </span>
+                )}
                 {session.attached_clients > 1 && (
                   <span
                     className="session-clients"
@@ -136,7 +165,7 @@ export function Sessions({ projectId, running, active, onSelect, readOnly = fals
                   </span>
                 )}
               </button>
-              {items.length > 1 && !readOnly && (
+              {items.length > 1 && !readOnly && session.is_mine && (
                 <button
                   className="session-close"
                   disabled={busy}
@@ -155,22 +184,26 @@ export function Sessions({ projectId, running, active, onSelect, readOnly = fals
             className="session-new"
             onSubmit={(e) => {
               e.preventDefault()
-              if (name.trim()) void create()
+              void create()
             }}
           >
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="session name"
+              placeholder="name (optional)"
               autoFocus
               onBlur={() => !name.trim() && setAdding(false)}
             />
-            <button className="primary" type="submit" disabled={busy || !name.trim()}>
+            <button className="primary" type="submit" disabled={busy}>
               Add
             </button>
           </form>
         ) : (
-          <button className="session-add" onClick={() => setAdding(true)} title="New session">
+          <button
+            className="session-add"
+            onClick={() => setAdding(true)}
+            title="Start a session of your own, on its own branch"
+          >
             +
           </button>
         )}
@@ -178,7 +211,9 @@ export function Sessions({ projectId, running, active, onSelect, readOnly = fals
         <div className="spacer" />
 
         {!readOnly &&
-          items.find((s) => s.tmux_session === active && s.attached_clients > 1) && (
+          items.find(
+            (s) => s.tmux_session === active && s.is_mine && s.attached_clients > 1,
+          ) && (
             <button
               className="ghost session-detach"
               disabled={busy}

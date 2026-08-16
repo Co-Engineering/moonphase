@@ -18,12 +18,20 @@ from .. import (
     runtime,
     sessions,
     ssh,
+    workspaces,
 )
 from .. import harness as harness_registry
 from ..auth import Principal, current_principal
 from ..config import get_settings
 from ..db import service_session, user_session
-from ..runtime import CAN_CONTROL, CAN_DELETE, CAN_OBSERVE, Forbidden, NotFound
+from ..harness import SessionSpace
+from ..runtime import (
+    CAN_CONTROL,
+    CAN_DELETE,
+    CAN_OBSERVE,
+    Forbidden,
+    NotFound,
+)
 from ..schemas import (
     ProjectCreate,
     ProjectOut,
@@ -201,14 +209,10 @@ async def create_project(
         await queries.update_project_state(
             conn, project_id, status="running", status_detail=None, container_id=container_id
         )
-        await queries.upsert_session(
-            conn,
-            project_id=project_id,
-            harness=payload.harness,
-            tmux_session=sessions.DEFAULT_SESSION,
-            state="stopped",
-            transcript_path=harness_registry.get(payload.harness).transcript_dir(),
-        )
+        # Deliberately no session row here. A session belongs to a person and
+        # runs on their subscription, so it is created the first time someone
+        # opens the project — not speculatively at provision time on behalf of
+        # whoever happened to click Create.
         refreshed = await queries.get_project(conn, project_id)
     assert refreshed is not None
     return _to_out(refreshed)
@@ -332,30 +336,95 @@ async def stop_project(
         await queries.update_project_state(
             conn, project_id, status="stopped", status_detail=None
         )
-        await queries.upsert_session(
-            conn,
-            project_id=project_id,
-            harness=ctx.harness,
-            tmux_session=sessions.DEFAULT_SESSION,
-            state="stopped",
-        )
+        # Every session in the container went down with it, not just the
+        # caller's — leaving other people's rows saying "running" would have
+        # the sidebar claim their agent is still working.
+        await queries.mark_sessions_stopped(conn, project_id)
         row = await queries.get_project(conn, project_id)
     assert row is not None
     return _to_out(row)
 
 
 # --- sessions ---------------------------------------------------------------
+#
+# A session belongs to one person. Sharing a project shares the code and the
+# machine, never the coding subscription behind them: you drive your own
+# sessions and may watch anybody's, so no work ever runs on an account other
+# than its owner's. Each session gets its own HOME — credentials, harness
+# config, history, git identity — and its own git worktree, so two agents in
+# one container neither authenticate as each other nor overwrite each other.
+
+
+def _session_name_for(principal: Principal, taken: set[str]) -> str:
+    """A default session name derived from who is asking.
+
+    Names used to be incidental ("moonphase"); now they identify a person in a
+    list other people also appear in, and they end up in a branch name. The
+    local part of the email is the closest thing to a handle we have without
+    asking for one.
+    """
+    base = sessions.sanitise_name((principal.email or "session").split("@")[0])
+    if base not in taken:
+        return base
+    suffix = 2
+    while f"{base}-{suffix}" in taken:
+        suffix += 1
+    return f"{base}-{suffix}"
+
+
+async def _prepare_space(
+    principal: Principal,
+    ctx: runtime.ProjectContext,
+    name: str,
+    profile: Any,
+) -> tuple[Any, str, str]:
+    """Give a session somewhere private to live. Returns (space, workdir, branch)."""
+    conn_ssh = await ssh.pool.get(ctx.target)
+
+    container = await docker_remote.inspect(conn_ssh, ctx.container)
+    if container is None:
+        raise HTTPException(status_code=409, detail="The project container is gone.")
+    if container.state != "running":
+        await docker_remote.start(conn_ssh, ctx.container)
+
+    workdir, branch = await workspaces.ensure_worktree(
+        conn_ssh,
+        ctx.container,
+        name,
+        author_name=profile.git_user_name or (principal.email or "Moonphase"),
+        author_email=profile.git_user_email or (principal.email or "moonphase@localhost"),
+    )
+    return sessions.space_for(name, workdir), workdir, branch
+
+
+async def _profile_or_409(
+    principal: Principal, ctx: runtime.ProjectContext
+) -> Any:
+    profile = await runtime.load_session_profile(
+        principal.claims, ctx.project, ctx.harness
+    )
+    if not profile.has_harness_auth:
+        harness_name = harness_registry.get(ctx.harness).display_name
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{harness_name} is not connected to your account. A session "
+                "runs on the subscription of whoever started it, so it has to "
+                "be yours — connect it in Settings."
+            ),
+        )
+    return profile
 
 
 @router.get("/{project_id}/sessions", response_model=list[SessionOut])
 async def list_sessions(
     project_id: UUID, principal: Principal = Depends(current_principal)
 ) -> list[SessionOut]:
-    """Sessions in this project, with live liveness and attached device counts.
+    """Every session in this project, yours first.
 
-    The counts come from tmux rather than the database on purpose: a stored
-    count goes stale the moment a client drops, and a wrong "2 devices
-    attached" is worse than not showing one.
+    Live liveness and attached device counts come from tmux rather than the
+    database on purpose: a stored count goes stale the moment a client drops,
+    and a wrong "2 devices attached" is worse than not showing one.
     """
     async with user_session(principal.claims) as conn:
         project = await queries.get_project(conn, project_id)
@@ -371,7 +440,7 @@ async def list_sessions(
             )
             conn_ssh = await ssh.pool.get(ctx.target)
             live = await sessions.client_counts(conn_ssh, ctx.container)
-        except (SSHError, NotFound) as exc:
+        except (SSHError, NotFound, Forbidden) as exc:
             # An unreachable server should not blank the list; the rows are
             # still the truth about which sessions exist.
             log.debug("could not read live session state: %s", exc)
@@ -395,17 +464,15 @@ async def list_sessions(
 )
 async def create_session(
     project_id: UUID,
-    payload: SessionCreateIn,
+    payload: SessionCreateIn | None = None,
     principal: Principal = Depends(current_principal),
 ) -> SessionOut:
-    """Add a second agent to a project.
+    """Start a session of your own in this project.
 
-    Sessions share the workspace volume, so two agents can work the same
-    checkout — which is the point, and also why the UI should make it obvious
-    they are not isolated from each other.
+    Yours in every sense that matters: your credentials, your git identity,
+    your branch. Someone else's session in the same project is unaffected by
+    this one existing, and neither can see the other's account.
     """
-    name = sessions.sanitise_name(payload.name)
-
     try:
         ctx = await runtime.load_project_context(principal.claims, project_id)
     except NotFound as exc:
@@ -413,29 +480,29 @@ async def create_session(
 
     async with user_session(principal.claims) as conn:
         existing = await queries.get_sessions(conn, project_id)
-    if any(row["tmux_session"] == name for row in existing):
+    taken = {str(row["tmux_session"]) for row in existing}
+
+    requested = payload.name if payload and payload.name else None
+    name = sessions.sanitise_name(requested) if requested else _session_name_for(
+        principal, taken
+    )
+    if name in taken:
         raise HTTPException(
             status_code=409, detail=f"This project already has a session called {name!r}."
         )
 
-    workspace_profile = await runtime.load_profile(
-        ctx.project["org_id"], project_id, ctx.harness
-    )
-
+    profile = await _profile_or_409(principal, ctx)
+    space, workdir, branch = await _prepare_space(principal, ctx, name, profile)
     conn_ssh = await ssh.pool.get(ctx.target)
-    container = await docker_remote.inspect(conn_ssh, ctx.container)
-    if container is None:
-        raise HTTPException(status_code=409, detail="The project container is gone.")
-    if container.state != "running":
-        await docker_remote.start(conn_ssh, ctx.container)
 
     try:
         await sessions.ensure_session(
             conn_ssh,
             ctx.container,
             harness_kind=ctx.harness,
-            workspace_profile=workspace_profile,
+            workspace_profile=profile,
             session=name,
+            space=space,
         )
     except SSHError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -447,10 +514,101 @@ async def create_session(
             harness=ctx.harness,
             tmux_session=name,
             state="running",
-            transcript_path=harness_registry.get(ctx.harness).transcript_dir(),
+            user_id=principal.user_id,
+            workdir=workdir,
+            home_dir=space.home,
+            branch=branch,
+            transcript_path=harness_registry.get(ctx.harness).transcript_dir(space),
             mark_started=True,
         )
     return SessionOut.model_validate({**row, "alive": True, "attached_clients": 0})
+
+
+@router.post("/{project_id}/sessions/start", response_model=SessionOut)
+async def start_session(
+    project_id: UUID,
+    payload: SessionStartIn | None = None,
+    principal: Principal = Depends(current_principal),
+) -> SessionOut:
+    """Make sure the caller has a running session here. Safe to call on open.
+
+    With no name it resolves to the caller's own session, creating one if this
+    is their first time in the project. It will never adopt somebody else's:
+    that would run their subscription on this caller's keystrokes.
+    """
+    options = payload or SessionStartIn()
+
+    try:
+        ctx = await runtime.load_project_context(principal.claims, project_id)
+    except NotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    async with user_session(principal.claims) as conn:
+        rows = await queries.get_sessions(conn, project_id)
+
+    taken = {str(row["tmux_session"]) for row in rows}
+    mine = [row for row in rows if row.get("is_mine")]
+
+    if options.session:
+        name = sessions.sanitise_name(options.session)
+        owned = next((r for r in rows if str(r["tmux_session"]) == name), None)
+        if owned is not None and not owned.get("is_mine"):
+            raise Forbidden(
+                f"Session {name!r} belongs to someone else. You can watch it, "
+                "but starting or restarting it would run it on their account."
+            )
+    elif mine:
+        name = str(mine[0]["tmux_session"])
+    else:
+        name = _session_name_for(principal, taken)
+
+    profile = await _profile_or_409(principal, ctx)
+
+    # A session's home and checkout are fixed when it is created. Moving a
+    # running one would point it at a directory its harness has never seen and
+    # leave its real state orphaned — so an existing session keeps what it was
+    # given, and only a restart (which recreates it anyway) adopts the current
+    # layout. That is also the upgrade path for sessions made before sessions
+    # had owners, which still live in the container's shared home.
+    existing = next((r for r in rows if str(r["tmux_session"]) == name), None)
+    if existing is not None and not options.restart:
+        space = SessionSpace(
+            home=str(existing["home_dir"]), workdir=str(existing["workdir"])
+        )
+        workdir, branch = space.workdir, existing.get("branch")
+        conn_ssh = await ssh.pool.get(ctx.target)
+    else:
+        space, workdir, branch = await _prepare_space(principal, ctx, name, profile)
+        conn_ssh = await ssh.pool.get(ctx.target)
+
+    try:
+        await sessions.ensure_session(
+            conn_ssh,
+            ctx.container,
+            harness_kind=ctx.harness,
+            workspace_profile=profile,
+            session=name,
+            space=space,
+            restart=options.restart,
+        )
+    except SSHError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    async with user_session(principal.claims) as conn:
+        row = await queries.upsert_session(
+            conn,
+            project_id=project_id,
+            harness=ctx.harness,
+            tmux_session=name,
+            state="running",
+            user_id=principal.user_id,
+            workdir=workdir,
+            home_dir=space.home,
+            branch=branch,
+            transcript_path=harness_registry.get(ctx.harness).transcript_dir(space),
+            mark_started=True,
+        )
+    return SessionOut.model_validate(row)
 
 
 @router.delete(
@@ -461,9 +619,9 @@ async def delete_session(
 ) -> None:
     """Kill a session and forget it.
 
-    Refuses the last one: a project with no session has no terminal to open and
-    no obvious way back, so removing it would be a trap rather than a choice.
-    Use Stop to shut the whole project down instead.
+    Yours to remove, or the project owner's to reclaim. The worktree goes with
+    it; the branch does not, because it may hold the only copy of work and a
+    "close this session" button should not be able to destroy that.
     """
     session_name = sessions.sanitise_name(name)
 
@@ -471,25 +629,26 @@ async def delete_session(
         project = await queries.get_project(conn, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found.")
-        total = await queries.count_sessions(conn, project_id)
-
-    if total <= 1:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "This is the project's only session. Stop the project instead, or "
-                "add another session first."
-            ),
+        row = await queries.get_session(conn, project_id, session_name)
+    if row is None:
+        raise HTTPException(status_code=404, detail="No such session.")
+    if not row.get("is_mine") and project.get("access") != "admin":
+        raise Forbidden(
+            "That session belongs to someone else. Only they, or an owner of "
+            "the project, can remove it."
         )
 
     try:
-        ctx = await runtime.load_project_context(principal.claims, project_id)
+        ctx = await runtime.load_project_context(
+            principal.claims, project_id, require=CAN_OBSERVE
+        )
         conn_ssh = await ssh.pool.get(ctx.target)
         await sessions.kill_session(conn_ssh, ctx.container, session_name)
+        await workspaces.remove_worktree(conn_ssh, ctx.container, session_name)
     except (SSHError, NotFound) as exc:
         # The row must still go: an unreachable server should not leave a
         # session the user cannot remove.
-        log.warning("could not kill tmux session %s: %s", session_name, exc)
+        log.warning("could not clean up session %s: %s", session_name, exc)
 
     async with user_session(principal.claims) as conn:
         removed = await queries.delete_session_row(conn, project_id, session_name)
@@ -504,7 +663,7 @@ async def delete_session(
 async def detach_clients(
     project_id: UUID, name: str, principal: Principal = Depends(current_principal)
 ) -> dict[str, int]:
-    """Detach every device from a session, without disturbing the session.
+    """Detach every device from one of your sessions, without disturbing it.
 
     The escape hatch for phantom clients: `docker exec` leaves its process
     running when a client vanishes, so a crashed app or a killed backend can
@@ -516,95 +675,68 @@ async def detach_clients(
     except NotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    await _require_own_session(principal, project_id, session_name)
+
     conn_ssh = await ssh.pool.get(ctx.target)
     detached = await sessions.detach_all_clients(conn_ssh, ctx.container, session_name)
     return {"detached": detached}
 
 
-@router.post("/{project_id}/sessions/start", response_model=SessionOut)
-async def start_session(
-    project_id: UUID,
-    payload: SessionStartIn | None = None,
-    principal: Principal = Depends(current_principal),
-) -> SessionOut:
-    """Ensure the harness is running in tmux. Safe to call on every project open."""
-    options = payload or SessionStartIn()
-    session_name = sessions.sanitise_name(options.session or sessions.DEFAULT_SESSION)
-    try:
-        ctx = await runtime.load_project_context(principal.claims, project_id)
-    except NotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+async def _require_own_session(
+    principal: Principal, project_id: UUID, name: str
+) -> dict[str, Any]:
+    """Anything that puts input into a session must prove it is the caller's.
 
-    workspace_profile = await runtime.load_profile(
-        ctx.project["org_id"], project_id, ctx.harness
-    )
-
-    conn_ssh = await ssh.pool.get(ctx.target)
-
-    container = await docker_remote.inspect(conn_ssh, ctx.container)
-    if container is None:
-        raise HTTPException(
-            status_code=409, detail="The project container no longer exists."
-        )
-    if container.state != "running":
-        await docker_remote.start(conn_ssh, ctx.container)
-
-    try:
-        await sessions.ensure_session(
-            conn_ssh,
-            ctx.container,
-            harness_kind=ctx.harness,
-            workspace_profile=workspace_profile,
-            session=session_name,
-            restart=options.restart,
-        )
-    except SSHError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    authed = await sessions.is_authenticated(
-        conn_ssh, ctx.container, harness_registry.get(ctx.harness)
-    )
-
+    Watching somebody else's work is fine and deliberate. Typing into it is
+    not: their harness is authenticated as them, so every keystroke would be
+    billed to and attributed to a person who is not in the room.
+    """
     async with user_session(principal.claims) as conn:
-        row = await queries.upsert_session(
-            conn,
-            project_id=project_id,
-            harness=ctx.harness,
-            tmux_session=session_name,
-            state="running",
-            transcript_path=harness_registry.get(ctx.harness).transcript_dir(),
-            mark_started=True,
+        row = await queries.get_session(conn, project_id, name)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No session called {name!r}.")
+    if not row.get("is_mine"):
+        raise Forbidden(
+            f"Session {name!r} belongs to someone else. You can watch it, but "
+            "typing into it would run on their account."
         )
-    out = SessionOut.model_validate(row)
-    if not authed:
-        log.info(
-            "project %s session started without harness credentials; the user "
-            "will need to sign in inside the terminal",
-            project_id,
-        )
-    return out
+    return row
 
 
 @router.post("/{project_id}/sessions/keys", status_code=status.HTTP_204_NO_CONTENT)
 async def send_keys(
     project_id: UUID,
     payload: SendKeysIn,
+    session: str | None = None,
     principal: Principal = Depends(current_principal),
 ) -> None:
-    """Type into the session without attaching.
+    """Type into one of your sessions without attaching.
 
     This is the write path the phone client uses to answer a permission prompt;
-    the keystroke lands in the same tmux pane a desktop client is watching.
+    the keystroke lands in the same tmux pane your desktop is watching.
     """
     try:
         ctx = await runtime.load_project_context(principal.claims, project_id)
     except NotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    name = sessions.sanitise_name(session) if session else None
+    if name is None:
+        async with user_session(principal.claims) as conn:
+            rows = await queries.get_sessions(conn, project_id)
+        mine = [r for r in rows if r.get("is_mine")]
+        if not mine:
+            raise HTTPException(
+                status_code=409, detail="You have no session in this project yet."
+            )
+        name = str(mine[0]["tmux_session"])
+    else:
+        await _require_own_session(principal, project_id, name)
+
     conn_ssh = await ssh.pool.get(ctx.target)
     try:
         await sessions.send_keys(
-            conn_ssh, ctx.container, payload.keys, enter=payload.enter
+            conn_ssh, ctx.container, payload.keys, session=name, enter=payload.enter
         )
     except SSHError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -614,9 +746,10 @@ async def send_keys(
 async def snapshot(
     project_id: UUID,
     lines: int = 200,
+    session: str | None = None,
     principal: Principal = Depends(current_principal),
 ) -> dict[str, str]:
-    """Plain-text view of the pane, for previews and debugging."""
+    """Plain-text view of a pane, for previews and debugging."""
     try:
         ctx = await runtime.load_project_context(
             principal.claims, project_id, require=CAN_OBSERVE
@@ -624,8 +757,11 @@ async def snapshot(
     except NotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    name = sessions.sanitise_name(session) if session else sessions.DEFAULT_SESSION
     conn_ssh = await ssh.pool.get(ctx.target)
-    text_out = await sessions.capture_pane(conn_ssh, ctx.container, lines=lines)
+    text_out = await sessions.capture_pane(
+        conn_ssh, ctx.container, session=name, lines=lines
+    )
     return {"text": text_out}
 
 

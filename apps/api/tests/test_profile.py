@@ -17,7 +17,7 @@ import pytest
 
 from moonphase import docker_remote, provision, sessions, ssh
 from moonphase import profile as profile_mod
-from moonphase.harness import HarnessAuthMode, HarnessCredential
+from moonphase.harness import HarnessAuthMode, HarnessCredential, SessionSpace
 from moonphase.harness import get as get_harness
 from moonphase.profile import VcsCredential, WorkspaceProfile
 from moonphase.ssh import SSHTarget
@@ -44,6 +44,10 @@ pytestmark = pytest.mark.skipif(
     not _docker_available(), reason="Docker daemon is not reachable"
 )
 
+
+# The shared, single-user layout: what a session with no owner used to get,
+# and still what `apply` writes when no space is given.
+SPACE = SessionSpace()
 
 @pytest.fixture(scope="module")
 def fake_server():
@@ -137,13 +141,13 @@ async def test_profile_reaches_the_container(fake_server: str) -> None:
         print("\n  global CLAUDE.md and settings.json written")
 
         # --- environment ----------------------------------------------------
-        env = await profile_mod.read_file(conn, container, profile_mod.ENV_FILE)
+        env = await profile_mod.read_file(conn, container, SPACE.env_file)
         assert env and "MOONPHASE_TEST_VAR" in env
         assert "ANTHROPIC_API_KEY" in env, "harness credential missing from env"
         assert "GH_TOKEN" in env, "github token missing from env"
 
         mode = await docker_remote.exec_capture(
-            conn, container, ["stat", "-c", "%a", profile_mod.ENV_FILE]
+            conn, container, ["stat", "-c", "%a", SPACE.env_file]
         )
         assert mode.stdout.strip() == "600", f"env file mode {mode.stdout.strip()}"
         print("  env file written, mode 600")
@@ -152,7 +156,7 @@ async def test_profile_reaches_the_container(fake_server: str) -> None:
         assert await sessions.is_authenticated(conn, container, harness)
         seen = await docker_remote.exec_capture(
             conn, container,
-            ["sh", "-c", f"set -a; . {profile_mod.ENV_FILE}; set +a; "
+            ["sh", "-c", f"set -a; . {SPACE.env_file}; set +a; "
                          'printf "%s" "$MOONPHASE_TEST_VAR"'],
         )
         assert seen.stdout.strip() == "hello-from-profile"
@@ -167,14 +171,18 @@ async def test_profile_reaches_the_container(fake_server: str) -> None:
         helper = await docker_remote.exec_capture(
             conn, container, ["git", "config", "--global", "credential.helper"]
         )
-        assert helper.stdout.strip() == "store"
+        # Pinned to this session's own file rather than git's default location,
+        # so two people working in one container cannot read each other's token.
+        assert helper.stdout.strip() == (
+            f"store --file={profile_mod.git_credentials_file(SPACE)}"
+        )
 
         creds = await profile_mod.read_file(
-            conn, container, profile_mod.GIT_CREDENTIALS_FILE
+            conn, container, profile_mod.git_credentials_file(SPACE)
         )
         assert creds and "ghp_fake_token_for_test" in creds
         creds_mode = await docker_remote.exec_capture(
-            conn, container, ["stat", "-c", "%a", profile_mod.GIT_CREDENTIALS_FILE]
+            conn, container, ["stat", "-c", "%a", profile_mod.git_credentials_file(SPACE)]
         )
         assert creds_mode.stdout.strip() == "600"
 
@@ -218,7 +226,7 @@ async def test_profile_reaches_the_container(fake_server: str) -> None:
         await profile_mod.apply(conn, container, harness, wp)
 
         gone = await profile_mod.read_file(
-            conn, container, profile_mod.GIT_CREDENTIALS_FILE
+            conn, container, profile_mod.git_credentials_file(SPACE)
         )
         assert gone is None, "git credentials survived disconnection"
 
@@ -229,7 +237,7 @@ async def test_profile_reaches_the_container(fake_server: str) -> None:
             "credential.helper still set after disconnect; git would prompt against "
             "a file that no longer exists"
         )
-        env_after = await profile_mod.read_file(conn, container, profile_mod.ENV_FILE)
+        env_after = await profile_mod.read_file(conn, container, SPACE.env_file)
         assert env_after is not None and "GH_TOKEN" not in env_after
         print("  disconnecting GitHub removes the token and the helper")
 
