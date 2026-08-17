@@ -29,7 +29,7 @@ Four containers:
 | ------- | ----- | ---- |
 | `db` | `postgres:16-alpine` | Everything is stored here |
 | `auth` | `supabase/gotrue` | Sign-in |
-| `api` | built from source | SSH, Docker orchestration, the PTY bridge, and the client |
+| `api` | [`coec/moonphase`](https://hub.docker.com/r/coec/moonphase) | SSH, Docker orchestration, the PTY bridge, and the client |
 | `proxy` | `caddy:2-alpine` | Puts all of it on one address |
 
 Deliberately **not** the full Supabase stack. Moonphase talks to Postgres directly with
@@ -39,7 +39,46 @@ the `auth.uid()` helper every policy is written against — is created by
 `docker/bootstrap.sql`.
 
 The API image is about 400 MB and contains both the backend and the built client, because
-[one address is the whole product](../concepts/architecture.md).
+[one address is the whole product](../concepts/architecture.md). It is published for
+`linux/amd64` and `linux/arm64`.
+
+### Pinning a version
+
+`.env` chooses the tag:
+
+```bash
+MOONPHASE_VERSION=0.2.1     # or 0.2, or latest, or edge
+```
+
+| Tag | What it is |
+| --- | ---------- |
+| `latest` | The most recent release. The default. |
+| `0.2.1`, `0.2` | Pin as tightly or as loosely as you like |
+| `edge` | The tip of `main`. Builds and passes tests; not a release. |
+
+Pinning an exact version is the right call for anything you depend on — an upgrade then
+happens when you change that line, rather than whenever you happen to pull.
+
+### Building it yourself
+
+Pulling is the default because it takes a minute rather than several, and because
+everyone then runs identical bits. To build instead — because you are working on
+Moonphase, or want a commit that has not been released:
+
+```console
+$ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
+
+Or let the installer do it:
+
+```console
+$ MOONPHASE_BUILD=1 ./scripts/install.sh
+```
+
+??? question "Why two compose files instead of one with both keys?"
+    With `image:` and `build:` on the same service, whether Compose pulls or builds
+    depends on what happens to be in the local image cache. That is the last thing an
+    installer should be ambiguous about, so the two modes are two explicit files.
 
 !!! note "Nothing to build on the server"
     The image your *projects* run in is built on the managed server itself, over the SSH
@@ -93,11 +132,18 @@ $ docker compose down -v              # stop and delete everything
 ### Upgrading
 
 ```console
-$ git pull
-$ docker compose up -d --build
+$ docker compose pull
+$ docker compose up -d
 ```
 
 Migrations run automatically on start, and are additive and forward-only.
+
+If you build from source, `git pull` first and add the override:
+
+```console
+$ git pull
+$ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
 
 ### Backing up
 

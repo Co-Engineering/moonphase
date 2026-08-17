@@ -1,6 +1,6 @@
 # Moonphase, self-hosted.
 #
-#   cp .env.docker.example .env && ./scripts/install.sh
+#   ./scripts/install.sh
 #
 # Four containers. Postgres holds everything, GoTrue handles sign-in, the API
 # does the work, and Caddy puts all of it on one address — which is what lets a
@@ -95,10 +95,14 @@ services:
     restart: "no"
 
   api:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile
-    image: moonphase/api:latest
+    # Published by .github/workflows/docker.yml. Pulling is the default because
+    # it is a minute rather than several, and because everyone then runs the
+    # same bits — a local build depends on the builder's Docker, cache and
+    # architecture.
+    #
+    # To run from source instead, add the override:
+    #   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+    image: coec/moonphase:${MOONPHASE_VERSION:-latest}
     restart: unless-stopped
     depends_on:
       db:

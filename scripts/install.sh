@@ -7,6 +7,10 @@
 # Docker is the only requirement. Everything else — the database, sign-in, the
 # keys that encrypt your SSH credentials — is created here.
 #
+# Pulls the published image by default, which takes about a minute; set
+# MOONPHASE_BUILD=1 to build from source instead. If the image cannot be
+# pulled, it builds rather than failing.
+#
 # Safe to run twice. Secrets already in .env are kept, because regenerating
 # MOONPHASE_SECRET_KEY would make every stored SSH key unreadable.
 set -eu
@@ -99,6 +103,9 @@ ANON_KEY=$(existing SUPABASE_ANON_KEY)
 PUBLIC_URL=$(existing MOONPHASE_PUBLIC_URL)
 [ -n "${PUBLIC_URL:-}" ] || PUBLIC_URL="http://localhost:${PORT}"
 
+VERSION=$(existing MOONPHASE_VERSION)
+[ -n "${VERSION:-}" ] || VERSION="${MOONPHASE_VERSION:-latest}"
+
 VAPID_PUBLIC=$(existing MOONPHASE_VAPID_PUBLIC_KEY)
 VAPID_PRIVATE=$(existing MOONPHASE_VAPID_PRIVATE_KEY)
 VAPID_SUBJECT=$(existing MOONPHASE_VAPID_SUBJECT)
@@ -124,6 +131,11 @@ SUPABASE_ANON_KEY=${ANON_KEY}
 # somewhere a browser can actually get to.
 MOONPHASE_PUBLIC_URL=${PUBLIC_URL}
 
+# Which published image to run: latest, a version like 0.2.1, or edge for the
+# tip of main. Pinning an exact version means upgrades happen when you change
+# this line rather than whenever you happen to pull.
+MOONPHASE_VERSION=${VERSION}
+
 # Interface and port the proxy publishes on. 127.0.0.1 keeps it to this
 # machine; set 0.0.0.0 once something terminates TLS in front of it.
 MOONPHASE_BIND=${BIND}
@@ -144,17 +156,36 @@ ENV
 
 chmod 600 .env
 
-# --- build ------------------------------------------------------------------
+# --- the image --------------------------------------------------------------
+# Pulling is the default: it is a minute rather than several, and everyone runs
+# identical bits. Building is for working on Moonphase, or for a commit that
+# has not been published yet.
 
-info "building (this takes a few minutes the first time)"
-docker compose build --quiet api
+COMPOSE="docker compose"
+BUILD_COMPOSE="docker compose -f docker-compose.yml -f docker-compose.build.yml"
+
+build_it() {
+  info "building from source (a few minutes the first time)"
+  $BUILD_COMPOSE build api
+  COMPOSE="$BUILD_COMPOSE"
+}
+
+if [ "${MOONPHASE_BUILD:-0}" = "1" ]; then
+  build_it
+else
+  info "pulling the image"
+  if ! docker compose pull --quiet api 2>/dev/null; then
+    warn "could not pull coec/moonphase — building from source instead"
+    build_it
+  fi
+fi
 
 # Push keys need a P-256 keypair in a particular encoding, which is easier to
 # generate with the library that will consume it than in shell. The image is
 # built by now, so borrow it.
 if [ -z "${VAPID_PUBLIC:-}" ]; then
   info "generating push keys"
-  if keys=$(docker compose run --rm --no-deps --entrypoint python api /app/scripts/gen_vapid.py 2>/dev/null); then
+  if keys=$($COMPOSE run --rm --no-deps --entrypoint python api /app/scripts/gen_vapid.py 2>/dev/null); then
     # gen_vapid.py prints VAR=value lines ready for .env.
     printf '%s\n' "$keys" | grep -E '^MOONPHASE_VAPID_(PUBLIC|PRIVATE)_KEY=' > .vapid.tmp || true
     if [ -s .vapid.tmp ]; then
@@ -172,7 +203,7 @@ fi
 # --- run --------------------------------------------------------------------
 
 info "starting"
-docker compose up -d
+$COMPOSE up -d
 
 info "waiting for it to come up"
 attempt=0
@@ -202,7 +233,7 @@ printf '\n'
 printf '  Manage it:\n'
 printf '    docker compose logs -f api\n'
 printf '    docker compose down          stop, keeping your data\n'
-printf '    docker compose pull && docker compose up -d --build     upgrade\n'
+printf '    docker compose pull && docker compose up -d              upgrade\n'
 printf '\n'
 printf '  Documentation: https://oliversvane.github.io/moonphase/\n'
 printf '\n'

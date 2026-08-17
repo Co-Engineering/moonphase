@@ -1,0 +1,20 @@
+# Build the image instead of pulling it.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
+# For working on Moonphase, running an unreleased commit, or any change you
+# have made locally. `image:` is kept so the result is tagged the same way the
+# published one is and the rest of the stack does not care which it got.
+#
+# Deliberately a separate file rather than a `build:` block in the main one.
+# With both keys on one service, whether Compose pulls or builds depends on
+# what happens to be in the local image cache — which is the last thing an
+# installer should be ambiguous about.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: coec/moonphase:${MOONPHASE_VERSION:-latest}
+    pull_policy: never

@@ -141,9 +141,11 @@ Docker is the only requirement.
 curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install.sh | sh
 ```
 
-That clones the repository, generates every secret it needs, and brings up four
-containers: Postgres, GoTrue for sign-in, the API, and Caddy putting all of it on one
-address. Open `http://127.0.0.1:8471` and create an account.
+That generates every secret it needs and brings up four containers: Postgres, GoTrue for
+sign-in, [`coec/moonphase`](https://hub.docker.com/r/coec/moonphase), and Caddy putting
+all of it on one address. Open `http://127.0.0.1:8471` and create an account.
+
+Set `MOONPHASE_BUILD=1` to build the image from source instead of pulling it.
 
 To work on Moonphase itself — hot reload, the Electron shell, the test suites — you also
 need Node 20+, pnpm, uv and the Supabase CLI:

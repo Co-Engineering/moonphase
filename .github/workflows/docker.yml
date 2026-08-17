@@ -1,0 +1,101 @@
+# Publish the Moonphase image to Docker Hub.
+#
+# One image: the control plane, containing the API and the client it serves.
+# The images your *projects* run in are built on the managed server from a
+# recipe, so there is nothing to publish for those.
+#
+# Pull requests build without pushing, so a change that breaks the image fails
+# in review rather than after merge.
+name: docker
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths-ignore:
+      - docs/**
+      - mkdocs.yml
+      - "**/*.md"
+  pull_request:
+    paths-ignore:
+      - docs/**
+      - mkdocs.yml
+      - "**/*.md"
+  workflow_dispatch:
+
+env:
+  IMAGE: coec/moonphase
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # arm64 matters more than usual here: a lot of the machines people
+      # self-host on are ARM, and so is every recent Mac.
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Only for pushes. A pull request from a fork has no access to secrets,
+      # and should not need any — it builds and stops.
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          # A tag v0.2.1 publishes 0.2.1, 0.2 and latest, so someone can pin as
+          # loosely or as tightly as they like. main publishes `edge` only —
+          # `latest` should mean a release, not the last commit that built.
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=edge,enable={{is_default_branch}}
+            type=ref,event=pr
+          labels: |
+            org.opencontainers.image.title=Moonphase
+            org.opencontainers.image.description=Self-hosted control plane for remote AI coding sessions
+            org.opencontainers.image.licenses=SEE LICENSE IN LICENSE
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Registry cache keeps a rebuild from redoing the pnpm install and
+          # the pip install every time, which is most of the build.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      # Docker Hub shows a repository's README from its own field, not from the
+      # git repo, so it has to be pushed explicitly or the page stays empty.
+      - name: Update the Docker Hub description
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: peter-evans/dockerhub-description@v4
+        continue-on-error: true
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.IMAGE }}
+          short-description: Self-hosted control plane for remote AI coding sessions
+          readme-filepath: ./docker/README.md
