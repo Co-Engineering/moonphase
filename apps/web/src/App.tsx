@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Session as AuthSession } from '@supabase/supabase-js'
 import { supabase } from './lib/supabase'
-import { api, canControl, type Project, type Server, type Session } from './lib/api'
+import {
+  api,
+  canControl,
+  checkedAgo,
+  liveActivity,
+  type Project,
+  type Server,
+  type Session,
+} from './lib/api'
 import { useResource } from './lib/useResource'
 import { ProjectTerminal } from './components/Terminal'
 import { Auth } from './routes/Auth'
@@ -329,8 +337,14 @@ function ProjectRow({
   return (
     <>
       <button
-        className={`tree-row tree-project status-${project.status} activity-${
-          project.status === 'running' ? project.activity : 'stopped'
+        // One class, one meaning. It used to carry both `status-*` and
+        // `activity-*`, which style the same dot with different vocabularies —
+        // whichever rule came later in the stylesheet won, so a container
+        // mid-build showed its session's colour rather than its own.
+        className={`tree-row tree-project ${
+          project.status === 'running'
+            ? `activity-${liveActivity(project)}`
+            : `status-${project.status}`
         }${active && !activeSession ? ' active' : ''}`}
         onClick={() => onSelect(project.id)}
         title={project.activity_detail ?? subtitle}
@@ -350,7 +364,7 @@ function ProjectRow({
             guest
           </span>
         )}
-        {project.status === 'running' && project.activity === 'awaiting_input' && (
+        {project.status === 'running' && liveActivity(project) === 'awaiting_input' && (
           <span className="needs-you" title="Waiting for you">
             ●
           </span>
@@ -365,15 +379,17 @@ function ProjectRow({
         sessions.map((session) => (
           <button
             key={session.id}
-            className={`tree-row tree-session activity-${session.activity}${
+            className={`tree-row tree-session activity-${liveActivity(session)}${
               active && activeSession === session.tmux_session ? ' active' : ''
             }`}
             onClick={() => onSelect(project.id, session.tmux_session)}
-            title={
-              session.is_mine
-                ? (session.activity_detail ?? session.branch ?? undefined)
-                : `${session.owner ?? 'Someone else'}'s session`
-            }
+            title={[
+              session.is_mine ? null : `${session.owner ?? 'Someone else'}'s session`,
+              session.activity_detail ?? session.branch,
+              checkedAgo(session),
+            ]
+              .filter(Boolean)
+              .join(' · ')}
           >
             <span className="dot" />
             <span className="name">{session.tmux_session}</span>
@@ -382,7 +398,7 @@ function ProjectRow({
                 {session.owner?.split('@')[0] ?? 'shared'}
               </span>
             )}
-            {session.activity === 'awaiting_input' && (
+            {liveActivity(session) === 'awaiting_input' && (
               <span className="needs-you" title="Waiting for you">
                 ●
               </span>
@@ -638,13 +654,13 @@ function ProjectView({
                 {sessions.map((item) => (
                   <div className="session-card" key={item.id}>
                     <button className="session-enter" onClick={() => onEnter(item.tmux_session)}>
-                      <span className={`dot activity-${item.activity}`} />
+                      <span className={`dot activity-${liveActivity(item)}`} />
                       <span className="session-name">{item.tmux_session}</span>
                       <span className="session-meta">
                         {item.is_mine ? 'yours' : (item.owner ?? 'someone else')}
                         {item.branch ? ` · ${item.branch}` : ''}
                       </span>
-                      {item.activity === 'awaiting_input' && (
+                      {liveActivity(item) === 'awaiting_input' && (
                         <span className="needs-you" title="Waiting for you">
                           ●
                         </span>
@@ -756,10 +772,14 @@ const ACTIVITY_LABEL: Record<string, string> = {
 }
 
 function ActivityChip({ project }: { project: Project }) {
-  const label = ACTIVITY_LABEL[project.activity] ?? ''
+  const state = liveActivity(project)
+  const label = ACTIVITY_LABEL[state] ?? ''
   if (!label) return null
   return (
-    <span className={`activity-chip activity-${project.activity}`} title={project.activity_detail ?? undefined}>
+    <span
+      className={`activity-chip activity-${state}`}
+      title={[project.activity_detail, checkedAgo(project)].filter(Boolean).join(' · ')}
+    >
       <span className="dot" />
       {label}
     </span>

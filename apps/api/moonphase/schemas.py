@@ -154,6 +154,8 @@ class ProjectOut(ORMModel):
     activity: str = "unknown"
     activity_detail: str | None = None
     activity_at: datetime | None = None
+    # When that was last confirmed; see SessionOut for why it matters.
+    checked_at: datetime | None = None
     access: AccessStr = "admin"
     shared: bool = False
     share_count: int = 0
@@ -223,6 +225,12 @@ class SessionOut(ORMModel):
     transcript_path: str | None
     activity: str = "unknown"
     activity_detail: str | None = None
+    # When the state last changed, and when it was last confirmed. The second
+    # is what says whether the first is news or a guess: a session the monitor
+    # cannot reach keeps its old state, and presenting that as current is how
+    # an agent that stopped hours ago goes on looking busy.
+    activity_at: datetime | None = None
+    checked_at: datetime | None = None
     # Who it runs as. A session is one person's: their credentials, their
     # branch, their commits.
     user_id: UUID | None = None

@@ -132,7 +132,15 @@ class SessionMonitor:
         harness = harness_registry.get(str(row["harness"]))
 
         previous = ActivityState(row["activity"] or "unknown")
-        still_since = self._still_since.get(session_key, time.monotonic())
+        # `setdefault`, not `get`. The clock that measures "how long has this
+        # pane been still" used to be started only when the pane *changed*, so
+        # a session that stopped changing never accumulated any stillness at
+        # all: `still_for_seconds` came back as zero on every sweep, the idle
+        # branch in `classify` was unreachable, and the state froze at whatever
+        # it last was. An agent that finished hours ago went on reporting that
+        # it was working. Starting the clock the first time we see a session is
+        # what makes stillness measurable.
+        still_since = self._still_since.setdefault(session_key, time.monotonic())
 
         snapshot = await activity.probe(
             conn_ssh,
@@ -147,7 +155,11 @@ class SessionMonitor:
             self._still_since[session_key] = time.monotonic()
 
         if snapshot.state == previous and snapshot.digest == row.get("pane_digest"):
-            return  # nothing to write
+            # Nothing changed, but we did look — and "when was this last
+            # confirmed" is the difference between a state and a guess.
+            async with service_session() as conn:
+                await _touch_checked(conn, row["session_id"])
+            return
 
         async with service_session() as conn:
             await _record_activity(
@@ -246,12 +258,26 @@ async def _record_activity(
             update project_sessions
             set activity = cast(:state as activity_state),
                 activity_at = now(),
+                checked_at = now(),
                 pane_digest = :digest,
                 activity_detail = :detail
             where id = :id
             """
         ),
         {"state": state, "digest": digest or None, "detail": detail, "id": session_id},
+    )
+
+
+async def _touch_checked(conn: Any, session_id: Any) -> None:
+    """Record that we looked, without claiming anything changed.
+
+    `activity_at` answers "since when", which is what a person wants to read.
+    This answers "is that still true", which is what the interface needs before
+    showing it as fact.
+    """
+    await conn.execute(
+        text("update project_sessions set checked_at = now() where id = :id"),
+        {"id": session_id},
     )
 
 

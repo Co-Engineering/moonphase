@@ -9,7 +9,12 @@ from __future__ import annotations
 
 import pytest
 
-from moonphase.monitor import BASE_BACKOFF_SECONDS, MAX_BACKOFF_SECONDS, SessionMonitor
+from moonphase.activity import ActivityState
+from moonphase.monitor import (
+    BASE_BACKOFF_SECONDS,
+    MAX_BACKOFF_SECONDS,
+    SessionMonitor,
+)
 from moonphase.ssh import SSHError
 
 
@@ -110,3 +115,70 @@ async def test_recovery_clears_the_backoff(monitor_and_clock, monkeypatch) -> No
     assert sorted(checked) == ["p1", "p2", "p3"]
     assert "srv-1" not in monitor._failures, "a success must reset the counter"
     assert "srv-1" not in monitor._retry_after
+
+
+async def test_a_pane_that_stops_changing_accumulates_stillness(
+    monitor_and_clock, monkeypatch
+) -> None:
+    """The bug that left a finished agent reporting "working" overnight.
+
+    Whether a session is idle is decided by how long its pane has been still,
+    and the monitor measures that with a per-session clock. That clock was
+    started only when the pane *changed* — so a session that stopped changing
+    never started one, `still_for_seconds` came back as zero on every sweep,
+    and the idle branch could not be reached. The state froze at whatever it
+    last was. Observed in the wild as a blue "working" dot ten hours after the
+    agent had finished.
+
+    This watches the value the monitor feeds to `probe` rather than the state
+    it writes, because that value is the thing that was wrong.
+    """
+    monitor, clock = monitor_and_clock
+    seen: list[float] = []
+
+    class _Snapshot:
+        state = ActivityState.WORKING
+        digest = "unchanging"
+        detail = None
+
+    async def fake_probe(*args, **kwargs):
+        seen.append(kwargs["still_for_seconds"])
+        return _Snapshot()
+
+    async def fake_target(*args, **kwargs):
+        return object()
+
+    class _NullSession:
+        async def __aenter__(self):
+            class _Conn:
+                async def execute(self, *args, **kwargs):
+                    return None
+
+            return _Conn()
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr("moonphase.monitor.service_session", lambda: _NullSession())
+    monkeypatch.setattr("moonphase.activity.probe", fake_probe)
+    monkeypatch.setattr("moonphase.monitor.queries.load_ssh_target_privileged", fake_target)
+    monkeypatch.setattr("moonphase.ssh.pool.get", fake_target)
+    monkeypatch.setattr("moonphase.monitor.harness_registry.get", lambda kind: object())
+
+    row = {
+        "id": "p1", "org_id": "o1", "name": "alpha", "server_id": "srv-1",
+        "harness": "claude_code", "container_name": "c1", "session_id": "s1",
+        "tmux_session": "moonphase", "user_id": "u1",
+        "activity": "working", "pane_digest": "unchanging", "notified_state": None,
+    }
+
+    for _ in range(4):
+        await monitor._check(row)
+        clock.advance(30)
+
+    assert seen[0] == 0, "the first look has nothing to compare against"
+    assert seen[-1] >= 90, (
+        f"stillness never accumulated: {seen} — a pane that stops changing must "
+        "eventually be recognised as idle"
+    )
+    assert seen == sorted(seen), f"stillness must only grow while nothing moves: {seen}"

@@ -336,6 +336,8 @@ PROJECT_COLUMNS = """
      limit 1) as activity_detail,
     (select max(s.activity_at) from project_sessions s
      where s.project_id = p.id and s.user_id = auth.uid()) as activity_at,
+    (select max(s.checked_at) from project_sessions s
+     where s.project_id = p.id and s.user_id = auth.uid()) as checked_at,
     public.project_access(p.id) as access,
     not public.is_org_member(p.org_id) as shared,
     (select count(*) from project_shares ph where ph.project_id = p.id) as share_count,
@@ -656,7 +658,7 @@ async def delete_project(conn: AsyncConnection, project_id: UUID) -> bool:
 
 SESSION_COLUMNS = """
     id, project_id, tmux_session, harness, state, started_at, last_attached_at,
-    transcript_path, user_id, workdir, home_dir, branch,
+    transcript_path, user_id, workdir, home_dir, branch, activity_at, checked_at,
     activity::text as activity, activity_detail,
     (user_id = auth.uid()) as is_mine,
     public.session_owner_label(user_id) as owner

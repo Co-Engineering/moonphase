@@ -133,6 +133,8 @@ export interface Project {
   activity: ActivityState
   activity_detail: string | null
   activity_at: string | null
+  /** When the activity above was last confirmed. Null means never. */
+  checked_at: string | null
   access: Access
   shared: boolean
   share_count: number
@@ -149,6 +151,9 @@ export interface Session {
   transcript_path: string | null
   activity: ActivityState
   activity_detail: string | null
+  activity_at: string | null
+  /** When the activity above was last confirmed. Null means never. */
+  checked_at: string | null
   /**
    * Who this session runs as. A session is one person's — their Claude
    * account, their git identity, their branch — so only its owner can type
@@ -256,6 +261,34 @@ export interface GitHubDevice {
   interval: number
   detail: string | null
   account: string | null
+}
+
+/**
+ * How long a reported activity stays believable.
+ *
+ * The monitor sweeps every 20 seconds, so anything it confirmed within a
+ * couple of sweeps is current. Past that it has not been able to look, and the
+ * last thing it saw is a guess — showing it as fact is how a finished agent
+ * goes on displaying a confident "working" overnight.
+ */
+export const ACTIVITY_STALE_AFTER_MS = 120_000
+
+export function liveActivity(item: {
+  activity: ActivityState
+  checked_at?: string | null
+}): ActivityState {
+  if (!item.checked_at) return 'unknown'
+  if (Date.now() - Date.parse(item.checked_at) > ACTIVITY_STALE_AFTER_MS) return 'unknown'
+  return item.activity
+}
+
+export function checkedAgo(item: { checked_at?: string | null }): string {
+  if (!item.checked_at) return 'never checked'
+  const seconds = Math.round((Date.now() - Date.parse(item.checked_at)) / 1000)
+  if (seconds < 90) return `checked ${seconds}s ago`
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 90) return `last checked ${minutes} min ago`
+  return `last checked ${Math.round(minutes / 60)}h ago`
 }
 
 export type ActivityState =
