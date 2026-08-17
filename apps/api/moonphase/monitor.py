@@ -181,7 +181,7 @@ class SessionMonitor:
             return
 
         title, body = message
-        await self._notify(row, title, body)
+        await self._notify(row, title, body, kind=str(snapshot.state))
 
         async with service_session() as conn:
             await conn.execute(
@@ -192,7 +192,9 @@ class SessionMonitor:
                 {"s": str(snapshot.state), "id": row["session_id"]},
             )
 
-    async def _notify(self, row: dict[str, Any], title: str, body: str) -> None:
+    async def _notify(
+        self, row: dict[str, Any], title: str, body: str, *, kind: str | None = None
+    ) -> None:
         if not push.configured():
             log.debug("push not configured; would have sent: %s", title)
             return
@@ -208,6 +210,7 @@ class SessionMonitor:
                 ),
                 title=title,
                 body=body,
+                kind=kind,
                 url=f"/projects/{row['id']}",
                 # Collapse repeats for the same project rather than stacking.
                 tag=f"moonphase-{row['id']}",

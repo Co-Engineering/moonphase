@@ -84,6 +84,7 @@ async def send(
     body: str,
     url: str | None = None,
     tag: str | None = None,
+    kind: str | None = None,
 ) -> bool:
     """Deliver one notification. False means the subscription is dead.
 
@@ -98,7 +99,16 @@ async def send(
         )
 
     payload = json.dumps(
-        {"title": title, "body": body, "url": url, "tag": tag or "moonphase"}
+        {
+            "title": title,
+            "body": body,
+            "url": url,
+            "tag": tag or "moonphase",
+            # Lets the worker treat a question differently from an
+            # announcement: one needs answering and should stay on screen
+            # until it is, the other can fade.
+            "kind": kind,
+        }
     )
 
     def _send() -> None:

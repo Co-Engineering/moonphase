@@ -14,6 +14,7 @@ import { useResource } from './lib/useResource'
 import { ProjectTerminal } from './components/Terminal'
 import { Auth } from './routes/Auth'
 import { Connect } from './routes/Connect'
+import { setBadge } from './lib/notifications'
 import {
   currentHost,
   fetchConfig,
@@ -82,6 +83,18 @@ export function App() {
       />
     )
   }
+
+  // Opening the app is the acknowledgement: whatever was waiting has now been
+  // seen, so the icon should stop claiming otherwise.
+  useEffect(() => {
+    if (!session) return
+    void setBadge(0)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void setBadge(0)
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [session])
 
   if (!ready) return <div className="auth-shell">Loading…</div>
   if (!session) return <Auth />

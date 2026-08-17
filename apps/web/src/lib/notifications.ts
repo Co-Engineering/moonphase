@@ -11,24 +11,86 @@ import { api } from './api'
 
 export type PushSupport =
   | { supported: true }
-  | { supported: false; reason: string }
+  | { supported: false; reason: string; fix?: string }
 
+/** Running from the home screen rather than in a browser tab. */
+export function isInstalled(): boolean {
+  return (
+    window.matchMedia('(display-mode: standalone)').matches ||
+    // Safari's own, predating the standard and still the only one it sets.
+    (navigator as { standalone?: boolean }).standalone === true
+  )
+}
+
+/** iPhone, iPad — including iPadOS, which claims to be a Mac with a touchscreen. */
+export function isApplePhone(): boolean {
+  const ua = navigator.userAgent
+  if (/iphone|ipod|ipad/i.test(ua)) return true
+  return /macintosh/i.test(ua) && navigator.maxTouchPoints > 1
+}
+
+/**
+ * Whether a notification can arrive on this device, and if not, what to do.
+ *
+ * The reason matters more than the verdict. On an iPhone, Safari exposes no
+ * PushManager at all until the site has been added to the Home Screen, so the
+ * honest report — "this browser has no push support" — is both true and
+ * useless: the browser does support it, once installed. Anyone reading that
+ * would conclude Moonphase does not work on their phone and stop.
+ */
 export function pushSupport(): PushSupport {
+  if (!window.isSecureContext) {
+    // Almost always a phone pointed at a plain-http address on a home network.
+    return {
+      supported: false,
+      reason: 'Notifications need a secure connection.',
+      fix:
+        'Serve Moonphase over HTTPS — a reverse proxy, or a Tailscale or ' +
+        'Cloudflare tunnel. Browsers allow this on localhost only.',
+    }
+  }
   if (!('serviceWorker' in navigator)) {
     return { supported: false, reason: 'This browser has no service worker support.' }
   }
   if (!('PushManager' in window)) {
+    if (isApplePhone() && !isInstalled()) {
+      return {
+        supported: false,
+        reason: 'Add Moonphase to your Home Screen first.',
+        fix:
+          'On iPhone and iPad, notifications only work from an installed app. ' +
+          'Tap Share, then "Add to Home Screen", open it from there, and come ' +
+          'back to this screen. Needs iOS 16.4 or later.',
+      }
+    }
+    if (isApplePhone()) {
+      return {
+        supported: false,
+        reason: 'This version of iOS cannot receive web notifications.',
+        fix: 'Web push arrived in iOS 16.4.',
+      }
+    }
     return { supported: false, reason: 'This browser has no push support.' }
   }
-  if (!window.isSecureContext) {
-    // The usual cause: reaching a remote backend over plain http. Worth saying
-    // outright, because "nothing happens" is otherwise baffling.
-    return {
-      supported: false,
-      reason: 'Push needs a secure context — serve the app over HTTPS or localhost.',
-    }
-  }
   return { supported: true }
+}
+
+/**
+ * The count on the app icon, which is the part that makes it feel like an app
+ * rather than a bookmark. Supported on installed apps on Android and on iOS
+ * 16.4+; a no-op everywhere else, which is why nothing checks first.
+ */
+export async function setBadge(count: number): Promise<void> {
+  const nav = navigator as {
+    setAppBadge?: (n?: number) => Promise<void>
+    clearAppBadge?: () => Promise<void>
+  }
+  try {
+    if (count > 0) await nav.setAppBadge?.(count)
+    else await nav.clearAppBadge?.()
+  } catch {
+    // Unsupported, or denied. The notification itself still arrives.
+  }
 }
 
 /**

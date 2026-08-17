@@ -1682,3 +1682,13 @@ button.linkish:hover:not(:disabled) {
   margin-top: 14px;
   padding: 10px;
 }
+
+.install-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.install-banner span {
+  flex: 1;
+}

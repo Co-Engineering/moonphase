@@ -296,6 +296,40 @@ another connection: `pool.create_process` for long-lived ones, and `ssh.run`
 via `pool.another()`, because it is handed a connection rather than a target
 and cannot otherwise ask for a different one.
 
+## Notifications are the product working while you are gone
+
+Everything else is about a session outliving your laptop. This is the part that
+lets you stop watching it: a push arrives when an agent starts waiting for you,
+so closing the app is safe.
+
+They are real system notifications, not a banner inside a page, and the
+mechanism is worth stating because it is the reason they work with the app
+closed. The browser subscribes and is handed an endpoint at its own push
+service — Google's for Chrome and Android, Apple's for Safari and iOS. Moonphase
+signs a message with the VAPID private key and posts it there. That service
+delivers it over the connection the operating system already keeps open, wakes
+the service worker, and the worker calls `showNotification`. Moonphase holds no
+connection to the phone and does not need the app to be running.
+
+Two platform facts shape the interface around it:
+
+- **On iPhone and iPad there is no push at all until the site is installed to
+  the Home Screen.** Safari does not expose `PushManager` in a tab, so the
+  honest report — "this browser has no push support" — is true and useless.
+  Anyone reading it would conclude Moonphase does not work on their phone. The
+  settings panel detects this case specifically and gives the taps instead.
+- **A secure context is required**, and a phone pointed at a plain-http address
+  on a home network is the likeliest way to end up without one. Browsers say
+  almost nothing about it, so the connect screen warns before you connect
+  rather than after nothing happens.
+
+A notification about a question uses `requireInteraction`, so it stays until it
+is answered rather than fading while the phone is face down; an announcement
+that a run finished does not. The icon badge is derived from what is still in
+the notification shade rather than a counter kept in the worker, because a
+service worker is stopped and restarted at the browser's discretion and any
+total it held would be wrong by morning.
+
 ## The harness seam
 
 `harness/base.py` defines what Moonphase needs to know about a coding agent:

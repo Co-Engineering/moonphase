@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { disable as disablePush, enable as enablePush, pushSupport } from '../lib/notifications'
+import {
+  disable as disablePush,
+  enable as enablePush,
+  isApplePhone,
+  isInstalled,
+  pushSupport,
+} from '../lib/notifications'
+import { InstallPrompt } from '../components/InstallPrompt'
 import {
   api,
   type Environment,
@@ -983,14 +990,32 @@ function NotificationsPanel({ run }: { run: Runner }) {
       </h3>
       <p className="hint">
         Tells you when Claude finishes or gets stuck on a question, so you can close the
-        app and walk away instead of checking it.
+        app and walk away instead of checking it. They arrive through your phone&rsquo;s
+        own notification system, so they show up with the app closed and the screen off.
       </p>
+
+      <InstallPrompt />
+
+      {support.supported && !isInstalled() && !isApplePhone() && (
+        <p className="hint">
+          Installing Moonphase to your home screen is worth doing anyway: notifications
+          then look and behave like any other app&rsquo;s, including the count on the icon.
+        </p>
+      )}
 
       {error && <div className="banner error">{error}</div>}
       {notice && <div className="banner info">{notice}</div>}
 
       {!support.supported ? (
-        <div className="banner warn">{support.reason}</div>
+        <div className="banner warn">
+          <strong>{support.reason}</strong>
+          {support.fix && (
+            <>
+              <br />
+              {support.fix}
+            </>
+          )}
+        </div>
       ) : status && !status.configured ? (
         <div className="banner warn">
           This deployment has no VAPID keypair, so it cannot send push. Run{' '}
