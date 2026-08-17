@@ -3,6 +3,11 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 export default defineConfig({
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./src/test/setup.ts'],
+  },
   plugins: [react()],
   // Read .env from the repo root, not apps/web. One .env configures the API
   // and the frontend together; without this the VITE_* vars are silently

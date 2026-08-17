@@ -220,6 +220,10 @@ export function ProjectTerminal({
       window.setTimeout(() => term.dispose(), 0)
       termRef.current = null
     }
+    // `readOnly` is deliberately absent: it is read through a ref so that a
+    // change in access does not tear down and rebuild the terminal, which
+    // would drop the connection and the scrollback with it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, session])
 
   return (
