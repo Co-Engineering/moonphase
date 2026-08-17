@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import preview, socks, ssh
+from . import preflight, preview, socks, ssh
 from .config import get_settings
 from .db import dispose_engine
 from .monitor import monitor
@@ -44,6 +44,11 @@ log = logging.getLogger("moonphase")
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
     log.info("moonphase api starting (runtime image: %s)", settings.moonphase_runtime_image)
+    # Every misconfiguration this project has documented is knowable now and
+    # otherwise surfaces much later wearing a disguise. Fatal findings stop the
+    # process, because a container that exits with a reason in its logs is far
+    # easier to diagnose than one that serves 500s.
+    await preflight.run()
     # Notifications only mean anything if something is watching while no
     # client is open, which is exactly when they matter.
     monitor.start()

@@ -38,7 +38,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Nothing is published that the tests have not passed on. Reused rather than
+  # duplicated, so the gate and the CI everyone reads are the same thing.
+  test:
+    uses: ./.github/workflows/ci.yml
+
   publish:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

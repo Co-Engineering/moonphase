@@ -84,6 +84,11 @@ existing() {
 
 if [ -f .env ]; then
   info "keeping the secrets already in .env"
+  # Kept for two reasons: this file holds MOONPHASE_SECRET_KEY, which cannot be
+  # regenerated, and a development checkout's .env carries a dozen keys this
+  # script knows nothing about. Losing either silently would be the worst kind
+  # of failure — one that only shows up much later.
+  cp .env .env.bak
 else
   info "generating secrets"
 fi
@@ -102,6 +107,8 @@ ANON_KEY=$(existing SUPABASE_ANON_KEY)
 
 PUBLIC_URL=$(existing MOONPHASE_PUBLIC_URL)
 [ -n "${PUBLIC_URL:-}" ] || PUBLIC_URL="http://localhost:${PORT}"
+
+GITHUB_CLIENT_ID=$(existing MOONPHASE_GITHUB_CLIENT_ID)
 
 IMAGE=$(existing MOONPHASE_IMAGE)
 [ -n "${IMAGE:-}" ] || IMAGE="${MOONPHASE_IMAGE:-ghcr.io/oliversvane/moonphase}"
@@ -158,8 +165,27 @@ MOONPHASE_VAPID_PRIVATE_KEY=${VAPID_PRIVATE:-}
 MOONPHASE_VAPID_SUBJECT=${VAPID_SUBJECT}
 
 # Client id of a GitHub OAuth app, for one-click sign-in. No secret needed.
-MOONPHASE_GITHUB_CLIENT_ID=
+MOONPHASE_GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-}
 ENV
+
+# Anything the previous file had that this script does not manage. A checkout
+# used for development keeps DATABASE_URL, the VITE_* variables and half a
+# dozen others in here; rewriting the file without them would break `pnpm dev`
+# later, a long way from the thing that caused it.
+if [ -f .env.bak ]; then
+  kept=$(awk -F= '
+    /^[A-Z_]+=/ {
+      key = $1
+      if (key !~ /^(MOONPHASE_SECRET_KEY|POSTGRES_(USER|PASSWORD|DB)|SUPABASE_(JWT_SECRET|ANON_KEY)|MOONPHASE_(PUBLIC_URL|IMAGE|VERSION|BIND|PORT|MONITOR_INTERVAL|GITHUB_CLIENT_ID|VAPID_PUBLIC_KEY|VAPID_PRIVATE_KEY|VAPID_SUBJECT))$/) print
+    }' .env.bak)
+  if [ -n "$kept" ]; then
+    {
+      printf '\n# --- kept from your previous .env ---------------------------------------\n'
+      printf '%s\n' "$kept"
+    } >> .env
+    info "kept $(printf '%s\n' "$kept" | wc -l | tr -d ' ') other setting(s) from your previous .env"
+  fi
+fi
 
 chmod 600 .env
 
