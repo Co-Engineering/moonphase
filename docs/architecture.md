@@ -296,6 +296,31 @@ another connection: `pool.create_process` for long-lived ones, and `ssh.run`
 via `pool.another()`, because it is handed a connection rather than a target
 and cannot otherwise ask for a different one.
 
+## Surviving a reboot
+
+A managed server restarts — maintenance, power, someone typing `reboot`. The
+containers come back on their own, because they are started with
+`--restart unless-stopped`. Everything *inside* them does not: tmux is gone,
+and with it the agent and its conversation.
+
+Two things follow, and Moonphase used to get both wrong by saying nothing. The
+record has to match the machine: the monitor is the only thing that looks at
+every project regularly, so it reconciles project status from what the
+container actually reports. A project claiming to be running while its
+container is stopped offers a terminal, a Stop button and a green dot for
+something that does not exist.
+
+And a container that came back with nothing running in it is a state of its own
+— genuinely running, genuinely empty — worth naming rather than reporting as
+either half. Sessions in that state offer **Resume**, which starts the harness
+with `--continue` so it reopens the conversation it was having instead of a
+blank prompt in the right directory. Restarting without that would be
+technically a recovery and practically a loss.
+
+Resuming is asked of the harness rather than assumed: `launch_spec(resume=...)`
+is part of the seam, and an agent that cannot resume ignores it and starts
+normally.
+
 ## Notifications are the product working while you are gone
 
 Everything else is about a session outliving your laptop. This is the part that
