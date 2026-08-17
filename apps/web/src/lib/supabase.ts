@@ -10,8 +10,16 @@ import type { InstanceConfig } from './host'
  * `configure` below, called during boot before anything renders.
  */
 let instance: SupabaseClient | null = null
+let configuredFor: string | null = null
 
 export function configure(config: InstanceConfig): SupabaseClient {
+  // Idempotent. React mounts twice in development, and a second client sharing
+  // one storage key is two things refreshing the same token — GoTrue warns
+  // about it, and the failure it warns about is a session being clobbered
+  // mid-refresh, which reads as a random sign-out.
+  if (instance && configuredFor === config.supabase_url) return instance
+
+  configuredFor = config.supabase_url
   instance = createClient(config.supabase_url, config.supabase_anon_key, {
     auth: {
       persistSession: true,

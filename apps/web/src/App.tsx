@@ -69,6 +69,21 @@ export function App() {
     }
   }, [config, attach])
 
+  // Above every early return: a hook placed after one runs on some renders and
+  // not others, and React tears the whole tree down when the count changes —
+  // which shows up as a blank window with the error only in the console.
+  // Opening the app is the acknowledgement: whatever was waiting has now been
+  // seen, so the icon should stop claiming otherwise.
+  useEffect(() => {
+    if (!session) return
+    void setBadge(0)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void setBadge(0)
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [session])
+
   if (!config) {
     if (!ready) return <div className="auth-shell">Connecting…</div>
     return (
@@ -83,18 +98,6 @@ export function App() {
       />
     )
   }
-
-  // Opening the app is the acknowledgement: whatever was waiting has now been
-  // seen, so the icon should stop claiming otherwise.
-  useEffect(() => {
-    if (!session) return
-    void setBadge(0)
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') void setBadge(0)
-    }
-    document.addEventListener('visibilitychange', onVisible)
-    return () => document.removeEventListener('visibilitychange', onVisible)
-  }, [session])
 
   if (!ready) return <div className="auth-shell">Loading…</div>
   if (!session) return <Auth />
