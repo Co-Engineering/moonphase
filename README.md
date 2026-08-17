@@ -129,12 +129,24 @@ apps/web        React + Vite + xterm.js frontend (also the future PWA)
 apps/desktop    Electron shell around apps/web
 infra/images    Container images projects run in
 supabase        Migrations, RLS policies, local Supabase config
+docker          Image, compose stack and schema bootstrap for self-hosting
 docs            Documentation site (MkDocs Material)
 ```
 
 ## Quick start
 
-Requires Docker, Node 20+, pnpm, uv, and the Supabase CLI.
+Docker is the only requirement.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install.sh | sh
+```
+
+That clones the repository, generates every secret it needs, and brings up four
+containers: Postgres, GoTrue for sign-in, the API, and Caddy putting all of it on one
+address. Open `http://127.0.0.1:8471` and create an account.
+
+To work on Moonphase itself — hot reload, the Electron shell, the test suites — you also
+need Node 20+, pnpm, uv and the Supabase CLI:
 
 ```bash
 cp .env.example .env

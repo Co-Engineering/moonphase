@@ -12,9 +12,10 @@ Attach from your desktop. Detach by shutting the lid. Reattach from your phone o
 train. The session never noticed.
 
 ```console
-$ cp .env.example .env
-$ ./scripts/dev.sh
+$ curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install.sh | sh
 ```
+
+Docker is the only requirement. [More ways to install →](getting-started/docker.md)
 
 ## Why
 
@@ -91,7 +92,7 @@ than mocks. See the [roadmap](roadmap.md) for what has landed and what is next.
 
 <div class="moonphase-cards" markdown>
 
-[<strong>Install it →</strong><span>Docker, Node, pnpm, uv and the Supabase CLI. About five minutes.</span>](getting-started/installation.md)
+[<strong>Install it →</strong><span>One command, and Docker is the only requirement.</span>](getting-started/docker.md)
 
 [<strong>Take the tour →</strong><span>Every screen, and what it is for.</span>](getting-started/tour.md)
 

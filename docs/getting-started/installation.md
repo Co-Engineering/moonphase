@@ -1,4 +1,10 @@
-# Installation
+# Installation from source
+
+!!! tip "Just want to run it?"
+    [Install with Docker](docker.md) — one command, and Docker is the only requirement.
+
+    This page is the development setup: hot reload, the Electron shell, and the test
+    suites.
 
 Moonphase runs as three pieces: a Postgres database with authentication (Supabase), the
 backend that talks to your servers, and a client. For development, one script starts all

@@ -1,0 +1,35 @@
+# One address for the whole product.
+#
+# The client uses supabase-js for sign-in, which calls `${SUPABASE_URL}/auth/v1/…`.
+# GoTrue serves those routes at its root, so something has to strip the prefix.
+# A full Supabase deployment uses Kong for this; five lines of Caddy do the same
+# job here without a second configuration language.
+#
+# Routing everything through one origin is also what makes the phone client
+# work: same origin means no CORS to configure, and the service worker lands at
+# the root scope that push requires.
+
+{
+	admin off
+	# Access logs for a self-hosted tool are mostly noise; errors still surface.
+	log {
+		level ERROR
+	}
+}
+
+:8471 {
+	# handle_path strips the matched prefix, which is exactly the rewrite
+	# GoTrue needs: /auth/v1/token -> /token
+	handle_path /auth/v1/* {
+		reverse_proxy auth:9999
+	}
+
+	handle {
+		reverse_proxy api:8471 {
+			# The terminal and the feed are WebSockets. Caddy upgrades them
+			# without configuration, but buffering would make a live terminal
+			# arrive in batches, so flushing is forced.
+			flush_interval -1
+		}
+	}
+}

@@ -1,0 +1,159 @@
+# Moonphase, self-hosted.
+#
+#   cp .env.docker.example .env && ./scripts/install.sh
+#
+# Four containers. Postgres holds everything, GoTrue handles sign-in, the API
+# does the work, and Caddy puts all of it on one address — which is what lets a
+# phone connect by typing a single URL.
+#
+# Deliberately not the full Supabase stack. Moonphase talks to Postgres with
+# asyncpg and never goes through PostgREST, Realtime or Storage, so running
+# them would be several hundred megabytes of container doing nothing. See
+# docker/bootstrap.sql for the small surface it does depend on.
+
+name: moonphase
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      # Runs once, when the cluster is first created — which is before GoTrue
+      # ever connects. GoTrue is pointed at `search_path=auth` and will not
+      # create that schema itself, so without this it fails its own migrations
+      # with "no schema has been selected to create in". Real Supabase gets the
+      # schema from its Postgres image; this is the equivalent.
+      - ./docker/bootstrap.sql:/docker-entrypoint-initdb.d/00-moonphase.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    # Not published by default. Nothing outside this network needs it, and a
+    # Postgres on a public interface is how self-hosted things get owned.
+    # Uncomment to inspect it with psql from the host.
+    # ports:
+    #   - "127.0.0.1:54322:5432"
+
+  auth:
+    image: supabase/gotrue:v2.177.0
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: "9999"
+      API_EXTERNAL_URL: ${MOONPHASE_PUBLIC_URL:?set MOONPHASE_PUBLIC_URL in .env}
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-postgres}?search_path=auth&sslmode=disable
+      GOTRUE_SITE_URL: ${MOONPHASE_PUBLIC_URL}
+      GOTRUE_URI_ALLOW_LIST: ${MOONPHASE_PUBLIC_URL}
+      # HS256 with a shared secret. The API accepts both this and asymmetric
+      # tokens over JWKS; the shared secret keeps the stack to two services.
+      GOTRUE_JWT_SECRET: ${SUPABASE_JWT_SECRET:?set SUPABASE_JWT_SECRET in .env}
+      GOTRUE_JWT_EXP: "3600"
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      # Self-hosted and single-tenant: you are the only one signing up, and
+      # there is no mail server. Turn confirmation on once you have one.
+      GOTRUE_DISABLE_SIGNUP: ${MOONPHASE_DISABLE_SIGNUP:-false}
+      GOTRUE_MAILER_AUTOCONFIRM: ${MOONPHASE_MAILER_AUTOCONFIRM:-true}
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_LOG_LEVEL: warn
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9999/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # One-shot. Creates the roles and `auth.uid()` that the policies are written
+  # against, then applies every migration that has not run yet.
+  migrate:
+    image: postgres:16-alpine
+    depends_on:
+      db:
+        condition: service_healthy
+      auth:
+        condition: service_started
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    volumes:
+      - ./supabase/migrations:/migrations:ro
+      - ./docker/bootstrap.sql:/bootstrap.sql:ro
+      - ./docker/migrate.sh:/migrate.sh:ro
+    entrypoint: ["sh", "/migrate.sh"]
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: moonphase/api:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-postgres}
+      # The public address, because it is what the browser must be able to
+      # reach — the client is served from here and signs in against the same
+      # origin.
+      SUPABASE_URL: ${MOONPHASE_PUBLIC_URL}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:?set SUPABASE_ANON_KEY in .env}
+      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET}
+
+      MOONPHASE_SECRET_KEY: ${MOONPHASE_SECRET_KEY:?set MOONPHASE_SECRET_KEY in .env}
+      MOONPHASE_API_HOST: 0.0.0.0
+      MOONPHASE_API_PORT: "8471"
+      # Same origin through the proxy, so there is nothing to allow.
+      MOONPHASE_CORS_ORIGINS: ${MOONPHASE_PUBLIC_URL}
+
+      MOONPHASE_RUNTIME_IMAGE: ${MOONPHASE_RUNTIME_IMAGE:-moonphase/runtime-claude:latest}
+      MOONPHASE_SSH_TRUST_ON_FIRST_USE: ${MOONPHASE_SSH_TRUST_ON_FIRST_USE:-true}
+      MOONPHASE_MONITOR_INTERVAL: ${MOONPHASE_MONITOR_INTERVAL:-20}
+
+      MOONPHASE_VAPID_PUBLIC_KEY: ${MOONPHASE_VAPID_PUBLIC_KEY:-}
+      MOONPHASE_VAPID_PRIVATE_KEY: ${MOONPHASE_VAPID_PRIVATE_KEY:-}
+      MOONPHASE_VAPID_SUBJECT: ${MOONPHASE_VAPID_SUBJECT:-mailto:admin@example.com}
+      MOONPHASE_GITHUB_CLIENT_ID: ${MOONPHASE_GITHUB_CLIENT_ID:-}
+
+      # Preview listeners live in this container, so they bind to all of its
+      # interfaces and are reached at the public host. Nothing on the host is
+      # exposed by this; only the proxy publishes ports.
+      MOONPHASE_PREVIEW_BIND: 0.0.0.0
+      MOONPHASE_PREVIEW_HOST: ${MOONPHASE_PREVIEW_HOST:-127.0.0.1}
+    volumes:
+      # Managed SSH keys are encrypted in the database, but asyncssh writes
+      # known_hosts and control files; give it somewhere durable.
+      - api-state:/home/moonphase/.moonphase
+
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - api
+      - auth
+    ports:
+      - "${MOONPHASE_BIND:-127.0.0.1}:${MOONPHASE_PORT:-8471}:8471"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  db-data:
+  api-state:
+  caddy-data:
+  caddy-config:
