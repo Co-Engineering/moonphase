@@ -31,8 +31,11 @@ on:
 permissions:
   contents: read
 
+# Keyed on the calling workflow as well as the ref. Without that, the run
+# triggered by a push and the identical run called by the publish workflow share
+# a group on the same ref and cancel each other.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -54,21 +57,6 @@ jobs:
           --health-timeout 5s
           --health-retries 20
 
-      auth:
-        image: supabase/gotrue:v2.177.0
-        env:
-          GOTRUE_API_HOST: 0.0.0.0
-          GOTRUE_API_PORT: "9999"
-          API_EXTERNAL_URL: http://localhost:9999
-          GOTRUE_DB_DRIVER: postgres
-          GOTRUE_DB_DATABASE_URL: postgres://postgres:postgres@db:5432/postgres?search_path=auth&sslmode=disable
-          GOTRUE_SITE_URL: http://localhost:9999
-          GOTRUE_JWT_SECRET: test-jwt-secret-at-least-32-characters-long
-          GOTRUE_JWT_AUD: authenticated
-          GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
-          GOTRUE_MAILER_AUTOCONFIRM: "true"
-        ports: ["9999:9999"]
-
     steps:
       - uses: actions/checkout@v4
 
@@ -84,12 +72,8 @@ jobs:
         working-directory: apps/api
         run: .venv/bin/ruff check moonphase/ tests/
 
-      # The schema the policies are written against. Same file the compose
-      # stack uses, so CI cannot drift from what people actually deploy.
-      #
-      # GoTrue is pointed at search_path=auth and will not create that schema
-      # itself, so this has to happen before it manages its own migrations —
-      # it retries on failure, which is what makes the ordering survivable.
+      # The roles and auth.uid() the policies are written against. The same
+      # file the compose stack uses, so CI cannot drift from what people deploy.
       - name: Bootstrap the schema
         env:
           PGPASSWORD: postgres
@@ -97,15 +81,47 @@ jobs:
           psql -h 127.0.0.1 -p 54722 -U postgres -d postgres \
             -v ON_ERROR_STOP=1 -f docker/bootstrap.sql
 
-          echo "waiting for GoTrue to create auth.users"
+      # GoTrue owns auth.users, which the first migration puts a trigger on.
+      #
+      # Run here rather than as a service container for two reasons: a service
+      # starts before anything else and raced Postgres into a fatal error, and
+      # unlike compose, GitHub does not restart one that has died — so it
+      # stayed dead and auth.users never appeared. As a step it can be ordered
+      # after the bootstrap and after the database is genuinely accepting
+      # connections.
+      - name: Start GoTrue and wait for auth.users
+        env:
+          PGPASSWORD: postgres
+        run: |
+          docker run -d --name gotrue --network host \
+            -e GOTRUE_API_HOST=0.0.0.0 \
+            -e GOTRUE_API_PORT=9999 \
+            -e API_EXTERNAL_URL=http://localhost:9999 \
+            -e GOTRUE_DB_DRIVER=postgres \
+            -e "GOTRUE_DB_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:54722/postgres?search_path=auth&sslmode=disable" \
+            -e GOTRUE_SITE_URL=http://localhost:9999 \
+            -e GOTRUE_JWT_SECRET=test-jwt-secret-at-least-32-characters-long \
+            -e GOTRUE_JWT_AUD=authenticated \
+            -e GOTRUE_JWT_DEFAULT_GROUP_NAME=authenticated \
+            -e GOTRUE_MAILER_AUTOCONFIRM=true \
+            supabase/gotrue:v2.177.0
+
           for _ in $(seq 1 60); do
             found=$(psql -h 127.0.0.1 -p 54722 -U postgres -d postgres -tAc \
               "select to_regclass('auth.users') is not null")
             [ "$found" = "t" ] && break
             sleep 2
           done
-          [ "$found" = "t" ] || { echo "auth.users never appeared"; exit 1; }
+          if [ "$found" != "t" ]; then
+            echo "auth.users never appeared. GoTrue said:"
+            docker logs gotrue
+            exit 1
+          fi
 
+      - name: Migrate
+        env:
+          PGPASSWORD: postgres
+        run: |
           for file in supabase/migrations/*.sql; do
             echo "  $(basename "$file")"
             psql -h 127.0.0.1 -p 54722 -U postgres -d postgres \
