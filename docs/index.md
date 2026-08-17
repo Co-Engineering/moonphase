@@ -1,8 +1,3 @@
----
-hide:
-  - navigation
----
-
 # Moonphase
 
 <p class="moonphase-lede">
