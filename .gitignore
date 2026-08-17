@@ -24,3 +24,6 @@ supabase/.branches/
 
 .DS_Store
 *.log
+
+# MkDocs build output
+site/

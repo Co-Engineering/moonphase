@@ -1,0 +1,70 @@
+/*
+ * A little identity, and nothing that fights the theme.
+ *
+ * Material is already a good documentation reader; the useful changes are the
+ * ones that make Moonphase's own writing easier to scan — wider prose is not
+ * one of them, so the measure stays where it is.
+ */
+
+:root {
+  --md-primary-fg-color: #6b5bd2;
+  --md-primary-fg-color--light: #8a7ce0;
+  --md-primary-fg-color--dark: #4f43a5;
+  --md-accent-fg-color: #7aa2f7;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-hue: 245;
+  --md-default-bg-color: #0f1017;
+  --md-code-bg-color: #171923;
+}
+
+/* The tagline under the site name on the landing page. */
+.moonphase-lede {
+  font-size: 1.15rem;
+  line-height: 1.6;
+  color: var(--md-default-fg-color--light);
+  margin: 0 0 1.6em;
+}
+
+/* Cards for the "where to go next" grids. Plain flex so there is no plugin
+   dependency for what is essentially three boxes. */
+.moonphase-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.8rem;
+  margin: 1.4em 0;
+}
+
+.moonphase-cards > a {
+  display: block;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.4rem;
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 120ms, transform 120ms;
+}
+
+.moonphase-cards > a:hover {
+  border-color: var(--md-accent-fg-color);
+  transform: translateY(-1px);
+}
+
+.moonphase-cards strong {
+  display: block;
+  margin-bottom: 0.2rem;
+  color: var(--md-default-fg-color);
+}
+
+.moonphase-cards span {
+  font-size: 0.78rem;
+  color: var(--md-default-fg-color--light);
+}
+
+/* Terminal-ish diagrams read better without the code-block chrome. */
+.md-typeset pre.moonphase-diagram > code {
+  background: transparent;
+  font-size: 0.72rem;
+  line-height: 1.45;
+}

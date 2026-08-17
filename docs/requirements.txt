@@ -1,0 +1,3 @@
+# Documentation site. Pinned to majors so a theme release cannot change the
+# published site without someone choosing it.
+mkdocs-material>=9.5,<10

@@ -112,8 +112,14 @@ The desktop attaches to its real PTY; the (planned) phone client renders a reada
 parsed from Claude Code's own session transcript and writes back with `tmux send-keys`, so
 both surfaces drive the same session with no protocol drift.
 
-See [`docs/architecture.md`](docs/architecture.md) for the full design, and
-[`docs/roadmap.md`](docs/roadmap.md) for what lands when.
+**[Read the documentation →](https://oliversvane.github.io/moonphase/)**
+
+Or locally:
+
+```bash
+pip install -r docs/requirements.txt
+mkdocs serve
+```
 
 ## Layout
 
@@ -123,7 +129,7 @@ apps/web        React + Vite + xterm.js frontend (also the future PWA)
 apps/desktop    Electron shell around apps/web
 infra/images    Container images projects run in
 supabase        Migrations, RLS policies, local Supabase config
-docs            Architecture and roadmap
+docs            Documentation site (MkDocs Material)
 ```
 
 ## Quick start
@@ -135,9 +141,9 @@ cp .env.example .env
 ./scripts/dev.sh
 ```
 
-That boots Supabase, applies migrations, starts the API on `:8000` and Vite on `:5173`,
-then opens the Electron shell. Full instructions and the self-host path are in
-[`docs/setup.md`](docs/setup.md).
+That boots Supabase, applies migrations, starts the API on `:8471` and Vite on `:8472`,
+then opens the Electron shell. Full instructions and the self-host path are in the
+[documentation](https://oliversvane.github.io/moonphase/getting-started/installation/).
 
 ## License
 

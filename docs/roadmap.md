@@ -61,7 +61,32 @@ running.
 - [x] Render diffs for Edit and Write, shown with the question so an approval
       is made on the change rather than on a file name
 
-## v0.5 — teams
+## v0.5 — knowing what happened ✅
+
+Moving a session onto a server is only comfortable if you can find out what it
+did while you were not looking.
+
+- [x] **Sharing.** Servers and projects, by email, as viewer or collaborator,
+      with sessions staying individual — nobody's work runs on anyone else's
+      account.
+- [x] **Answer from anywhere.** Every waiting question, with its options
+      already parsed, on the home screen and from the notification.
+- [x] **Changes.** A diff of everything a session touched since it branched,
+      committed or not, so an agent that wrote twenty files and committed none
+      is still reviewable.
+- [x] **Search.** A phrase across every transcript you own, on the machines
+      where the transcripts already live.
+- [x] **Save points.** Commits without the vocabulary, where going back never
+      destroys anything and installed packages survive.
+- [x] **Plain-English summaries.** Counted from the transcript rather than
+      generated, because the reader cannot check a summary against the diff.
+- [x] **Usage and spend.** Anchored limit windows with real reset times,
+      per-model cost with the cache tiers priced properly, editable rates, plan
+      limits and push alerts once per window.
+- [x] **Claude Code settings and MCP as forms.** Unknown keys preserved, raw
+      JSON always one tab away.
+
+## v0.6 — teams
 
 The schema is already here; this is screens and flows.
 
@@ -71,7 +96,7 @@ The schema is already here; this is screens and flows.
 - [ ] Per-server sharing within an org
 - [ ] Audit log of who attached to what
 
-## v0.6 — more harnesses
+## v0.7 — more harnesses
 
 - [ ] OpenCode as a second `Harness` subclass
 - [ ] Multiple harnesses in one workspace as separate tmux sessions

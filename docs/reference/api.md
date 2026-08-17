@@ -1,0 +1,148 @@
+# HTTP API
+
+The backend is a plain FastAPI application. Everything the clients do goes through these
+routes, and nothing else is privileged — the desktop app has no capability the web client
+lacks.
+
+## Interactive reference
+
+The API serves its own OpenAPI schema, which is always correct for the version you are
+running:
+
+| Path            | What                        |
+| --------------- | --------------------------- |
+| `/docs`         | Swagger UI                  |
+| `/redoc`        | ReDoc                       |
+| `/openapi.json` | The schema itself           |
+
+The tables below are a map, not a substitute.
+
+## Authentication
+
+Every route except `/api/health` and `/api/config` requires a GoTrue access token:
+
+```console
+$ curl -H "Authorization: Bearer $TOKEN" https://moonphase.example/api/servers
+```
+
+The token's claims are pushed into Postgres for the duration of the request, and
+row-level security decides what you can see. A route that forgets to filter returns an
+empty set rather than someone else's data — see [the security model](../concepts/security.md).
+
+## Discovery
+
+| Method | Path           | Purpose |
+| ------ | -------------- | ------- |
+| `GET`  | `/api/health`  | Liveness |
+| `GET`  | `/api/config`  | Supabase URL, anon key and VAPID public key — public by design |
+
+`/api/config` is what lets a phone connect by typing one address: the client fetches its
+own configuration at runtime rather than having it baked into the bundle.
+
+## Servers
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| `GET`, `POST` | `/api/servers` | List, add |
+| `GET`, `DELETE` | `/api/servers/{server_id}` | Read, remove |
+| `POST` | `/api/servers/{server_id}/bootstrap` | Install a key, probe or install Docker |
+| `POST` | `/api/servers/{server_id}/test` | Reconnect and re-probe |
+| `GET`, `POST` | `/api/servers/{server_id}/shares` | List, grant |
+| `PATCH`, `DELETE` | `/api/servers/{server_id}/shares/{share_id}` | Change role, revoke |
+
+## Projects
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| `GET`, `POST` | `/api/projects` | List, create |
+| `GET`, `DELETE` | `/api/projects/{project_id}` | Read, remove |
+| `POST` | `/api/projects/{project_id}/start` | Start the container |
+| `POST` | `/api/projects/{project_id}/stop` | Stop it |
+| `GET` | `/api/projects/{project_id}/logs` | Container logs |
+| `GET`, `POST` | `/api/projects/{project_id}/shares` | List, grant |
+| `PATCH`, `DELETE` | `/api/projects/{project_id}/shares/{share_id}` | Change role, revoke |
+
+## Sessions
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| `GET` | `/api/sessions` | Every session you can see, across all projects |
+| `GET`, `POST` | `/api/projects/{project_id}/sessions` | List, create |
+| `POST` | `/api/projects/{project_id}/sessions/start` | Start the harness |
+| `DELETE` | `/api/projects/{project_id}/sessions/{name}` | Remove |
+| `POST` | `/api/projects/{project_id}/sessions/keys` | Type into a session |
+| `GET` | `/api/projects/{project_id}/sessions/snapshot` | Plain-text pane capture |
+| `POST` | `/api/projects/{project_id}/sessions/{name}/detach-clients` | Drop stale tmux clients |
+
+The live terminal is a WebSocket, not one of these:
+
+```text
+ws(s)://<host>/ws/projects/{project_id}/terminal?session=<name>&token=<jwt>
+ws(s)://<host>/ws/projects/{project_id}/feed?session=<name>&token=<jwt>
+```
+
+## Reading a session
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| `GET` | `/api/projects/{project_id}/feed` | Paged transcript |
+| `POST` | `/api/projects/{project_id}/feed/answer` | Answer the current prompt |
+| `GET` | `/api/projects/{project_id}/sessions/{name}/summary` | Counted plain-English digest |
+| `GET` | `/api/projects/{project_id}/sessions/{name}/changes` | Branch diff, committed or not |
+| `GET` | `/api/attention` | Every question waiting on you, options parsed |
+| `POST` | `/api/projects/{project_id}/sessions/{name}/answer` | Answer a named session |
+| `GET` | `/api/search?q=` | Search every transcript you own |
+
+## Save points
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| `GET`, `POST` | `/api/projects/{project_id}/sessions/{name}/checkpoints` | List, save |
+| `POST` | `…/checkpoints/{checkpoint}/restore` | Go back to one |
+
+Only in sessions you own — they commit as the session's git identity.
+
+## Previews
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| `GET` | `/api/projects/{project_id}/ports` | What the container is listening on |
+| `POST`, `DELETE` | `/api/projects/{project_id}/preview` | Open, close the SOCKS proxy |
+| `POST`, `DELETE` | `/api/projects/{project_id}/ports/{port}/share` | Public link on, off |
+
+## Usage
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| `GET` | `/api/usage?hours=` | Windows, models, projects, series |
+| `GET`, `PUT` | `/api/usage/limits` | Plan allowance and alert threshold |
+| `GET`, `PUT` | `/api/usage/prices` | Model rates |
+| `DELETE` | `/api/usage/prices/{model}` | Remove an override |
+
+## Settings
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| `GET`, `PUT` | `/api/profile` | Claude settings, MCP, CLAUDE.md, env vars, git identity |
+| `POST` | `/api/profile/harness/api-key` | Store an API key |
+| `POST` | `/api/profile/harness/login/start` | Begin subscription sign-in |
+| `GET` | `/api/profile/harness/login/{session_id}` | Poll it |
+| `POST` | `/api/profile/harness/login/code` | Submit the code |
+| `DELETE` | `/api/profile/harness` | Disconnect |
+| `POST` | `/api/profile/github/device/start` | Begin GitHub device flow |
+| `GET` | `/api/profile/github/device/{session_id}` | Poll it |
+| `POST` | `/api/profile/github/token` | Store a personal access token |
+| `DELETE` | `/api/profile/github` | Disconnect |
+| `GET`, `PUT` | `/api/environments` | List, create or update |
+| `DELETE` | `/api/environments/{key}` | Remove |
+| `GET` | `/api/harnesses` | Which harnesses are available and configured |
+| `GET` | `/api/organizations` | Your organizations |
+
+## Notifications
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| `GET` | `/api/notifications` | Whether push is configured, and whether you are subscribed |
+| `POST` | `/api/notifications/subscribe` | Register a device |
+| `POST` | `/api/notifications/unsubscribe` | Remove one |
+| `POST` | `/api/notifications/test` | Send yourself one |

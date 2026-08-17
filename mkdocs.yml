@@ -1,0 +1,128 @@
+site_name: Moonphase
+site_description: Your coding agents live on servers you own, not on the laptop you need to close.
+site_url: https://oliversvane.github.io/moonphase/
+repo_url: https://github.com/oliversvane/moonphase
+repo_name: oliversvane/moonphase
+edit_uri: edit/main/docs/
+copyright: Moonphase is self-hosted. Your servers, your agents, your data.
+
+docs_dir: docs
+
+theme:
+  name: material
+  language: en
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    # A left-hand section list and a right-hand page outline, which is the
+    # shape every reader of technical documentation already knows.
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - navigation.instant
+    - navigation.instant.progress
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.action.edit
+    - content.tabs.link
+  palette:
+    # The default follows the reader's system, because documentation is read at
+    # every hour and neither choice is right for all of them.
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Follow system
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to dark
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to light
+
+extra_css:
+  - stylesheets/extra.css
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+plugins:
+  - search
+
+# With `mkdocs build --strict` in CI, every one of these becomes a build failure.
+# A documentation site only stays honest if a link that no longer resolves stops
+# the deploy rather than sitting there.
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/oliversvane/moonphase
+      name: Moonphase on GitHub
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - getting-started/installation.md
+      - getting-started/first-server.md
+      - getting-started/first-project.md
+      - getting-started/tour.md
+  - Guides:
+      - guides/from-your-phone.md
+      - guides/save-points.md
+      - guides/reviewing-changes.md
+      - guides/previews.md
+      - guides/sharing.md
+      - guides/configuring-claude.md
+      - guides/environments.md
+      - guides/usage-and-limits.md
+      - guides/search.md
+      - guides/self-hosting.md
+  - Concepts:
+      - concepts/architecture.md
+      - concepts/sessions.md
+      - concepts/security.md
+  - Reference:
+      - reference/configuration.md
+      - reference/api.md
+      - reference/troubleshooting.md
+  - About:
+      - roadmap.md
+      - contributing.md
