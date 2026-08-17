@@ -1,15 +1,19 @@
-"""The monitor's behaviour towards servers it cannot reach.
+"""What a sweep costs, and how it behaves when something misbehaves.
 
-A server whose key stopped working fails identically on every sweep. Retrying
-each of its projects every twenty seconds costs a connection attempt apiece and
-fills the log with the same line, which is how a real problem gets missed.
+Two things the monitor must get right. It runs forever against every project at
+once, so the cost of a sweep has to follow the number of containers rather than
+the number of agents inside them. And an unreachable server is ordinary — it
+must not become a stream of identical failures, nor silence the projects that
+are answering perfectly well.
 """
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
-from moonphase.activity import ActivityState
+from moonphase.activity import ActivitySignals, ActivityState, Snapshot
 from moonphase.monitor import (
     BASE_BACKOFF_SECONDS,
     MAX_BACKOFF_SECONDS,
@@ -28,45 +32,90 @@ class _Clock:
         self.now += seconds
 
 
+class _NullSession:
+    async def __aenter__(self):
+        class _Conn:
+            async def execute(self, *args: Any, **kwargs: Any) -> None:
+                return None
+
+        return _Conn()
+
+    async def __aexit__(self, *exc: Any) -> bool:
+        return False
+
+
+class _Harness:
+    def activity_signals(self) -> ActivitySignals:
+        return ActivitySignals(prompt_patterns=[], busy_patterns=[])
+
+
+class _Running:
+    state = "running"
+
+
 @pytest.fixture
 def monitor_and_clock(monkeypatch):
     clock = _Clock()
     monkeypatch.setattr("moonphase.monitor.time.monotonic", lambda: clock.now)
+    monkeypatch.setattr("moonphase.monitor.service_session", lambda: _NullSession())
     return SessionMonitor(), clock
 
 
+def _row(project: str, server: str, container: str, session: str) -> dict[str, Any]:
+    return {
+        "id": project, "org_id": "o1", "name": project, "server_id": server,
+        "harness": "claude_code", "container_name": container,
+        "session_id": f"{container}:{session}", "tmux_session": session,
+        "user_id": "u1", "activity": "working", "pane_digest": "same",
+        "notified_state": None,
+    }
+
+
 ROWS = [
-    {"id": "p1", "name": "alpha", "server_id": "srv-1"},
-    {"id": "p2", "name": "beta", "server_id": "srv-1"},
-    {"id": "p3", "name": "gamma", "server_id": "srv-2"},
+    _row("alpha", "srv-1", "c-alpha", "one"),
+    _row("alpha", "srv-1", "c-alpha", "two"),
+    _row("gamma", "srv-2", "c-gamma", "one"),
 ]
 
 
-async def _sweep(monitor: SessionMonitor, monkeypatch, failing: set[str]) -> list[str]:
-    """Run one sweep and report which projects were actually checked."""
-    checked: list[str] = []
-
-    async def fake_check(row):
-        if row["server_id"] in failing:
-            raise SSHError("Authentication failed")
-        checked.append(row["id"])
+async def _sweep(
+    monitor: SessionMonitor,
+    monkeypatch,
+    *,
+    unreachable: frozenset[str] | set[str] = frozenset(),
+    broken: frozenset[str] | set[str] = frozenset(),
+    rows: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    """Run one sweep and report which containers were actually inspected."""
+    inspected: list[str] = []
+    chosen = rows if rows is not None else ROWS
 
     async def fake_rows(_conn):
-        return ROWS
+        return chosen
 
-    monkeypatch.setattr(monitor, "_check", fake_check)
+    async def fake_target(row):
+        if str(row["server_id"]) in unreachable:
+            raise SSHError("Authentication failed")
+        return object()
+
+    async def fake_get(_target):
+        return object()
+
+    async def fake_check(_conn, container, group):
+        if container in broken:
+            raise SSHError("container is not answering")
+        inspected.append(container)
+        return len(group)
+
     monkeypatch.setattr("moonphase.monitor._running_projects", fake_rows)
-
-    class _NullSession:
-        async def __aenter__(self):
-            return None
-
-        async def __aexit__(self, *exc):
-            return False
-
-    monkeypatch.setattr("moonphase.monitor.service_session", lambda: _NullSession())
+    monkeypatch.setattr(monitor, "_target_for", fake_target)
+    monkeypatch.setattr("moonphase.ssh.pool.get", fake_get)
+    monkeypatch.setattr(monitor, "_check_container", fake_check)
     await monitor.sweep()
-    return checked
+    return inspected
+
+
+# --- backoff ----------------------------------------------------------------
 
 
 async def test_a_failing_server_is_skipped_on_the_next_sweep(
@@ -74,14 +123,12 @@ async def test_a_failing_server_is_skipped_on_the_next_sweep(
 ) -> None:
     monitor, clock = monitor_and_clock
 
-    # First sweep: both of srv-1's projects are attempted and both fail.
-    checked = await _sweep(monitor, monkeypatch, failing={"srv-1"})
-    assert checked == ["p3"], "the healthy server should still be checked"
+    inspected = await _sweep(monitor, monkeypatch, unreachable={"srv-1"})
+    assert inspected == ["c-gamma"], "the healthy server should still be checked"
 
-    # Immediately after, srv-1 is skipped entirely — not retried per project.
     clock.advance(20)
-    checked = await _sweep(monitor, monkeypatch, failing={"srv-1"})
-    assert checked == ["p3"]
+    inspected = await _sweep(monitor, monkeypatch, unreachable={"srv-1"})
+    assert inspected == ["c-gamma"]
     assert monitor._failures["srv-1"] == 1, "a skipped sweep is not a new failure"
 
 
@@ -90,9 +137,8 @@ async def test_backoff_grows_and_is_capped(monitor_and_clock, monkeypatch) -> No
 
     delays = []
     for _ in range(8):
-        await _sweep(monitor, monkeypatch, failing={"srv-1", "srv-2"})
+        await _sweep(monitor, monkeypatch, unreachable={"srv-1", "srv-2"})
         delays.append(monitor._retry_after["srv-1"] - clock.now)
-        # Jump past the backoff so the next sweep actually retries.
         clock.advance(delays[-1] + 1)
 
     assert delays[0] == BASE_BACKOFF_SECONDS
@@ -106,15 +152,91 @@ async def test_backoff_grows_and_is_capped(monitor_and_clock, monkeypatch) -> No
 async def test_recovery_clears_the_backoff(monitor_and_clock, monkeypatch) -> None:
     monitor, clock = monitor_and_clock
 
-    await _sweep(monitor, monkeypatch, failing={"srv-1"})
+    await _sweep(monitor, monkeypatch, unreachable={"srv-1"})
     assert "srv-1" in monitor._retry_after
 
     clock.advance(BASE_BACKOFF_SECONDS + 1)
-    checked = await _sweep(monitor, monkeypatch, failing=set())
+    inspected = await _sweep(monitor, monkeypatch)
 
-    assert sorted(checked) == ["p1", "p2", "p3"]
+    assert sorted(inspected) == ["c-alpha", "c-gamma"]
     assert "srv-1" not in monitor._failures, "a success must reset the counter"
     assert "srv-1" not in monitor._retry_after
+
+
+async def test_one_bad_container_does_not_silence_the_others(
+    monitor_and_clock, monkeypatch
+) -> None:
+    """A container that will not answer says nothing about its neighbours.
+
+    Failing per session used to set a server-wide backoff, so one unresponsive
+    project froze every other project on the same machine — which is how three
+    sessions came to sit reporting hours-old state while a fourth updated
+    normally.
+    """
+    monitor, clock = monitor_and_clock
+    rows = ROWS + [_row("delta", "srv-1", "c-delta", "one")]
+
+    inspected = await _sweep(monitor, monkeypatch, broken={"c-alpha"}, rows=rows)
+    assert "c-delta" in inspected, "a healthy container on the same server was skipped"
+    assert "c-gamma" in inspected
+    assert "srv-1" not in monitor._retry_after, (
+        "a container fault must not back off the whole machine"
+    )
+
+    clock.advance(20)
+    inspected = await _sweep(monitor, monkeypatch, broken={"c-alpha"}, rows=rows)
+    assert "c-delta" in inspected, "and it must still be checked on the next sweep"
+
+
+# --- cost --------------------------------------------------------------------
+
+
+async def test_a_sweep_costs_per_container_not_per_session(
+    monitor_and_clock, monkeypatch
+) -> None:
+    """The reason this was restructured.
+
+    Every session used to be asked about separately: inspect the container,
+    check the tmux session exists, capture its pane. Four agents in one project
+    meant twelve round trips a sweep, eleven of them re-asking what the first
+    already answered — every twenty seconds, forever, per project.
+    """
+    monitor, _clock = monitor_and_clock
+    rows = [_row("alpha", "srv-1", "c-alpha", f"s{n}") for n in range(6)]
+    calls: list[str] = []
+
+    async def fake_inspect(_conn, container):
+        calls.append(f"inspect:{container}")
+        return _Running()
+
+    async def fake_panes(_conn, container, **kwargs):
+        calls.append(f"capture:{container}")
+        return {f"s{n}": "a static pane" for n in range(6)}
+
+    async def fake_rows(_conn):
+        return rows
+
+    async def fake_target(_row):
+        return object()
+
+    async def fake_get(_target):
+        return object()
+
+    monkeypatch.setattr("moonphase.monitor.docker_remote.inspect", fake_inspect)
+    monkeypatch.setattr("moonphase.monitor.sessions.capture_all_panes", fake_panes)
+    monkeypatch.setattr("moonphase.monitor._running_projects", fake_rows)
+    monkeypatch.setattr(monitor, "_target_for", fake_target)
+    monkeypatch.setattr("moonphase.ssh.pool.get", fake_get)
+    monkeypatch.setattr("moonphase.monitor.harness_registry.get", lambda kind: _Harness())
+
+    await monitor.sweep()
+
+    assert calls == ["inspect:c-alpha", "capture:c-alpha"], (
+        f"six sessions should cost two round trips, not {len(calls)}: {calls}"
+    )
+
+
+# --- the stillness clock -----------------------------------------------------
 
 
 async def test_a_pane_that_stops_changing_accumulates_stillness(
@@ -125,55 +247,31 @@ async def test_a_pane_that_stops_changing_accumulates_stillness(
     Whether a session is idle is decided by how long its pane has been still,
     and the monitor measures that with a per-session clock. That clock was
     started only when the pane *changed* — so a session that stopped changing
-    never started one, `still_for_seconds` came back as zero on every sweep,
-    and the idle branch could not be reached. The state froze at whatever it
-    last was. Observed in the wild as a blue "working" dot ten hours after the
-    agent had finished.
-
-    This watches the value the monitor feeds to `probe` rather than the state
-    it writes, because that value is the thing that was wrong.
+    never started one, the stillness it reported was zero on every sweep, and
+    the idle branch could not be reached. Observed as a blue "working" dot ten
+    hours after the agent had finished.
     """
     monitor, clock = monitor_and_clock
     seen: list[float] = []
 
-    class _Snapshot:
-        state = ActivityState.WORKING
-        digest = "unchanging"
-        detail = None
+    def fake_classify(pane, *, signals, previous_digest, still_for_seconds):
+        seen.append(still_for_seconds)
+        return Snapshot(state=ActivityState.WORKING, digest="same")
 
-    async def fake_probe(*args, **kwargs):
-        seen.append(kwargs["still_for_seconds"])
-        return _Snapshot()
+    async def fake_inspect(_conn, _container):
+        return _Running()
 
-    async def fake_target(*args, **kwargs):
-        return object()
+    async def fake_panes(_conn, _container, **kwargs):
+        return {"one": "a pane that never changes"}
 
-    class _NullSession:
-        async def __aenter__(self):
-            class _Conn:
-                async def execute(self, *args, **kwargs):
-                    return None
+    monkeypatch.setattr("moonphase.monitor.docker_remote.inspect", fake_inspect)
+    monkeypatch.setattr("moonphase.monitor.sessions.capture_all_panes", fake_panes)
+    monkeypatch.setattr("moonphase.monitor.activity.classify", fake_classify)
+    monkeypatch.setattr("moonphase.monitor.harness_registry.get", lambda kind: _Harness())
 
-            return _Conn()
-
-        async def __aexit__(self, *exc):
-            return False
-
-    monkeypatch.setattr("moonphase.monitor.service_session", lambda: _NullSession())
-    monkeypatch.setattr("moonphase.activity.probe", fake_probe)
-    monkeypatch.setattr("moonphase.monitor.queries.load_ssh_target_privileged", fake_target)
-    monkeypatch.setattr("moonphase.ssh.pool.get", fake_target)
-    monkeypatch.setattr("moonphase.monitor.harness_registry.get", lambda kind: object())
-
-    row = {
-        "id": "p1", "org_id": "o1", "name": "alpha", "server_id": "srv-1",
-        "harness": "claude_code", "container_name": "c1", "session_id": "s1",
-        "tmux_session": "moonphase", "user_id": "u1",
-        "activity": "working", "pane_digest": "unchanging", "notified_state": None,
-    }
-
+    group = [_row("alpha", "srv-1", "c-alpha", "one")]
     for _ in range(4):
-        await monitor._check(row)
+        await monitor._check_container(object(), "c-alpha", group)
         clock.advance(30)
 
     assert seen[0] == 0, "the first look has nothing to compare against"

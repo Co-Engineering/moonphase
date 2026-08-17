@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import re
 import shlex
+import uuid
 from typing import Any
 
 import asyncssh
@@ -469,6 +470,46 @@ async def list_clients(
         timeout=30,
     )
     return result.stdout.split() if result.ok else []
+
+
+async def capture_all_panes(
+    conn: asyncssh.SSHClientConnection,
+    container: str,
+    *,
+    lines: int = 80,
+) -> dict[str, str]:
+    """Every live session's pane, in one call.
+
+    The monitor used to ask per session — list, then capture, then inspect the
+    container again — so a project with four agents cost twelve round trips
+    every sweep, eleven of them re-asking things it already knew. This asks
+    once and comes back with the lot.
+
+    Panes are separated by a marker carrying a nonce rather than a fixed
+    string, because the thing being delimited is arbitrary terminal output and
+    a fixed delimiter is one `echo` away from being forged by the very content
+    it is supposed to bound.
+    """
+    nonce = uuid.uuid4().hex
+    marker = f"@@MOONPHASE-{nonce}@@"
+    script = (
+        'names=$(tmux list-sessions -F "#{session_name}" 2>/dev/null); '
+        'for name in $names; do '
+        f'  printf "\n{marker}%s\n" "$name"; '
+        f'  tmux capture-pane -p -t "$name" -S -{int(lines)} 2>/dev/null; '
+        "done"
+    )
+    result = await docker_remote.exec_capture(
+        conn, container, ["sh", "-c", script], timeout=45
+    )
+    if not result.ok:
+        return {}
+
+    panes: dict[str, str] = {}
+    for chunk in result.stdout.split(marker)[1:]:
+        name, _, body = chunk.partition("\n")
+        panes[name.strip()] = body
+    return panes
 
 
 async def client_counts(

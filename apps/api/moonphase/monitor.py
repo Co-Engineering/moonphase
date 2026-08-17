@@ -20,7 +20,7 @@ from typing import Any
 
 from sqlalchemy import text
 
-from . import activity, push, queries, ssh
+from . import activity, docker_remote, push, queries, sessions, ssh
 from . import harness as harness_registry
 from .activity import ActivityState
 from .config import get_settings
@@ -82,77 +82,103 @@ class SessionMonitor:
                 await asyncio.wait_for(self._stop.wait(), timeout=interval)
 
     async def sweep(self) -> int:
-        """One pass over every running project. Returns how many were checked."""
+        """One pass over every running project. Returns how many were checked.
+
+        Grouped by container, because that is the unit the questions are about.
+        Asking per session meant re-inspecting the same container once per
+        agent in it and re-listing the same tmux server, so a project with four
+        sessions cost twelve round trips a sweep. Two answer the same thing.
+        """
         async with service_session() as conn:
             rows = await _running_projects(conn)
 
+        groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for row in rows:
+            key = (str(row["server_id"]), str(row["container_name"]))
+            groups.setdefault(key, []).append(row)
+
         now = time.monotonic()
         checked = 0
-        for row in rows:
-            server = str(row["server_id"])
+        for (server, container), group in groups.items():
             if now < self._retry_after.get(server, 0.0):
                 continue
+
             try:
-                await self._check(row)
-                checked += 1
+                target = await self._target_for(group[0])
+                if target is None:
+                    continue
+                conn_ssh = await ssh.pool.get(target)
+            except SSHError as exc:
+                # The machine is unreachable, which is a fact about the server
+                # and not about any one project on it.
+                self._back_off(server, str(group[0]["name"]), exc)
+                continue
+
+            try:
+                checked += await self._check_container(conn_ssh, container, group)
                 self._failures.pop(server, None)
                 self._retry_after.pop(server, None)
             except SSHError as exc:
-                # An unreachable server is ordinary; do not let it stop the
-                # sweep for everything else.
-                self._back_off(server, str(row["name"]), exc)
+                # A failure talking to one container says nothing about the
+                # others on the same machine, so it must not silence them —
+                # which is how three sessions came to sit frozen for hours
+                # while a fourth updated normally.
+                log.info("monitor: %s is not answering (%s)", container, exc)
             except Exception as exc:  # noqa: BLE001
-                log.warning("monitor: %s failed: %s", row["name"], exc)
+                log.warning("monitor: %s failed: %s", container, exc)
         return checked
 
-    def _back_off(self, server: str, name: str, exc: Exception) -> None:
-        """Wait longer after each consecutive failure, up to a ceiling."""
-        count = self._failures.get(server, 0) + 1
-        self._failures[server] = count
-        delay = min(MAX_BACKOFF_SECONDS, BASE_BACKOFF_SECONDS * (2 ** (count - 1)))
-        self._retry_after[server] = time.monotonic() + delay
-        # Only the first failure is worth a line; after that it is the same
-        # message repeating.
-        if count == 1:
-            log.info("monitor: %s unreachable (%s); backing off", name, exc)
-        else:
-            log.debug("monitor: %s still unreachable after %d tries", name, count)
-
-    async def _check(self, row: dict[str, Any]) -> None:
-        # Keyed by session, not project: a project can hold several people's
-        # agents, and "the pane stopped changing" is a fact about one of them.
-        session_key = str(row["session_id"])
-
+    async def _target_for(self, row: dict[str, Any]) -> Any:
         async with service_session() as conn:
-            target = await queries.load_ssh_target_privileged(conn, row["server_id"])
-        if target is None:
-            return
+            return await queries.load_ssh_target_privileged(conn, row["server_id"])
 
-        conn_ssh = await ssh.pool.get(target)
-        harness = harness_registry.get(str(row["harness"]))
+    async def _check_container(
+        self, conn_ssh: Any, container: str, group: list[dict[str, Any]]
+    ) -> int:
+        """Two round trips for however many sessions the container holds."""
+        info = await docker_remote.inspect(conn_ssh, container)
+        if info is None or info.state != "running":
+            for row in group:
+                await self._settle(row, activity.Snapshot(
+                    state=ActivityState.STOPPED, digest=""
+                ))
+            return len(group)
 
+        panes = await sessions.capture_all_panes(conn_ssh, container)
+
+        for row in group:
+            name = str(row["tmux_session"])
+            pane = panes.get(name)
+            if pane is None:
+                # Listed as running in the database, absent from tmux.
+                await self._settle(row, activity.Snapshot(
+                    state=ActivityState.STOPPED, digest=""
+                ))
+                continue
+
+            harness = harness_registry.get(str(row["harness"]))
+            session_key = str(row["session_id"])
+            # `setdefault`, not `get`. The clock that measures "how long has
+            # this pane been still" used to be started only when the pane
+            # changed, so a session that stopped changing never accumulated any
+            # stillness at all and its state froze at whatever it last was.
+            still_since = self._still_since.setdefault(session_key, time.monotonic())
+
+            snapshot = activity.classify(
+                pane,
+                signals=harness.activity_signals(),
+                previous_digest=row.get("pane_digest"),
+                still_for_seconds=time.monotonic() - still_since,
+            )
+            if snapshot.digest and snapshot.digest != row.get("pane_digest"):
+                self._still_since[session_key] = time.monotonic()
+            await self._settle(row, snapshot)
+
+        return len(group)
+
+    async def _settle(self, row: dict[str, Any], snapshot: Any) -> None:
+        """Write what we saw, and notify if it is worth waking someone for."""
         previous = ActivityState(row["activity"] or "unknown")
-        # `setdefault`, not `get`. The clock that measures "how long has this
-        # pane been still" used to be started only when the pane *changed*, so
-        # a session that stopped changing never accumulated any stillness at
-        # all: `still_for_seconds` came back as zero on every sweep, the idle
-        # branch in `classify` was unreachable, and the state froze at whatever
-        # it last was. An agent that finished hours ago went on reporting that
-        # it was working. Starting the clock the first time we see a session is
-        # what makes stillness measurable.
-        still_since = self._still_since.setdefault(session_key, time.monotonic())
-
-        snapshot = await activity.probe(
-            conn_ssh,
-            str(row["container_name"]),
-            harness,
-            previous_digest=row.get("pane_digest"),
-            still_for_seconds=time.monotonic() - still_since,
-            session=str(row["tmux_session"]),
-        )
-
-        if snapshot.digest and snapshot.digest != row.get("pane_digest"):
-            self._still_since[session_key] = time.monotonic()
 
         if snapshot.state == previous and snapshot.digest == row.get("pane_digest"):
             # Nothing changed, but we did look — and "when was this last
@@ -175,7 +201,6 @@ class SessionMonitor:
         )
         if message is None:
             return
-
         # One notification per transition, not per sweep.
         if row.get("notified_state") == str(snapshot.state):
             return
@@ -191,6 +216,19 @@ class SessionMonitor:
                 ),
                 {"s": str(snapshot.state), "id": row["session_id"]},
             )
+
+    def _back_off(self, server: str, name: str, exc: Exception) -> None:
+        """Wait longer after each consecutive failure, up to a ceiling."""
+        count = self._failures.get(server, 0) + 1
+        self._failures[server] = count
+        delay = min(MAX_BACKOFF_SECONDS, BASE_BACKOFF_SECONDS * (2 ** (count - 1)))
+        self._retry_after[server] = time.monotonic() + delay
+        # Only the first failure is worth a line; after that it is the same
+        # message repeating.
+        if count == 1:
+            log.info("monitor: %s unreachable (%s); backing off", name, exc)
+        else:
+            log.debug("monitor: %s still unreachable after %d tries", name, count)
 
     async def _notify(
         self, row: dict[str, Any], title: str, body: str, *, kind: str | None = None
