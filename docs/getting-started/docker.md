@@ -29,7 +29,7 @@ Four containers:
 | ------- | ----- | ---- |
 | `db` | `postgres:16-alpine` | Everything is stored here |
 | `auth` | `supabase/gotrue` | Sign-in |
-| `api` | [`coec/moonphase`](https://hub.docker.com/r/coec/moonphase) | SSH, Docker orchestration, the PTY bridge, and the client |
+| `api` | `ghcr.io/oliversvane/moonphase` | SSH, Docker orchestration, the PTY bridge, and the client |
 | `proxy` | `caddy:2-alpine` | Puts all of it on one address |
 
 Deliberately **not** the full Supabase stack. Moonphase talks to Postgres directly with
@@ -41,6 +41,26 @@ the `auth.uid()` helper every policy is written against — is created by
 The API image is about 400 MB and contains both the backend and the built client, because
 [one address is the whole product](../concepts/architecture.md). It is published for
 `linux/amd64` and `linux/arm64`.
+
+### Where the image comes from
+
+The same image is published to two registries:
+
+| Registry | Name |
+| -------- | ---- |
+| GitHub (default) | `ghcr.io/oliversvane/moonphase` |
+| Docker Hub | [`coec/moonphase`](https://hub.docker.com/r/coec/moonphase) |
+
+GitHub's is the default because it does not rate-limit anonymous pulls. Docker Hub allows
+100 per six hours per IP address, which is plenty for one machine and not plenty for a
+shared address or a CI runner — and it surfaces mid-install as `toomanyrequests`, which
+reads like the install is broken.
+
+To use the mirror instead, in `.env`:
+
+```bash
+MOONPHASE_IMAGE=coec/moonphase
+```
 
 ### Pinning a version
 

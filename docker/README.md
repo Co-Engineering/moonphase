@@ -28,7 +28,7 @@ It needs Postgres and GoTrue alongside it — see
 ```yaml
 services:
   api:
-    image: coec/moonphase:latest
+    image: coec/moonphase:latest   # or ghcr.io/oliversvane/moonphase:latest
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:...@db:5432/postgres
       SUPABASE_URL: https://moonphase.example.com
@@ -49,6 +49,9 @@ Every variable is documented in the
 | `edge` | The tip of `main` — builds, but is not a release |
 
 Built for `linux/amd64` and `linux/arm64`.
+
+The same image is on GitHub's registry as `ghcr.io/oliversvane/moonphase`, which is what
+the compose file defaults to — it has no anonymous pull limit.
 
 ## Links
 

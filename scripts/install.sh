@@ -103,6 +103,9 @@ ANON_KEY=$(existing SUPABASE_ANON_KEY)
 PUBLIC_URL=$(existing MOONPHASE_PUBLIC_URL)
 [ -n "${PUBLIC_URL:-}" ] || PUBLIC_URL="http://localhost:${PORT}"
 
+IMAGE=$(existing MOONPHASE_IMAGE)
+[ -n "${IMAGE:-}" ] || IMAGE="${MOONPHASE_IMAGE:-ghcr.io/oliversvane/moonphase}"
+
 VERSION=$(existing MOONPHASE_VERSION)
 [ -n "${VERSION:-}" ] || VERSION="${MOONPHASE_VERSION:-latest}"
 
@@ -130,6 +133,10 @@ SUPABASE_ANON_KEY=${ANON_KEY}
 # is served from here and signs in against the same origin, so it has to be
 # somewhere a browser can actually get to.
 MOONPHASE_PUBLIC_URL=${PUBLIC_URL}
+
+# Where the image comes from. ghcr.io does not rate-limit anonymous pulls;
+# coec/moonphase on Docker Hub is the same image under a shorter name.
+MOONPHASE_IMAGE=${IMAGE}
 
 # Which published image to run: latest, a version like 0.2.1, or edge for the
 # tip of main. Pinning an exact version means upgrades happen when you change
@@ -175,7 +182,7 @@ if [ "${MOONPHASE_BUILD:-0}" = "1" ]; then
 else
   info "pulling the image"
   if ! docker compose pull --quiet api 2>/dev/null; then
-    warn "could not pull coec/moonphase — building from source instead"
+    warn "could not pull $IMAGE — building from source instead"
     build_it
   fi
 fi

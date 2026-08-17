@@ -100,9 +100,14 @@ services:
     # same bits — a local build depends on the builder's Docker, cache and
     # architecture.
     #
-    # To run from source instead, add the override:
+    # ghcr.io rather than Docker Hub by default: it does not rate-limit
+    # anonymous pulls, and Docker Hub's 100-per-6-hours-per-IP limit surfaces
+    # mid-install as a confusing "toomanyrequests" on shared addresses and CI.
+    # Set MOONPHASE_IMAGE=coec/moonphase to use the mirror instead.
+    #
+    # To run from source, add the override:
     #   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
-    image: coec/moonphase:${MOONPHASE_VERSION:-latest}
+    image: ${MOONPHASE_IMAGE:-ghcr.io/oliversvane/moonphase}:${MOONPHASE_VERSION:-latest}
     restart: unless-stopped
     depends_on:
       db:
