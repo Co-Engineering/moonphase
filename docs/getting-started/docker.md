@@ -49,7 +49,7 @@ The same image is published to two registries:
 | Registry | Name |
 | -------- | ---- |
 | GitHub (default) | `ghcr.io/oliversvane/moonphase` |
-| Docker Hub | [`coec/moonphase`](https://hub.docker.com/r/coec/moonphase) |
+| Docker Hub | [`oliversvanecoec/moonphase`](https://hub.docker.com/r/oliversvanecoec/moonphase) |
 
 GitHub's is the default because it does not rate-limit anonymous pulls. Docker Hub allows
 100 per six hours per IP address, which is plenty for one machine and not plenty for a
@@ -59,7 +59,7 @@ reads like the install is broken.
 To use the mirror instead, in `.env`:
 
 ```bash
-MOONPHASE_IMAGE=coec/moonphase
+MOONPHASE_IMAGE=oliversvanecoec/moonphase
 ```
 
 ### Pinning a version

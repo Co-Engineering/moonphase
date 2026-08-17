@@ -28,7 +28,7 @@ It needs Postgres and GoTrue alongside it — see
 ```yaml
 services:
   api:
-    image: coec/moonphase:latest   # or ghcr.io/oliversvane/moonphase:latest
+    image: oliversvanecoec/moonphase:latest   # or ghcr.io/oliversvane/moonphase:latest
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:...@db:5432/postgres
       SUPABASE_URL: https://moonphase.example.com

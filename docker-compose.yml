@@ -103,7 +103,7 @@ services:
     # ghcr.io rather than Docker Hub by default: it does not rate-limit
     # anonymous pulls, and Docker Hub's 100-per-6-hours-per-IP limit surfaces
     # mid-install as a confusing "toomanyrequests" on shared addresses and CI.
-    # Set MOONPHASE_IMAGE=coec/moonphase to use the mirror instead.
+    # Set MOONPHASE_IMAGE=oliversvanecoec/moonphase to use the mirror instead.
     #
     # To run from source, add the override:
     #   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build

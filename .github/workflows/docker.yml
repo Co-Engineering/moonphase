@@ -85,7 +85,7 @@ jobs:
         with:
           images: |
             ghcr.io/${{ github.repository }}
-            name=coec/moonphase,enable=${{ steps.hub.outputs.enabled }}
+            name=oliversvanecoec/moonphase,enable=${{ steps.hub.outputs.enabled }}
           # A tag v0.2.1 publishes 0.2.1, 0.2 and latest, so someone can pin as
           # loosely or as tightly as they like. main publishes `edge` only —
           # `latest` should mean a release, not the last commit that built.
@@ -122,6 +122,6 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-          repository: coec/moonphase
+          repository: oliversvanecoec/moonphase
           short-description: Self-hosted control plane for remote AI coding sessions
           readme-filepath: ./docker/README.md
