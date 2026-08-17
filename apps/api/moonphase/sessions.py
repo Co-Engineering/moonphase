@@ -263,6 +263,7 @@ async def ensure_session(
     session: str = DEFAULT_SESSION,
     space: SessionSpace | None = None,
     restart: bool = False,
+    resume: bool = False,
 ) -> bool:
     """Guarantee a detached tmux session running the harness. Returns True if created.
 
@@ -298,7 +299,7 @@ async def ensure_session(
     else:
         await apply_credential(conn, container, harness, credential, space)
 
-    spec = harness.launch_spec()
+    spec = harness.launch_spec(resume=resume)
     await _write_file(
         conn,
         container,

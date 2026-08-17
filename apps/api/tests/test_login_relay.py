@@ -78,7 +78,7 @@ class ScriptedHarness(Harness):
     def __init__(self, script: str) -> None:
         self.script = script
 
-    def launch_spec(self) -> LaunchSpec:
+    def launch_spec(self, *, resume: bool = False) -> LaunchSpec:
         return LaunchSpec(command=["sh"])
 
     def credential_files(self, credential, space) -> dict[str, str]:

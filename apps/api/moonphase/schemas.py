@@ -251,6 +251,9 @@ class SessionOut(ORMModel):
 
 class SessionStartIn(BaseModel):
     restart: bool = False
+    # Ask the harness to reopen its previous conversation rather than start a
+    # new one. What makes a session survive its container being restarted.
+    resume: bool = False
     # Which tmux session. Left out, it resolves to the caller's own — never
     # somebody else's, which would run their subscription on your keystrokes.
     session: str | None = None

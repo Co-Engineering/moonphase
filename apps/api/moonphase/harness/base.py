@@ -97,8 +97,17 @@ class Harness(abc.ABC):
     supported_auth_modes: tuple[HarnessAuthMode, ...]
 
     @abc.abstractmethod
-    def launch_spec(self) -> LaunchSpec:
-        """Argv and environment for the interactive session."""
+    def launch_spec(self, *, resume: bool = False) -> LaunchSpec:
+        """Argv and environment for the interactive session.
+
+        `resume` asks the harness to pick up its previous conversation rather
+        than start a new one. It matters after a host reboot: the container
+        comes back because of its restart policy, but everything inside it
+        started fresh, so without this "it survived" would mean an empty prompt
+        in the right directory — which is not what anyone meant.
+
+        Harnesses that cannot resume should ignore it and start normally.
+        """
 
     @abc.abstractmethod
     def credential_files(

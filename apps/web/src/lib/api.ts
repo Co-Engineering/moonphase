@@ -422,10 +422,15 @@ export const api = {
     request<Session[]>(`/api/projects/${projectId}/sessions${live ? '?live=true' : ''}`),
   /** Every session the caller can see, in one query. For the sidebar. */
   allSessions: () => request<Session[]>('/api/sessions'),
-  startSession: (projectId: string, restart = false, session?: string) =>
+  /**
+   * `resume` asks the harness to reopen its previous conversation instead of
+   * starting a new one — what makes a session survive its container being
+   * restarted under it, rather than coming back to an empty prompt.
+   */
+  startSession: (projectId: string, restart = false, session?: string, resume = false) =>
     request<Session>(`/api/projects/${projectId}/sessions/start`, {
       method: 'POST',
-      body: JSON.stringify({ restart, session: session ?? null }),
+      body: JSON.stringify({ restart, session: session ?? null, resume }),
     }),
   /** Omit the name and it is derived from you, which is the useful default. */
   createSession: (projectId: string, name?: string) =>

@@ -124,10 +124,17 @@ class ClaudeCode(Harness):
     # what most people actually want. API key is the fallback for teams.
     supported_auth_modes = (HarnessAuthMode.OAUTH, HarnessAuthMode.API_KEY)
 
-    def launch_spec(self) -> LaunchSpec:
+    def launch_spec(self, *, resume: bool = False) -> LaunchSpec:
         # Launched through a wrapper (see sessions.py) so the pane survives the
         # harness exiting and drops to a shell instead of killing the window.
-        return LaunchSpec(command=["claude"], workdir="/workspace", env={})
+        #
+        # `--continue` reopens the most recent conversation in the working
+        # directory, which is what makes a session survive its container being
+        # restarted underneath it. Claude Code falls back to a new conversation
+        # when there is nothing to continue, so this is safe on a fresh
+        # workspace.
+        command = ["claude", "--continue"] if resume else ["claude"]
+        return LaunchSpec(command=command, workdir="/workspace", env={})
 
     def credential_files(
         self, credential: HarnessCredential, space: SessionSpace

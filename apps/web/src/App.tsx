@@ -737,6 +737,11 @@ function ProjectView({
           <div className="banner error">{error}</div>
         </div>
       )}
+      {project.status === 'running' && project.status_detail && (
+        <div style={{ padding: '10px 16px 0' }}>
+          <div className="banner info">{project.status_detail}</div>
+        </div>
+      )}
 
       {project.status !== 'running' ? (
         <div className="content">
@@ -778,6 +783,21 @@ function ProjectView({
                         </span>
                       )}
                     </button>
+                    {item.state !== 'running' && canControl(project.access) && item.is_mine && (
+                      <button
+                        className="primary"
+                        disabled={busy}
+                        title="Reopen the conversation this session was having"
+                        onClick={() =>
+                          void act(async () => {
+                            await api.startSession(project.id, false, item.tmux_session, true)
+                            onEnter(item.tmux_session)
+                          })
+                        }
+                      >
+                        Resume
+                      </button>
+                    )}
                     <button
                       className="ghost"
                       title="Open in its own window — one per monitor, tiled by your window manager"

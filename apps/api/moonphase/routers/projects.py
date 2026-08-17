@@ -600,6 +600,7 @@ async def start_session(
             session=name,
             space=space,
             restart=options.restart,
+            resume=options.resume,
         )
     except SSHError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

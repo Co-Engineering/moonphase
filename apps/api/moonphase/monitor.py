@@ -138,6 +138,19 @@ class SessionMonitor:
         """Two round trips for however many sessions the container holds."""
         info = await docker_remote.inspect(conn_ssh, container)
         if info is None or info.state != "running":
+            # The project says it is running and it is not. Nothing else looks
+            # at every project regularly, so if this does not correct the
+            # record nothing will, and the interface goes on offering a
+            # terminal for a container that no longer exists.
+            await self._reconcile_project(
+                group[0],
+                status="stopped",
+                detail=(
+                    "The container is gone from the server."
+                    if info is None
+                    else f"The container is {info.state}."
+                ),
+            )
             for row in group:
                 await self._settle(row, activity.Snapshot(
                     state=ActivityState.STOPPED, digest=""
@@ -145,6 +158,23 @@ class SessionMonitor:
             return len(group)
 
         panes = await sessions.capture_all_panes(conn_ssh, container)
+
+        # A host reboot brings the container back — that is what the restart
+        # policy is for — but everything inside it started fresh, so the agents
+        # are gone. The project is genuinely running and every session in it is
+        # not, which is worth recording as exactly that rather than as either
+        # one alone.
+        if not panes and group:
+            await self._reconcile_project(
+                group[0],
+                status="running",
+                detail=(
+                    "The container restarted, so the agents in it are not running. "
+                    "Resume a session to pick it back up."
+                ),
+            )
+        elif group:
+            await self._reconcile_project(group[0], status="running", detail=None)
 
         for row in group:
             name = str(row["tmux_session"])
@@ -175,6 +205,22 @@ class SessionMonitor:
             await self._settle(row, snapshot)
 
         return len(group)
+
+    async def _reconcile_project(
+        self, row: dict[str, Any], *, status: str, detail: str | None
+    ) -> None:
+        """Make the record match the machine, and only when it does not."""
+        if row.get("project_status") == status and row.get("status_detail") == detail:
+            return
+        async with service_session() as conn:
+            await conn.execute(
+                text(
+                    "update projects set status = cast(:s as project_status), "
+                    "status_detail = :d where id = :id"
+                ),
+                {"s": status, "d": detail, "id": row["id"]},
+            )
+        log.info("monitor: %s is %s (%s)", row["name"], status, detail or "as recorded")
 
     async def _settle(self, row: dict[str, Any], snapshot: Any) -> None:
         """Write what we saw, and notify if it is worth waking someone for."""
@@ -281,6 +327,7 @@ async def _running_projects(conn: Any) -> list[dict[str, Any]]:
         text(
             """
             select p.id, p.org_id, p.name, p.server_id, p.harness, p.container_name,
+                   p.status::text as project_status, p.status_detail,
                    s.id as session_id, s.tmux_session, s.user_id,
                    s.activity, s.pane_digest, s.notified_state
             from projects p
