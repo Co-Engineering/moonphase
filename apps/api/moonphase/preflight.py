@@ -127,10 +127,16 @@ async def check_database() -> Finding | None:
 async def check_auth() -> Finding | None:
     """Whether sign-in will work.
 
-    A warning rather than fatal: the API is perfectly able to serve, and an
-    auth service that is slow to start should not take the whole thing down
-    with it. But if this is wrong, every request will be rejected as an invalid
-    token and the reason will not be obvious from that message.
+    `SUPABASE_URL` is the address a *browser* uses. In a normal deployment the
+    proxy that serves it sits in front of this container, not behind it, so the
+    API cannot reach that address and is not supposed to need to — with a
+    shared JWT secret it verifies tokens itself and never calls out.
+
+    Probing it unconditionally therefore warned on every correct install, which
+    is worse than not checking: a warning that fires when everything is fine
+    teaches people to ignore warnings. So it is only probed when the API
+    genuinely depends on reaching it, which is when there is no shared secret
+    and tokens must be verified against the published JWKS.
     """
     settings = get_settings()
     if not settings.supabase_url:
@@ -139,6 +145,9 @@ async def check_auth() -> Finding | None:
             summary="SUPABASE_URL is not set, so no one can sign in.",
             fix="Point it at the address your browser uses to reach this install.",
         )
+
+    if settings.supabase_jwt_secret:
+        return None
 
     url = f"{settings.supabase_url.rstrip('/')}/auth/v1/health"
     try:
@@ -154,17 +163,11 @@ async def check_auth() -> Finding | None:
         return Finding(
             fatal=False,
             summary=f"Cannot reach the auth service at {url} ({exc}).",
-            fix="Sign-in will fail, and tokens will be rejected as invalid. "
-            "SUPABASE_URL must be the address a browser uses, not an internal one.",
+            fix="With no SUPABASE_JWT_SECRET set, tokens can only be verified "
+            "against the JWKS published there, so every request will be "
+            "rejected as invalid until this responds.",
         )
 
-    if not settings.supabase_jwt_secret:
-        return Finding(
-            fatal=False,
-            summary="SUPABASE_JWT_SECRET is not set.",
-            fix="Tokens signed symmetrically will be rejected. Set it to the same "
-            "secret the auth service signs with.",
-        )
     return None
 
 

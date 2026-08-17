@@ -124,17 +124,37 @@ async def test_an_unset_supabase_url_stops_the_process(monkeypatch) -> None:
     assert "SUPABASE_URL" in finding.summary
 
 
-async def test_an_unreachable_auth_service_is_a_warning(monkeypatch) -> None:
-    """The API can still serve. But every token will be rejected as invalid,
-    and that message alone never points at this."""
-    _set(monkeypatch, SUPABASE_URL="http://127.0.0.1:1")
+async def test_an_unreachable_auth_service_is_not_reported_when_a_secret_is_set(
+    monkeypatch,
+) -> None:
+    """The address is the browser's, and the proxy serving it sits in front of
+    this process rather than behind it — so it is normally unreachable from
+    here, and with a shared secret nothing needs to reach it.
+
+    Warning anyway fired on every correct install, which is worse than not
+    checking: it teaches people to ignore warnings.
+    """
+    _set(
+        monkeypatch,
+        SUPABASE_URL="http://127.0.0.1:1",
+        SUPABASE_JWT_SECRET="a-shared-secret-at-least-32-characters",
+    )
+
+    assert await preflight.check_auth() is None
+
+
+async def test_an_unreachable_auth_service_is_a_warning_without_a_secret(
+    monkeypatch,
+) -> None:
+    """Then tokens can only be verified against the JWKS published there, so
+    every request really will be rejected."""
+    _set(monkeypatch, SUPABASE_URL="http://127.0.0.1:1", SUPABASE_JWT_SECRET="")
     finding = await preflight.check_auth()
 
     assert finding is not None
     assert finding.fatal is False
     assert "invalid" in finding.fix.lower()
-    # The mistake people actually make is an internal address.
-    assert "browser" in finding.fix
+    assert "JWKS" in finding.fix
 
 
 # --- reporting ----------------------------------------------------------------
