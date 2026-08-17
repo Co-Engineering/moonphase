@@ -128,10 +128,34 @@ jobs:
               --single-transaction -v ON_ERROR_STOP=1 -q -f "$file"
           done
 
+      - uses: docker/setup-buildx-action@v3
+
       # The end-to-end test needs a throwaway sshd with the host's Docker
       # socket, which is how it exercises SSH, containers and tmux for real.
       - name: Build the test server image
-        run: docker build -q -t moonphase/fake-server:latest infra/testing/fake-server/
+        uses: docker/build-push-action@v6
+        with:
+          context: infra/testing/fake-server
+          load: true
+          tags: moonphase/fake-server:latest
+          cache-from: type=gha,scope=fake-server
+          cache-to: type=gha,mode=max,scope=fake-server
+
+      # What projects run in. Thirteen tests start a real container and were
+      # failing on nothing but its absence — `dev.sh` builds it locally, so it
+      # is present on a developer's machine and was not here.
+      #
+      # It is a development environment rather than a service image, so it is
+      # large; the layer cache is what keeps that from costing minutes on every
+      # run.
+      - name: Build the project runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: infra/images/claude
+          load: true
+          tags: moonphase/runtime-claude:latest
+          cache-from: type=gha,scope=runtime-claude
+          cache-to: type=gha,mode=max,scope=runtime-claude
 
       - name: Test
         working-directory: apps/api
