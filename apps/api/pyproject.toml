@@ -20,6 +20,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    # test_socks.py drives the proxy through httpx, which needs the socks extra
+    # to speak SOCKS5 at all. It was installed here by coincidence and declared
+    # nowhere, so the suite passed locally and failed in CI.
+    "httpx[socks]>=0.27",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "ruff>=0.7",
