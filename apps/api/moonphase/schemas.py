@@ -236,6 +236,9 @@ class SessionOut(ORMModel):
     user_id: UUID | None = None
     owner: str | None = None
     is_mine: bool = False
+    # Present when listed across projects, so a session can be named somewhere
+    # its project is not already on screen.
+    project_name: str | None = None
     # The git worktree this session works in, and the branch it is on.
     workdir: str = "/workspace"
     branch: str | None = None

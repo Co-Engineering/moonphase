@@ -1692,3 +1692,77 @@ button.linkish:hover:not(:disabled) {
 .install-banner span {
   flex: 1;
 }
+
+/* --- what is waiting for you ------------------------------------------------
+ *
+ * The product's claim, stated as a screen: you left, and this is what happened
+ * while you were gone. Reading it should not require looking at a tree of dots.
+ */
+
+.attention h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.attention-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.attention-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+  text-align: left;
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--amber);
+  border-radius: var(--radius);
+  cursor: pointer;
+  color: var(--text);
+}
+
+.attention-row:hover {
+  border-color: var(--border-strong);
+  border-left-color: var(--amber);
+}
+
+.attention-where {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.attention-session {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.attention-question {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.attention-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  background: #2a2113;
+  border: 1px solid var(--amber);
+  border-radius: var(--radius);
+  color: var(--amber);
+  font-size: 12px;
+  cursor: pointer;
+}

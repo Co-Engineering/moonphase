@@ -741,7 +741,9 @@ async def list_all_sessions(conn: AsyncConnection) -> list[dict[str, Any]]:
     result = await conn.execute(
         text(
             f"""
-            select {SESSION_COLUMNS}
+            select {SESSION_COLUMNS},
+                   (select p.name from projects p
+                    where p.id = project_sessions.project_id) as project_name
             from project_sessions
             order by project_id, (user_id = auth.uid()) desc, created_at
             """

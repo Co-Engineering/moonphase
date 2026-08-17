@@ -249,7 +249,13 @@ class SessionMonitor:
                 title=title,
                 body=body,
                 kind=kind,
-                url=f"/projects/{row['id']}",
+                # Deep link to the session, not the project: the whole point
+                # of the notification is that something specific is waiting,
+                # and `/projects/<id>` was a path the client had no route for,
+                # so tapping one landed on an empty app.
+                url=(
+                    f"/?project={row['id']}&session={row['tmux_session']}"
+                ),
                 # Collapse repeats for the same project rather than stacking.
                 tag=f"moonphase-{row['id']}",
             )

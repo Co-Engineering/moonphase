@@ -29,6 +29,7 @@ import { Settings } from './routes/Settings'
 import { Ports } from './components/Ports'
 import { Feed } from './components/Feed'
 import { Share } from './components/Share'
+import { Attention, waiting } from './components/Attention'
 import { SessionWindow } from './routes/SessionWindow'
 import { openSessionWindow, sessionWindowUrl } from './lib/desktop'
 
@@ -165,6 +166,28 @@ function Shell({ email, onDisconnect }: { email: string; onDisconnect: () => voi
     setShowSidebar(false)
   }, [])
 
+  // A notification names the thing that needs answering, and tapping it has to
+  // land there. It arrives two ways: as query parameters when the app is
+  // opened cold, and as a message from the service worker when a window is
+  // already up.
+  useEffect(() => {
+    const open = (search: string) => {
+      const params = new URLSearchParams(search)
+      const project = params.get('project')
+      if (!project) return
+      selectProject(project, params.get('session') ?? undefined)
+    }
+    open(window.location.search)
+
+    const onMessage = (event: MessageEvent) => {
+      if (event.data?.type !== 'navigate' || typeof event.data.url !== 'string') return
+      const url = new URL(event.data.url, window.location.origin)
+      open(url.search)
+    }
+    navigator.serviceWorker?.addEventListener('message', onMessage)
+    return () => navigator.serviceWorker?.removeEventListener('message', onMessage)
+  }, [selectProject])
+
   const activeProject =
     selected?.kind === 'project'
       ? (projects.data?.find((p) => p.id === selected.id) ?? null)
@@ -194,6 +217,16 @@ function Shell({ email, onDisconnect }: { email: string; onDisconnect: () => voi
         </div>
 
         <div className="sidebar-scroll">
+          {waiting(sessions.data ?? []).length > 0 && (
+            <button
+              className="attention-chip"
+              onClick={() => setSelected(null)}
+              title="Sessions waiting for an answer"
+            >
+              <span className="dot activity-awaiting_input" />
+              {waiting(sessions.data ?? []).length} waiting for you
+            </button>
+          )}
           <div className="section-label">
             Servers
             <button className="ghost" onClick={() => setShowAddServer(true)} title="Add server">
@@ -345,12 +378,18 @@ function Shell({ email, onDisconnect }: { email: string; onDisconnect: () => voi
               <h1>Moonphase</h1>
             </div>
             <div className="content">
-              <div className="empty">
-                <h3>Nothing selected</h3>
-                Add a server, create a project, and it keeps running
-                <br />
-                whether or not this window is open.
-              </div>
+              <Attention
+                sessions={sessions.data ?? []}
+                onOpen={(project, session) => selectProject(project, session)}
+              />
+              {waiting(sessions.data ?? []).length === 0 && (
+                <div className="empty">
+                  <h3>Nothing is waiting for you</h3>
+                  Close this and go somewhere. You will be told when an agent
+                  <br />
+                  needs an answer, whether or not this window is open.
+                </div>
+              )}
             </div>
           </>
         )}

@@ -161,6 +161,8 @@ export interface Session {
   user_id: string | null
   owner: string | null
   is_mine: boolean
+  /** Present when listed across projects, so it can be named on its own. */
+  project_name: string | null
   /** The git worktree this session works in, and the branch it is on. */
   workdir: string
   branch: string | null
