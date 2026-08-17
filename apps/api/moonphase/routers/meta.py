@@ -8,9 +8,10 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import text
 
-from .. import environments, queries
+from .. import environments, push, queries
 from .. import harness as harness_registry
 from ..auth import Principal, current_principal
+from ..config import get_settings
 from ..db import service_session, user_session
 from ..runtime import CAN_ADMINISTER, Forbidden
 from ..schemas import (
@@ -20,6 +21,7 @@ from ..schemas import (
     HarnessCredentialOut,
     HarnessInfoOut,
     HealthOut,
+    InstanceConfigOut,
     OrganizationOut,
     SessionOut,
 )
@@ -43,6 +45,29 @@ async def health() -> HealthOut:
         status="ok" if database == "ok" else "degraded",
         version=VERSION,
         database=database,
+    )
+
+
+@router.get("/config", response_model=InstanceConfigOut)
+async def instance_config() -> InstanceConfigOut:
+    """Everything a client needs to talk to this host, given only its URL.
+
+    Deliberately unauthenticated, because it is what makes "install the app and
+    type in your host" possible: a client that has just been handed an address
+    has no account yet and no way to learn where this instance keeps its auth.
+
+    Nothing here is secret. The anon key is designed to be shipped to browsers
+    and grants nothing on its own — every table it can reach is behind row
+    level security. The VAPID key is the public half of a signing pair. What it
+    does disclose is that a Moonphase instance answers at this address, which
+    anyone who can reach the port could establish anyway.
+    """
+    settings = get_settings()
+    return InstanceConfigOut(
+        supabase_url=settings.supabase_url,
+        supabase_anon_key=settings.supabase_anon_key,
+        vapid_public_key=push.public_key() or None,
+        version="0.1.0",
     )
 
 

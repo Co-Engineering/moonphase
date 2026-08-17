@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { supabase } from '../lib/supabase'
+import { client } from '../lib/supabase'
 
 export function Auth() {
   const [mode, setMode] = useState<'signin' | 'signup'>('signin')
@@ -17,8 +17,8 @@ export function Auth() {
 
     const { error: authError, data } =
       mode === 'signin'
-        ? await supabase.auth.signInWithPassword({ email, password })
-        : await supabase.auth.signUp({ email, password })
+        ? await client().auth.signInWithPassword({ email, password })
+        : await client().auth.signUp({ email, password })
 
     if (authError) {
       setError(authError.message)

@@ -5,10 +5,12 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from . import preview, socks, ssh
 from .config import get_settings
@@ -104,7 +106,59 @@ def create_app() -> FastAPI:
     app.include_router(shares.router)
     app.include_router(terminal.router)
 
+    _serve_web_app(app)
+
     return app
+
+
+def _serve_web_app(app: FastAPI) -> None:
+    """Serve the built frontend from the API, when there is one.
+
+    One address for the whole thing is what makes installing it on a phone
+    work: you point the browser at your host, get the app, and it talks to the
+    API it came from — same origin, so no CORS to configure and no second URL
+    to remember. It also puts the service worker at the root scope, which is
+    what push requires.
+
+    Absent in development, where Vite serves the app with hot reload. Its
+    absence is not an error: the API is perfectly usable on its own.
+    """
+    # moonphase/main.py -> apps/api/moonphase -> apps/api -> apps
+    dist = Path(__file__).resolve().parents[2] / "web" / "dist"
+    if not (dist / "index.html").is_file():
+        log.info("no built frontend at %s; serving the API only", dist)
+        return
+
+    @app.get("/manifest.webmanifest", include_in_schema=False)
+    async def _manifest() -> FileResponse:
+        return FileResponse(dist / "manifest.webmanifest")
+
+    @app.get("/sw.js", include_in_schema=False)
+    async def _service_worker() -> FileResponse:
+        # Never cached: a stale worker is one that cannot be updated, and this
+        # one is the only thing awake when a notification arrives.
+        return FileResponse(
+            dist / "sw.js",
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-cache"},
+        )
+
+    app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def _spa(path: str) -> FileResponse:
+        """Static file if there is one, otherwise the app shell.
+
+        The client routes on the query string rather than the path, but a
+        home-screen launch can arrive at any URL the manifest was installed
+        from, and returning the shell is what makes that land somewhere.
+        """
+        candidate = (dist / path).resolve()
+        if path and dist in candidate.parents and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(dist / "index.html")
+
+    log.info("serving the frontend from %s", dist)
 
 
 app = create_app()

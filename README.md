@@ -36,6 +36,28 @@ Implemented:
 Not yet: zrok tunnels (previews are reachable from the backend host today), OpenCode,
 organization invites and role management UI.
 
+## Installing it on your phone
+
+Moonphase serves the built frontend from the API, so one address is the whole
+thing. Open it on your phone and add it to your home screen; the first launch
+asks for your host only if it cannot work that out from where it was served.
+
+```bash
+pnpm --filter @moonphase/web build   # the API serves apps/web/dist when present
+```
+
+Then **Settings → Notifications → Enable**, and you get a push whenever one of
+your sessions starts waiting for you. Notifications go to the person who owns
+the session and nobody else — someone watching a colleague's agent cannot
+answer its questions, so waking them would be noise.
+
+**It has to be HTTPS.** Service workers and push are only available in a secure
+context, so a phone pointed at `http://192.168.1.x:8471` will not be able to
+install the app or receive anything, and browsers say very little about why. A
+reverse proxy with a real certificate, a Tailscale HTTPS address, or a
+Cloudflare tunnel all work. `localhost` is exempt, which is why it works on the
+machine running it.
+
 ## Sharing
 
 Two ways to give someone access, both from the **Share** button on a server or a project:

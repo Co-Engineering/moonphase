@@ -1657,3 +1657,28 @@ button.linkish:hover:not(:disabled) {
   height: 100%;
   background: var(--bg);
 }
+
+/* The first screen on a new phone: one field, and it has to be obvious. */
+.connect-card {
+  width: 100%;
+  max-width: 420px;
+}
+
+.connect-card h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.connect-card label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: 14px 0 6px;
+}
+
+.connect-card button.primary {
+  width: 100%;
+  margin-top: 14px;
+  padding: 10px;
+}

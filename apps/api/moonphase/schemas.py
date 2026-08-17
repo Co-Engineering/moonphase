@@ -515,6 +515,19 @@ class PortShareIn(BaseModel):
     port: int = Field(ge=1, le=65535)
 
 
+class InstanceConfigOut(BaseModel):
+    """What a client needs to reach this instance, discovered from its URL."""
+
+    supabase_url: str
+    # Public by design: it is shipped to every browser and grants nothing on
+    # its own, because every table behind it has row level security.
+    supabase_anon_key: str
+    # Public half of the push signing pair. Null when push is not configured,
+    # which the client should say rather than silently offering notifications.
+    vapid_public_key: str | None = None
+    version: str
+
+
 class HealthOut(BaseModel):
     status: str
     version: str

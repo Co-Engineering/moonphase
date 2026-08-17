@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Session as AuthSession } from '@supabase/supabase-js'
-import { supabase } from './lib/supabase'
+import { client, configure } from './lib/supabase'
 import {
   api,
   canControl,
@@ -13,6 +13,15 @@ import {
 import { useResource } from './lib/useResource'
 import { ProjectTerminal } from './components/Terminal'
 import { Auth } from './routes/Auth'
+import { Connect } from './routes/Connect'
+import {
+  currentHost,
+  fetchConfig,
+  forgetHost,
+  rememberHost,
+  storedHost,
+  type InstanceConfig,
+} from './lib/host'
 import { AddServer } from './routes/AddServer'
 import { NewProject } from './routes/NewProject'
 import { Settings } from './routes/Settings'
@@ -25,17 +34,54 @@ import { openSessionWindow, sessionWindowUrl } from './lib/desktop'
 export function App() {
   const [session, setSession] = useState<AuthSession | null>(null)
   const [ready, setReady] = useState(false)
+  // Null until we have asked a host who it is. Everything else waits on this,
+  // because the auth client cannot be built without it.
+  const [config, setConfig] = useState<InstanceConfig | null>(null)
+  const [hostProblem, setHostProblem] = useState<string | null>(null)
 
-  useEffect(() => {
+  const attach = useCallback((next: InstanceConfig) => {
+    const supabase = configure(next)
+    setConfig(next)
     void supabase.auth.getSession().then(({ data }) => {
       setSession(data.session)
       setReady(true)
     })
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
-      setSession(next)
-    })
-    return () => sub.subscription.unsubscribe()
+    supabase.auth.onAuthStateChange((_event, updated) => setSession(updated))
   }, [])
+
+  useEffect(() => {
+    if (config) return
+    // The host we were served from is right whenever the API serves the app,
+    // so a fresh install usually needs no setup at all. Asking is the fallback.
+    let cancelled = false
+    void fetchConfig(currentHost())
+      .then((found) => {
+        if (!cancelled) attach(found)
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        setHostProblem(storedHost() ? String(err instanceof Error ? err.message : err) : null)
+        setReady(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [config, attach])
+
+  if (!config) {
+    if (!ready) return <div className="auth-shell">Connecting…</div>
+    return (
+      <Connect
+        initial={storedHost() ?? undefined}
+        problem={hostProblem}
+        onConnected={(host, found) => {
+          rememberHost(host)
+          setHostProblem(null)
+          attach(found)
+        }}
+      />
+    )
+  }
 
   if (!ready) return <div className="auth-shell">Loading…</div>
   if (!session) return <Auth />
@@ -52,12 +98,20 @@ export function App() {
     }
   }
 
-  return <Shell email={session.user.email ?? ''} />
+  return (
+    <Shell
+      email={session.user.email ?? ''}
+      onDisconnect={() => {
+        forgetHost()
+        window.location.reload()
+      }}
+    />
+  )
 }
 
 type ShareTarget = { kind: 'servers' | 'projects'; id: string; name: string }
 
-function Shell({ email }: { email: string }) {
+function Shell({ email, onDisconnect }: { email: string; onDisconnect: () => void }) {
   // A session is part of the selection rather than a tab inside a project:
   // it is the thing you are actually looking at, so it belongs in the place
   // that says what you are looking at.
@@ -222,8 +276,11 @@ function Shell({ email }: { email: string }) {
           <button className="ghost" onClick={() => setShowSettings(true)} title="Settings">
             Settings
           </button>
-          <button className="ghost" onClick={() => void supabase.auth.signOut()}>
+          <button className="ghost" onClick={() => void client().auth.signOut()}>
             Sign out
+          </button>
+          <button className="ghost" onClick={onDisconnect} title={currentHost()}>
+            Host
           </button>
         </div>
       </aside>

@@ -1,6 +1,5 @@
+import { currentHost } from './host'
 import { accessToken } from './supabase'
-
-const API_URL: string = import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:8471'
 
 export class ApiError extends Error {
   constructor(
@@ -16,7 +15,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = await accessToken()
   if (!token) throw new ApiError(401, 'Not signed in.')
 
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await fetch(`${currentHost()}${path}`, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
@@ -562,7 +561,7 @@ export const api = {
 /** Live feed socket. Falls back to `api.feed` polling if this cannot open. */
 export async function feedUrl(projectId: string, session?: string) {
   const token = await accessToken()
-  const base = API_URL.replace(/^http/, 'ws')
+  const base = currentHost().replace(/^http/, 'ws')
   const params = new URLSearchParams({ token: token ?? '' })
   if (session) params.set('session', session)
   return `${base}/ws/projects/${projectId}/feed?${params}`
@@ -575,7 +574,7 @@ export async function terminalUrl(
   session?: string,
 ) {
   const token = await accessToken()
-  const base = API_URL.replace(/^http/, 'ws')
+  const base = currentHost().replace(/^http/, 'ws')
   const params = new URLSearchParams({
     token: token ?? '',
     cols: String(cols),
