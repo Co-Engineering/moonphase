@@ -28,6 +28,7 @@ import { NewProject } from './routes/NewProject'
 import { Settings } from './routes/Settings'
 import { Usage, UsageStrip } from './components/Usage'
 import { Changes } from './components/Changes'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { SavePoints } from './components/SavePoints'
 import { Summary } from './components/Summary'
 import { YourApp } from './components/YourApp'
@@ -366,6 +367,10 @@ function Shell({ email, onDisconnect }: { email: string; onDisconnect: () => voi
 
       <main className="main">
         {activeProject ? (
+          <ErrorBoundary
+            key={`${activeProject.id}:${selected?.kind === 'project' ? (selected.session ?? '') : ''}`}
+            what="This session"
+          >
           <ProjectView
             project={activeProject}
             session={selected?.kind === 'project' ? (selected.session ?? null) : null}
@@ -385,6 +390,7 @@ function Shell({ email, onDisconnect }: { email: string; onDisconnect: () => voi
               reloadAll()
             }}
           />
+          </ErrorBoundary>
         ) : activeServer ? (
           <ServerView
             server={activeServer}
