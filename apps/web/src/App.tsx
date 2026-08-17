@@ -26,7 +26,12 @@ import {
 import { AddServer } from './routes/AddServer'
 import { NewProject } from './routes/NewProject'
 import { Settings } from './routes/Settings'
-import { Ports } from './components/Ports'
+import { Usage, UsageStrip } from './components/Usage'
+import { Changes } from './components/Changes'
+import { SavePoints } from './components/SavePoints'
+import { Summary } from './components/Summary'
+import { YourApp } from './components/YourApp'
+import { Search } from './components/Search'
 import { Feed } from './components/Feed'
 import { Share } from './components/Share'
 import { Attention, waiting } from './components/Attention'
@@ -139,6 +144,21 @@ function Shell({ email, onDisconnect }: { email: string; onDisconnect: () => voi
   const [showNewProject, setShowNewProject] = useState(false)
   const [showSidebar, setShowSidebar] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [showUsage, setShowUsage] = useState(false)
+  const [showSearch, setShowSearch] = useState(false)
+
+  // ⌘K / Ctrl-K. Registered here rather than inside the modal because its
+  // whole job is opening the modal when it is not mounted.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setShowSearch(true)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   const [shareTarget, setShareTarget] = useState<ShareTarget | null>(null)
 
   // Servers are polled: bootstrap and Docker installs finish out of band, and
@@ -322,6 +342,16 @@ function Shell({ email, onDisconnect }: { email: string; onDisconnect: () => voi
           <span className="who" title={email}>
             {email}
           </span>
+          <button
+            className="ghost"
+            onClick={() => setShowSearch(true)}
+            title="Search every session you own (⌘K)"
+          >
+            Search
+          </button>
+          <button className="ghost" onClick={() => setShowUsage(true)} title="Token usage and spend">
+            Usage
+          </button>
           <button className="ghost" onClick={() => setShowSettings(true)} title="Settings">
             Settings
           </button>
@@ -382,6 +412,7 @@ function Shell({ email, onDisconnect }: { email: string; onDisconnect: () => voi
                 sessions={sessions.data ?? []}
                 onOpen={(project, session) => selectProject(project, session)}
               />
+              <UsageStrip onOpen={() => setShowUsage(true)} />
               {waiting(sessions.data ?? []).length === 0 && (
                 <div className="empty">
                   <h3>Nothing is waiting for you</h3>
@@ -397,6 +428,16 @@ function Shell({ email, onDisconnect }: { email: string; onDisconnect: () => voi
 
       {showSettings && (
         <Settings onClose={() => setShowSettings(false)} onSaved={reloadAll} />
+      )}
+      {showUsage && <Usage onClose={() => setShowUsage(false)} />}
+      {showSearch && (
+        <Search
+          onClose={() => setShowSearch(false)}
+          onOpen={(project, session) => {
+            setShowSearch(false)
+            selectProject(project, session)
+          }}
+        />
       )}
       {showAddServer && (
         <AddServer onClose={() => setShowAddServer(false)} onCreated={reloadAll} />
@@ -551,7 +592,7 @@ function ProjectView({
   // desktop's tmux window down to phone width. Default by screen size, but
   // leave it switchable: the feed is genuinely nicer for catching up, and the
   // terminal is still the only way to do anything unusual.
-  const [view, setView] = useState<'terminal' | 'feed'>(() =>
+  const [view, setView] = useState<'terminal' | 'feed' | 'changes'>(() =>
     typeof window !== 'undefined' && window.matchMedia('(max-width: 720px)').matches
       ? 'feed'
       : 'terminal',
@@ -682,6 +723,13 @@ function ProjectView({
             title="The real terminal"
           >
             Terminal
+          </button>
+          <button
+            className={view === 'changes' ? 'active' : ''}
+            onClick={() => setView('changes')}
+            title="What this session has changed, committed or not"
+          >
+            Changes
           </button>
         </div>
         {project.access === 'admin' && (
@@ -834,7 +882,7 @@ function ProjectView({
               </button>
             )}
           </div>
-          <Ports
+          <YourApp
             projectId={project.id}
             projectName={project.name}
             running
@@ -874,16 +922,24 @@ function ProjectView({
               readOnly={!drivable}
               onRefusedInput={nudge}
             />
+          ) : view === 'changes' ? (
+            <div className="changes-pane">
+              {drivable && <SavePoints projectId={project.id} session={session} />}
+              <Changes projectId={project.id} session={session} />
+            </div>
           ) : (
-            <Feed
-              projectId={project.id}
-              session={session}
-              running
-              readOnly={!drivable}
-              onRefusedInput={nudge}
-            />
+            <div className="feed-pane">
+              <Summary projectId={project.id} session={session} />
+              <Feed
+                projectId={project.id}
+                session={session}
+                running
+                readOnly={!drivable}
+                onRefusedInput={nudge}
+              />
+            </div>
           )}
-          <Ports
+          <YourApp
             projectId={project.id}
             projectName={project.name}
             running

@@ -400,15 +400,24 @@ class WorkspaceProfileIn(BaseModel):
     @field_validator("claude_settings_json", "mcp_json")
     @classmethod
     def _valid_json(cls, v: str | None) -> str | None:
-        """Reject malformed JSON here rather than letting the harness choke."""
+        """Reject malformed JSON here rather than letting the harness choke.
+
+        An object specifically, not merely valid JSON: `settings.json` and
+        `.mcp.json` are both objects, and a bare string or list parses fine
+        while producing a container where the harness silently ignores the
+        file. Failing at the point someone can still fix it is the whole value
+        of checking at all.
+        """
         if v is None or not v.strip():
             return None
         import json
 
         try:
-            json.loads(v)
+            parsed = json.loads(v)
         except json.JSONDecodeError as exc:
             raise ValueError(f"Must be valid JSON: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError("Must be a JSON object.")
         return v
 
 
@@ -532,6 +541,186 @@ class InstanceConfigOut(BaseModel):
     # which the client should say rather than silently offering notifications.
     vapid_public_key: str | None = None
     version: str
+
+
+# --- usage --------------------------------------------------------------------
+
+
+class UsageSliceOut(BaseModel):
+    """One model's share of a period."""
+
+    model: str
+    tokens: int
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    thinking_tokens: int = 0
+    # Null when no rate is known for this model. Distinct from zero: showing
+    # $0.00 for an unpriced model is a confident lie about someone's bill.
+    cost: float | None = None
+    priced: bool = False
+
+
+class UsageProjectOut(BaseModel):
+    project_id: UUID | None = None
+    project_name: str
+    tokens: int = 0
+    cost: float | None = None
+
+
+class AttentionOut(BaseModel):
+    """A question waiting on you, ready to answer without opening anything."""
+
+    project_id: UUID
+    project_name: str
+    session: str
+    activity_at: datetime | None = None
+    question: str = ""
+    # Null when the pane could not be parsed into buttons; the tail is still
+    # there, so the answer is typed rather than tapped.
+    prompt: PromptOut | None = None
+    tail: str = ""
+
+
+class ChangedFileOut(BaseModel):
+    path: str
+    added: int = 0
+    removed: int = 0
+    # 'untracked' has no diff to show but is still part of what changed.
+    status: str = "modified"
+
+
+class ChangesOut(BaseModel):
+    """What a session has done to the code, committed or not."""
+
+    branch: str = ""
+    base: str = ""
+    added: int = 0
+    removed: int = 0
+    files: list[ChangedFileOut] = Field(default_factory=list)
+    patch: str = ""
+    truncated: bool = False
+    # Set when the worktree is not a repository, which is a state to render
+    # rather than an error to raise.
+    detail: str | None = None
+
+
+class CheckpointOut(BaseModel):
+    """One save point, named by whoever made it."""
+
+    id: str
+    at: str
+    label: str
+    # True when the files on disk still match this point.
+    current: bool = False
+    # Made by Moonphase on the way to somewhere else, not chosen by a person.
+    automatic: bool = False
+
+
+class CheckpointsOut(BaseModel):
+    points: list[CheckpointOut] = Field(default_factory=list)
+    # Files changed since the newest point, so "you have unsaved work" is a
+    # fact rather than a guess.
+    unsaved: int = 0
+    detail: str | None = None
+
+
+class SaveCheckpointIn(BaseModel):
+    label: str | None = Field(default=None, max_length=120)
+
+
+class DigestOut(BaseModel):
+    """What the agent did, counted."""
+
+    created: list[str] = Field(default_factory=list)
+    edited: list[str] = Field(default_factory=list)
+    commands: int = 0
+    installs: int = 0
+    tests: int = 0
+    searches: int = 0
+    last_said: str = ""
+    detail: str | None = None
+
+
+class SearchHitOut(BaseModel):
+    project_id: UUID
+    project_name: str
+    session: str
+    at: str = ""
+    role: str = ""
+    text: str = ""
+
+
+class SearchOut(BaseModel):
+    query: str
+    hits: list[SearchHitOut] = Field(default_factory=list)
+    # True when a machine did not answer in time, so the list is incomplete
+    # rather than empty.
+    partial: bool = False
+
+
+class UsageWindowOut(BaseModel):
+    """One limit period, anchored to when it actually opened."""
+
+    label: str
+    hours: int
+    # Null when nothing has opened a window: no work, no clock running.
+    started_at: datetime | None = None
+    resets_at: datetime | None = None
+    tokens: int = 0
+    cost: float | None = None
+    # What the plan allows, if the person has said. Null renders as no bar
+    # rather than as a full one or an empty one, both of which would be claims.
+    limit_tokens: int | None = None
+    percent: float | None = None
+
+
+class UsageOut(BaseModel):
+    """Consumption, framed by how the caller pays for it."""
+
+    # 'oauth' for a subscription, 'api_key' for metered billing. Decides which
+    # number leads: how much of the window has gone, or how much it cost.
+    billing: str
+    hours: int
+    tokens: int
+    cost: float | None = None
+    session_window: UsageWindowOut
+    week_window: UsageWindowOut
+    models: list[UsageSliceOut] = Field(default_factory=list)
+    projects: list[UsageProjectOut] = Field(default_factory=list)
+    series: list[dict] = Field(default_factory=list)
+
+
+class UsageLimitsIn(BaseModel):
+    session_tokens: int | None = Field(default=None, gt=0, le=10_000_000_000)
+    weekly_tokens: int | None = Field(default=None, gt=0, le=100_000_000_000)
+    # Push once per window when usage crosses this share of the allowance.
+    alert_percent: int | None = Field(default=None, ge=1, le=100)
+
+
+class UsageLimitsOut(BaseModel):
+    session_tokens: int | None = None
+    weekly_tokens: int | None = None
+    alert_percent: int | None = None
+
+
+class ModelPriceIn(BaseModel):
+    org_id: UUID | None = None
+    model: str = Field(min_length=1, max_length=100)
+    input_per_m: float = Field(ge=0, le=10_000)
+    output_per_m: float = Field(ge=0, le=10_000)
+
+
+class ModelPriceOut(BaseModel):
+    model: str
+    input_per_m: float
+    output_per_m: float
+    # Ships with Moonphase rather than set here, so the UI can say which
+    # numbers are assumptions and which someone actually chose.
+    builtin: bool = False
+
+    model_config = ConfigDict(protected_namespaces=())
 
 
 class HealthOut(BaseModel):

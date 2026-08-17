@@ -22,9 +22,11 @@ from .routers import (
     meta,
     notifications,
     projects,
+    review,
     servers,
     shares,
     terminal,
+    usage,
 )
 from .routers import preview as preview_router
 from .routers import profile as profile_router
@@ -104,6 +106,8 @@ def create_app() -> FastAPI:
     app.include_router(feed.router)
     app.include_router(feedsocket.router)
     app.include_router(shares.router)
+    app.include_router(usage.router)
+    app.include_router(review.router)
     app.include_router(terminal.router)
 
     _serve_web_app(app)

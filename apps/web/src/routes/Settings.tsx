@@ -7,6 +7,7 @@ import {
   pushSupport,
 } from '../lib/notifications'
 import { InstallPrompt } from '../components/InstallPrompt'
+import { McpEditor, SettingsEditor } from '../components/ClaudeConfig'
 import {
   api,
   type Environment,
@@ -506,17 +507,18 @@ function HarnessSettingsTab({
   busy: boolean
   run: Runner
 }) {
-  const [settings, setSettings] = useState(profile.claude_settings_json ?? '')
+  const [settings, setSettings] = useState<string | null>(profile.claude_settings_json)
   const [claudeMd, setClaudeMd] = useState(profile.claude_md ?? '')
-  const [mcp, setMcp] = useState(profile.mcp_json ?? '')
+  const [mcp, setMcp] = useState<string | null>(profile.mcp_json)
+  const [section, setSection] = useState<'settings' | 'mcp' | 'md'>('settings')
 
   const save = () =>
     run(
       () =>
         api.saveProfile({
-          claude_settings_json: settings.trim() || null,
+          claude_settings_json: settings,
           claude_md: claudeMd.trim() || null,
-          mcp_json: mcp.trim() || null,
+          mcp_json: mcp,
           env_vars: profile.env_vars,
           git_user_name: profile.git_user_name,
           git_user_email: profile.git_user_email,
@@ -526,41 +528,50 @@ function HarnessSettingsTab({
 
   return (
     <>
-      <label>
-        <span>
-          Global CLAUDE.md — written to <code>~/.claude/CLAUDE.md</code> in every project
-        </span>
-        <textarea
-          value={claudeMd}
-          onChange={(e) => setClaudeMd(e.target.value)}
-          placeholder={'# My preferences\n\n- Prefer small, focused commits\n- Never add comments that restate the code'}
-          rows={8}
-        />
-      </label>
+      <div className="subtabs" role="tablist">
+        <button
+          role="tab"
+          aria-selected={section === 'settings'}
+          className={section === 'settings' ? 'active' : ''}
+          onClick={() => setSection('settings')}
+        >
+          Permissions &amp; behaviour
+        </button>
+        <button
+          role="tab"
+          aria-selected={section === 'mcp'}
+          className={section === 'mcp' ? 'active' : ''}
+          onClick={() => setSection('mcp')}
+        >
+          MCP servers
+        </button>
+        <button
+          role="tab"
+          aria-selected={section === 'md'}
+          className={section === 'md' ? 'active' : ''}
+          onClick={() => setSection('md')}
+        >
+          CLAUDE.md
+        </button>
+      </div>
 
-      <label>
-        <span>
-          settings.json — written to <code>~/.claude/settings.json</code>
-        </span>
-        <textarea
-          value={settings}
-          onChange={(e) => setSettings(e.target.value)}
-          placeholder={'{\n  "permissions": {\n    "allow": ["Bash(npm run test)"]\n  }\n}'}
-          rows={8}
-        />
-      </label>
-
-      <label>
-        <span>
-          MCP servers — written to <code>~/.claude/.mcp.json</code>
-        </span>
-        <textarea
-          value={mcp}
-          onChange={(e) => setMcp(e.target.value)}
-          placeholder={'{\n  "mcpServers": {}\n}'}
-          rows={6}
-        />
-      </label>
+      {section === 'settings' && (
+        <SettingsEditor value={settings} onChange={setSettings} />
+      )}
+      {section === 'mcp' && <McpEditor value={mcp} onChange={setMcp} />}
+      {section === 'md' && (
+        <label>
+          <span>
+            Written to <code>~/.claude/CLAUDE.md</code>, so it applies to every project
+          </span>
+          <textarea
+            value={claudeMd}
+            onChange={(e) => setClaudeMd(e.target.value)}
+            placeholder={'# My preferences\n\n- Prefer small, focused commits\n- Never add comments that restate the code'}
+            rows={14}
+          />
+        </label>
+      )}
 
       <div className="actions">
         <button className="primary" disabled={busy} onClick={() => void save()}>

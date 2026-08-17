@@ -590,3 +590,233 @@ export async function terminalUrl(
   })
   return `${base}/ws/projects/${projectId}/terminal?${params}`
 }
+
+
+export interface UsageSlice {
+  model: string
+  tokens: number
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  thinking_tokens: number
+  /** Null when no rate is known for this model — not the same as free. */
+  cost: number | null
+  priced: boolean
+}
+
+export interface UsageProject {
+  project_id: string | null
+  project_name: string
+  tokens: number
+  cost: number | null
+}
+
+export interface UsageWindow {
+  label: string
+  hours: number
+  /** Null when nothing has opened a window: no work, no clock running. */
+  started_at: string | null
+  resets_at: string | null
+  tokens: number
+  cost: number | null
+  /** What the plan allows, if the user has said. Null means no bar is drawn. */
+  limit_tokens: number | null
+  percent: number | null
+}
+
+export interface Usage {
+  /** 'oauth' for a subscription, 'api_key' for metered billing. */
+  billing: 'oauth' | 'api_key' | 'unknown'
+  hours: number
+  tokens: number
+  cost: number | null
+  session_window: UsageWindow
+  week_window: UsageWindow
+  models: UsageSlice[]
+  projects: UsageProject[]
+  series: { at: string; tokens: number }[]
+}
+
+export interface UsageLimits {
+  session_tokens: number | null
+  weekly_tokens: number | null
+  /** Push once per window when usage crosses this share of the allowance. */
+  alert_percent?: number | null
+}
+
+export async function usageLimits() {
+  return request<UsageLimits>('/api/usage/limits')
+}
+
+export async function setUsageLimits(input: UsageLimits) {
+  return request<UsageLimits>('/api/usage/limits', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+}
+
+export interface ModelPrice {
+  model: string
+  input_per_m: number
+  output_per_m: number
+  /** Ships with Moonphase rather than set here. */
+  builtin: boolean
+}
+
+export async function usage(hours = 24 * 7) {
+  return request<Usage>(`/api/usage?hours=${hours}`)
+}
+
+export async function modelPrices() {
+  return request<ModelPrice[]>('/api/usage/prices')
+}
+
+export async function setModelPrice(input: {
+  model: string
+  input_per_m: number
+  output_per_m: number
+}) {
+  return request<ModelPrice>('/api/usage/prices', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function clearModelPrice(model: string) {
+  return request<void>(`/api/usage/prices/${encodeURIComponent(model)}`, {
+    method: 'DELETE',
+  })
+}
+
+// --- attention, changes, search ---------------------------------------------
+
+export interface PromptOption {
+  key: string
+  label: string
+}
+
+export interface Waiting {
+  project_id: string
+  project_name: string
+  session: string
+  activity_at: string | null
+  question: string
+  /** Null when the pane could not be parsed into buttons. */
+  prompt: { question: string; options: PromptOption[] } | null
+  tail: string
+}
+
+export async function attention() {
+  return request<Waiting[]>('/api/attention')
+}
+
+export async function answerSession(projectId: string, session: string, key: string) {
+  return request<void>(
+    `/api/projects/${projectId}/sessions/${encodeURIComponent(session)}/answer`,
+    { method: 'POST', body: JSON.stringify({ key }) },
+  )
+}
+
+export interface ChangedFile {
+  path: string
+  added: number
+  removed: number
+  status: string
+}
+
+export interface Changes {
+  branch: string
+  base: string
+  added: number
+  removed: number
+  files: ChangedFile[]
+  patch: string
+  truncated: boolean
+  detail: string | null
+}
+
+export async function changes(projectId: string, session: string) {
+  return request<Changes>(
+    `/api/projects/${projectId}/sessions/${encodeURIComponent(session)}/changes`,
+  )
+}
+
+export interface SearchHit {
+  project_id: string
+  project_name: string
+  session: string
+  at: string
+  role: string
+  text: string
+}
+
+export interface SearchResult {
+  query: string
+  hits: SearchHit[]
+  /** True when a machine did not answer in time, so the list is incomplete. */
+  partial: boolean
+}
+
+export async function searchTranscripts(q: string) {
+  return request<SearchResult>(`/api/search?q=${encodeURIComponent(q)}`)
+}
+
+// --- save points and summaries ----------------------------------------------
+
+export interface Checkpoint {
+  id: string
+  at: string
+  label: string
+  /** True when the files on disk still match this point. */
+  current: boolean
+  /** Made on the way to somewhere else, not chosen by a person. */
+  automatic: boolean
+}
+
+export interface Checkpoints {
+  points: Checkpoint[]
+  unsaved: number
+  detail: string | null
+}
+
+export async function checkpoints(projectId: string, session: string) {
+  return request<Checkpoints>(
+    `/api/projects/${projectId}/sessions/${encodeURIComponent(session)}/checkpoints`,
+  )
+}
+
+export async function saveCheckpoint(projectId: string, session: string, label?: string) {
+  return request<Checkpoints>(
+    `/api/projects/${projectId}/sessions/${encodeURIComponent(session)}/checkpoints`,
+    { method: 'POST', body: JSON.stringify({ label: label ?? null }) },
+  )
+}
+
+export async function restoreCheckpoint(
+  projectId: string,
+  session: string,
+  checkpoint: string,
+) {
+  return request<Checkpoints>(
+    `/api/projects/${projectId}/sessions/${encodeURIComponent(session)}/checkpoints/${checkpoint}/restore`,
+    { method: 'POST' },
+  )
+}
+
+export interface Digest {
+  created: string[]
+  edited: string[]
+  commands: number
+  installs: number
+  tests: number
+  searches: number
+  last_said: string
+  detail: string | null
+}
+
+export async function sessionSummary(projectId: string, session: string) {
+  return request<Digest>(
+    `/api/projects/${projectId}/sessions/${encodeURIComponent(session)}/summary`,
+  )
+}

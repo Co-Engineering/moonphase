@@ -16,11 +16,12 @@ import asyncio
 import contextlib
 import logging
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import text
 
-from . import activity, docker_remote, push, queries, sessions, ssh
+from . import activity, docker_remote, push, queries, sessions, ssh, usage
 from . import harness as harness_registry
 from .activity import ActivityState
 from .config import get_settings
@@ -34,6 +35,11 @@ log = logging.getLogger(__name__)
 # often enough that a server coming back is noticed within a minute or two.
 BASE_BACKOFF_SECONDS = 60.0
 MAX_BACKOFF_SECONDS = 600.0
+
+# Usage is read far less often than activity. A token count two minutes old is
+# perfectly useful; re-reading transcripts every sweep would turn the cheapest
+# question here into the most expensive one.
+USAGE_INTERVAL_SECONDS = 120.0
 
 
 class SessionMonitor:
@@ -49,6 +55,8 @@ class SessionMonitor:
         # real problems in the log.
         self._failures: dict[str, int] = {}
         self._retry_after: dict[str, float] = {}
+        # When each container's transcripts were last read for usage.
+        self._usage_checked: dict[str, float] = {}
 
     def start(self) -> None:
         settings = get_settings()
@@ -78,6 +86,10 @@ class SessionMonitor:
                 await self.sweep()
             except Exception as exc:  # noqa: BLE001 — the loop must outlive a bad tick
                 log.warning("monitor sweep failed: %s", exc)
+            try:
+                await self.check_budgets()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("budget check failed: %s", exc)
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._stop.wait(), timeout=interval)
 
@@ -158,6 +170,7 @@ class SessionMonitor:
             return len(group)
 
         panes = await sessions.capture_all_panes(conn_ssh, container)
+        await self._collect_usage(conn_ssh, container, group)
 
         # A host reboot brings the container back — that is what the restart
         # policy is for — but everything inside it started fresh, so the agents
@@ -205,6 +218,135 @@ class SessionMonitor:
             await self._settle(row, snapshot)
 
         return len(group)
+
+    async def _collect_usage(
+        self, conn_ssh: Any, container: str, group: list[dict[str, Any]]
+    ) -> None:
+        """Read what each session has spent since we last looked.
+
+        Runs less often than the activity sweep: a token count that is two
+        minutes stale is fine, and reading transcripts every twenty seconds
+        would make the cheapest question Moonphase asks into the most
+        expensive one.
+        """
+        now = time.monotonic()
+        if now - self._usage_checked.get(container, 0.0) < USAGE_INTERVAL_SECONDS:
+            return
+        self._usage_checked[container] = now
+
+        for row in group:
+            directory = row.get("transcript_path")
+            if not directory or not row.get("user_id"):
+                continue
+            try:
+                collected = await usage.collect_session(
+                    conn_ssh,
+                    container,
+                    str(directory),
+                    known=dict(row.get("usage_cursors") or {}),
+                )
+            except SSHError as exc:
+                log.debug("usage: could not read %s: %s", directory, exc)
+                continue
+            if collected is None:
+                continue
+
+            async with service_session() as conn:
+                if collected.events:
+                    await queries.record_usage_privileged(
+                        conn,
+                        user_id=str(row["user_id"]),
+                        project_id=row["id"],
+                        project_name=str(row["name"]),
+                        session_id=row["session_id"],
+                        events=collected.events,
+                    )
+                await queries.set_usage_cursors_privileged(
+                    conn,
+                    session_id=row["session_id"],
+                    cursors=collected.cursors,
+                )
+
+    async def check_budgets(self) -> int:
+        """Warn people before a limit stops them, not after.
+
+        A limit you discover by hitting it is the worst kind: the session stops
+        mid-task on a machine you are not sitting at. Everything needed to see
+        it coming is already collected, so the only new thing is a threshold
+        and a note of which window has already been announced.
+
+        Fired per window rather than per check. A threshold crossed at 60%
+        stays crossed, and without the anchor this would send the same
+        notification every two minutes for the rest of the window.
+        """
+        now = datetime.now(UTC)
+        sent = 0
+        async with service_session() as conn:
+            rows = await queries.limits_to_check_privileged(conn)
+
+            for row in rows:
+                threshold = int(row["alert_percent"])
+                for column, length, limit_key, label in (
+                    ("alerted_window", usage.SESSION_WINDOW, "session_tokens", "5-hour"),
+                    ("alerted_week", usage.WEEK_WINDOW, "weekly_tokens", "weekly"),
+                ):
+                    allowance = row.get(limit_key)
+                    if not allowance:
+                        continue
+                    times = await queries.usage_times_for_privileged(
+                        conn, row["user_id"], now - length
+                    )
+                    window = usage.current_window(times, length, now)
+                    if window is None:
+                        continue
+                    # Already announced for this window. Comparing anchors
+                    # rather than storing a flag means a new window rearms it
+                    # by itself.
+                    if row.get(column) == window.started_at:
+                        continue
+
+                    used = await queries.usage_total_between_privileged(
+                        conn, row["user_id"], window.started_at, window.resets_at
+                    )
+                    percent = used / int(allowance) * 100
+                    if percent < threshold:
+                        continue
+
+                    await queries.mark_alerted_privileged(
+                        conn,
+                        user_id=row["user_id"],
+                        column=column,
+                        anchor=window.started_at,
+                    )
+                    await self._push_budget(
+                        conn, row["user_id"], percent, label, window.resets_at
+                    )
+                    sent += 1
+        return sent
+
+    async def _push_budget(
+        self, conn: Any, user_id: Any, percent: float, label: str, resets_at: Any
+    ) -> None:
+        """Tell the one person whose allowance it is."""
+        if not push.configured():
+            log.debug("push not configured; would have warned about %s limit", label)
+            return
+
+        subscriptions = await _subscriptions_for_session(conn, user_id)
+        when = resets_at.strftime("%H:%M") if hasattr(resets_at, "strftime") else ""
+        for sub in subscriptions:
+            await push.send(
+                push.Subscription(
+                    endpoint=sub["endpoint"], p256dh=sub["p256dh"], auth=sub["auth"]
+                ),
+                title=f"{percent:.0f}% of your {label} limit used",
+                body=f"It resets at {when}." if when else "",
+                # Not a question, so it should not sit on screen demanding an
+                # answer the way a waiting session does.
+                kind="budget",
+                url="/",
+                tag=f"moonphase-budget-{label}",
+            )
 
     async def _reconcile_project(
         self, row: dict[str, Any], *, status: str, detail: str | None
@@ -329,6 +471,7 @@ async def _running_projects(conn: Any) -> list[dict[str, Any]]:
             select p.id, p.org_id, p.name, p.server_id, p.harness, p.container_name,
                    p.status::text as project_status, p.status_detail,
                    s.id as session_id, s.tmux_session, s.user_id,
+                   s.transcript_path, s.usage_cursors,
                    s.activity, s.pane_digest, s.notified_state
             from projects p
             join project_sessions s on s.project_id = p.id

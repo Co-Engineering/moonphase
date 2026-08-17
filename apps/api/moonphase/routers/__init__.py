@@ -8,9 +8,11 @@ from . import (
     preview,
     profile,
     projects,
+    review,
     servers,
     shares,
     terminal,
+    usage,
 )
 
 __all__ = [
@@ -21,7 +23,9 @@ __all__ = [
     "preview",
     "profile",
     "projects",
+    "review",
     "servers",
     "shares",
     "terminal",
+    "usage",
 ]

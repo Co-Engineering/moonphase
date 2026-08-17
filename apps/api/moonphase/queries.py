@@ -1269,3 +1269,339 @@ async def list_harness_credentials(
         {"org_ids": org_ids},
     )
     return [_row_to_dict(r) for r in result]
+
+
+# ---------------------------------------------------------------------------
+# Usage
+# ---------------------------------------------------------------------------
+
+
+async def record_usage_privileged(
+    conn: AsyncConnection,
+    *,
+    user_id: str,
+    project_id: UUID,
+    project_name: str,
+    session_id: UUID,
+    events: list[Any],
+) -> int:
+    """Store what a session consumed. Re-reading a transcript is harmless.
+
+    Conflicts are ignored rather than updated: the provider's count for a
+    message does not change, so a row that already exists is the same row.
+    """
+    if not events:
+        return 0
+    await conn.execute(
+        text(
+            """
+            insert into usage_events
+              (user_id, project_id, project_name, session_id, model, message_id,
+               at, input_tokens, output_tokens, cache_read_tokens,
+               cache_write_5m_tokens, cache_write_1h_tokens, thinking_tokens)
+            values
+              (cast(:user_id as uuid), :project_id, :project_name, :session_id,
+               :model, :message_id, :at, :input_tokens, :output_tokens,
+               :cache_read_tokens, :cache_write_5m_tokens, :cache_write_1h_tokens,
+               :thinking_tokens)
+            on conflict (user_id, message_id) do nothing
+            """
+        ),
+        [
+            {
+                "user_id": user_id,
+                "project_id": project_id,
+                "project_name": project_name,
+                "session_id": session_id,
+                "model": event.model,
+                "message_id": event.message_id,
+                "at": event.at,
+                "input_tokens": event.input_tokens,
+                "output_tokens": event.output_tokens,
+                "cache_read_tokens": event.cache_read_tokens,
+                "cache_write_5m_tokens": event.cache_write_5m_tokens,
+                "cache_write_1h_tokens": event.cache_write_1h_tokens,
+                "thinking_tokens": event.thinking_tokens,
+            }
+            for event in events
+        ],
+    )
+    return len(events)
+
+
+async def set_usage_cursors_privileged(
+    conn: AsyncConnection, *, session_id: UUID, cursors: dict[str, int]
+) -> None:
+    """Remember where to resume in each transcript.
+
+    Replaced wholesale rather than merged: a file that is no longer in the
+    directory should stop being tracked, and merging would keep every
+    transcript a session has ever had in the row forever.
+    """
+    await conn.execute(
+        text(
+            "update project_sessions set usage_cursors = cast(:c as jsonb) "
+            "where id = :id"
+        ),
+        {"c": json.dumps(cursors), "id": session_id},
+    )
+
+
+# Every tier, summed the same way in each query. Written once because a typo in
+# one of three copies would show a plausible number that is quietly wrong.
+USAGE_SUMS = (
+    "sum(input_tokens) as input_tokens, "
+    "sum(output_tokens) as output_tokens, "
+    "sum(cache_read_tokens) as cache_read_tokens, "
+    "sum(cache_write_5m_tokens) as cache_write_5m_tokens, "
+    "sum(cache_write_1h_tokens) as cache_write_1h_tokens, "
+    "sum(thinking_tokens) as thinking_tokens"
+)
+
+
+async def usage_since(conn: AsyncConnection, since: Any) -> list[dict[str, Any]]:
+    """Totals per model since a point in time. RLS scopes it to the caller."""
+    result = await conn.execute(
+        text(f"select model, {USAGE_SUMS} from usage_events where at >= :since group by model"),
+        {"since": since},
+    )
+    return [_row_to_dict(r) for r in result]
+
+
+async def usage_by_project(conn: AsyncConnection, since: Any) -> list[dict[str, Any]]:
+    result = await conn.execute(
+        text(
+            f"""
+            select project_id, coalesce(project_name, 'removed project') as project_name,
+                   model, {USAGE_SUMS}
+            from usage_events where at >= :since
+            group by project_id, project_name, model
+            """
+        ),
+        {"since": since},
+    )
+    return [_row_to_dict(r) for r in result]
+
+
+async def usage_buckets(
+    conn: AsyncConnection, since: Any, bucket: str = "hour"
+) -> list[dict[str, Any]]:
+    """A coarse series, so a week of use can be seen as a shape."""
+    unit = "day" if bucket == "day" else "hour"
+    result = await conn.execute(
+        text(
+            f"""
+            select date_trunc('{unit}', at) as bucket, model, {USAGE_SUMS}
+            from usage_events where at >= :since
+            group by bucket, model order by bucket
+            """
+        ),
+        {"since": since},
+    )
+    return [_row_to_dict(r) for r in result]
+
+
+async def first_harness_credential_privileged(
+    conn: AsyncConnection, user_id: str
+) -> str | None:
+    """How this person pays, which decides which usage number leads.
+
+    Read from the credential they actually connected rather than asked for as
+    a preference: someone on a subscription cares how much of the window has
+    gone, someone on an API key cares what it cost, and neither should have to
+    tell us which they are.
+    """
+    result = await conn.execute(
+        text(
+            """
+            select hc.auth_mode::text
+            from private.harness_credentials hc
+            join org_members m on m.org_id = hc.org_id
+            where m.user_id = cast(:user_id as uuid) and hc.project_id is null
+            order by hc.updated_at desc
+            limit 1
+            """
+        ),
+        {"user_id": user_id},
+    )
+    row = result.first()
+    return str(row[0]) if row else None
+
+
+async def list_model_prices(conn: AsyncConnection) -> list[dict[str, Any]]:
+    result = await conn.execute(
+        text(
+            "select org_id, model, input_per_m, output_per_m, updated_at "
+            "from model_prices order by model"
+        )
+    )
+    return [_row_to_dict(r) for r in result]
+
+
+async def upsert_model_price(
+    conn: AsyncConnection,
+    *,
+    org_id: UUID,
+    model: str,
+    input_per_m: float,
+    output_per_m: float,
+) -> dict[str, Any]:
+    result = await conn.execute(
+        text(
+            """
+            insert into model_prices (org_id, model, input_per_m, output_per_m)
+            values (:org_id, :model, :input_per_m, :output_per_m)
+            on conflict (org_id, model) do update set
+              input_per_m = excluded.input_per_m,
+              output_per_m = excluded.output_per_m,
+              updated_at = now()
+            returning org_id, model, input_per_m, output_per_m, updated_at
+            """
+        ),
+        {
+            "org_id": org_id,
+            "model": model,
+            "input_per_m": input_per_m,
+            "output_per_m": output_per_m,
+        },
+    )
+    row = result.first()
+    if row is None:
+        raise PermissionError("Not allowed to set prices for this organization.")
+    return _row_to_dict(row)
+
+
+async def delete_model_price(conn: AsyncConnection, org_id: UUID, model: str) -> bool:
+    result = await conn.execute(
+        text(
+            "delete from model_prices where org_id = :org_id and model = :model "
+            "returning model"
+        ),
+        {"org_id": org_id, "model": model},
+    )
+    return result.first() is not None
+
+
+async def usage_times(conn: AsyncConnection, since: Any) -> list[Any]:
+    """Just the timestamps, for working out where a limit window opened."""
+    result = await conn.execute(
+        text("select at from usage_events where at >= :since order by at"),
+        {"since": since},
+    )
+    return [row[0] for row in result]
+
+
+async def usage_between(
+    conn: AsyncConnection, start: Any, end: Any
+) -> list[dict[str, Any]]:
+    """Per-model totals inside a window, which is anchored rather than trailing."""
+    result = await conn.execute(
+        text(
+            f"select model, {USAGE_SUMS} from usage_events "
+            "where at >= :start and at < :end group by model"
+        ),
+        {"start": start, "end": end},
+    )
+    return [_row_to_dict(r) for r in result]
+
+
+async def get_usage_limits(conn: AsyncConnection) -> dict[str, Any] | None:
+    result = await conn.execute(
+        text(
+            "select session_tokens, weekly_tokens, alert_percent, "
+            "alerted_window, alerted_week from usage_limits limit 1"
+        )
+    )
+    row = result.first()
+    return _row_to_dict(row) if row is not None else None
+
+
+async def set_usage_limits(
+    conn: AsyncConnection,
+    *,
+    user_id: UUID,
+    session_tokens: int | None,
+    weekly_tokens: int | None,
+    alert_percent: int | None = None,
+) -> dict[str, Any]:
+    result = await conn.execute(
+        text(
+            """
+            insert into usage_limits
+              (user_id, session_tokens, weekly_tokens, alert_percent)
+            values (:user_id, :session_tokens, :weekly_tokens, :alert_percent)
+            on conflict (user_id) do update set
+              session_tokens = excluded.session_tokens,
+              weekly_tokens  = excluded.weekly_tokens,
+              alert_percent  = excluded.alert_percent,
+              updated_at     = now()
+            returning session_tokens, weekly_tokens, alert_percent
+            """
+        ),
+        {
+            "user_id": user_id,
+            "session_tokens": session_tokens,
+            "weekly_tokens": weekly_tokens,
+            "alert_percent": alert_percent,
+        },
+    )
+    row = result.first()
+    if row is None:
+        raise PermissionError("Not allowed to set limits.")
+    return _row_to_dict(row)
+
+
+async def limits_to_check_privileged(conn: AsyncConnection) -> list[dict[str, Any]]:
+    """Everyone who has asked to be warned before they run out."""
+    result = await conn.execute(
+        text(
+            "select user_id, session_tokens, weekly_tokens, alert_percent, "
+            "alerted_window, alerted_week from usage_limits "
+            "where alert_percent is not null"
+        )
+    )
+    return [_row_to_dict(r) for r in result]
+
+
+async def usage_times_for_privileged(
+    conn: AsyncConnection, user_id: Any, since: Any
+) -> list[Any]:
+    result = await conn.execute(
+        text(
+            "select at from usage_events where user_id = :u and at >= :since "
+            "order by at"
+        ),
+        {"u": user_id, "since": since},
+    )
+    return [row[0] for row in result]
+
+
+async def usage_total_between_privileged(
+    conn: AsyncConnection, user_id: Any, start: Any, end: Any
+) -> int:
+    result = await conn.execute(
+        text(
+            "select coalesce(sum(input_tokens + output_tokens + cache_read_tokens "
+            "+ cache_write_5m_tokens + cache_write_1h_tokens), 0) "
+            "from usage_events where user_id = :u and at >= :start and at < :end"
+        ),
+        {"u": user_id, "start": start, "end": end},
+    )
+    row = result.first()
+    return int(row[0]) if row else 0
+
+
+async def mark_alerted_privileged(
+    conn: AsyncConnection, *, user_id: Any, column: str, anchor: Any
+) -> None:
+    """Record which window an alert has fired for, so it fires once.
+
+    The column is chosen from a fixed pair rather than passed through, because
+    it is interpolated into SQL and anything else would be an injection point.
+    """
+    if column not in {"alerted_window", "alerted_week"}:
+        raise ValueError(f"Not an alert column: {column}")
+    await conn.execute(
+        text(f"update usage_limits set {column} = :anchor where user_id = :u"),
+        {"anchor": anchor, "u": user_id},
+    )
