@@ -135,7 +135,7 @@ SUPABASE_ANON_KEY=${ANON_KEY}
 MOONPHASE_PUBLIC_URL=${PUBLIC_URL}
 
 # Where the image comes from. ghcr.io does not rate-limit anonymous pulls;
-# coec/moonphase on Docker Hub is the same image under a shorter name.
+# oliversvanecoec/moonphase on Docker Hub is the same image, mirrored.
 MOONPHASE_IMAGE=${IMAGE}
 
 # Which published image to run: latest, a version like 0.2.1, or edge for the
