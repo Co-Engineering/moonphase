@@ -218,7 +218,12 @@ fi
 # built by now, so borrow it.
 if [ -z "${VAPID_PUBLIC:-}" ]; then
   info "generating push keys"
-  if keys=$($COMPOSE run --rm --no-deps --entrypoint python api /app/scripts/gen_vapid.py 2>/dev/null); then
+  # -T and a closed stdin, both deliberately. Piped from curl, this script *is*
+  # stdin, and `docker compose run` attaches to it by default — so it swallowed
+  # the rest of the file and the install stopped here without an error, in the
+  # one path the documentation actually tells people to use.
+  if keys=$($COMPOSE run --rm --no-deps -T --entrypoint python api \
+      /app/scripts/gen_vapid.py 2>/dev/null </dev/null); then
     # gen_vapid.py prints VAR=value lines ready for .env.
     printf '%s\n' "$keys" | grep -E '^MOONPHASE_VAPID_(PUBLIC|PRIVATE)_KEY=' > .vapid.tmp || true
     if [ -s .vapid.tmp ]; then
