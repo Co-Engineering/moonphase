@@ -844,3 +844,40 @@ export async function completeSetup(input: {
     body: JSON.stringify(input),
   })
 }
+
+export interface AuthMethods {
+  /** Enabled *and* working — what the sign-in screen should offer. */
+  enabled: string[]
+  password_enabled: boolean
+  magic_link_enabled: boolean
+  google_enabled: boolean
+  microsoft_enabled: boolean
+  smtp_host: string
+  smtp_port: number
+  smtp_user: string
+  smtp_sender: string
+  google_client_id: string
+  microsoft_client_id: string
+  microsoft_tenant: string
+  /** What to paste into Google's and Microsoft's consoles. */
+  redirect_uri: string
+  problems: string[]
+}
+
+/** Unauthenticated: the sign-in screen must know which buttons to draw. */
+export async function authMethods() {
+  const response = await fetch(`${currentHost()}/api/setup/methods`)
+  if (!response.ok) throw new ApiError(response.status, 'Could not reach this host.')
+  return (await response.json()) as AuthMethods
+}
+
+export async function saveAuthMethods(input: Partial<AuthMethods> & {
+  google_client_secret?: string | null
+  microsoft_client_secret?: string | null
+  smtp_password?: string | null
+}) {
+  return request<AuthMethods>('/api/setup/methods', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+}

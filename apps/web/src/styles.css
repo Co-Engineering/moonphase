@@ -2266,3 +2266,46 @@ button.ghost.small { font-size: 12px; padding: 3px 8px; }
   color: var(--text-dim);
   white-space: pre-wrap;
 }
+
+/* --- sign-in methods ------------------------------------------------------ */
+
+.or {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 10px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+.or::before,
+.or::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+button.ghost.provider {
+  width: 100%;
+  padding: 9px 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+button.ghost.provider:hover { border-color: var(--accent); color: var(--accent); }
+
+.methods { display: flex; flex-direction: column; gap: 6px; }
+.methods > .hint { margin: 0 0 8px 26px; }
+.method-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 14px 26px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+}
+.method-detail label { margin: 0; }
+.method-detail .hint { margin: 0; }

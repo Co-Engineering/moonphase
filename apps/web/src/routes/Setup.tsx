@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import * as api from '../lib/api'
 import { client } from '../lib/supabase'
+import { SignInMethods, draftFrom, type Draft } from '../components/SignInMethods'
 
 /**
  * First run.
@@ -20,13 +21,14 @@ interface Props {
 }
 
 export function Setup({ onDone }: Props) {
-  const [step, setStep] = useState<'account' | 'instance'>('account')
+  const [step, setStep] = useState<'account' | 'instance' | 'methods'>('account')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   // Wherever this page was loaded from is almost always the right answer, and
   // typing it again is a chance to get it wrong.
   const [address, setAddress] = useState(() => window.location.origin)
   const [signupOpen, setSignupOpen] = useState(false)
+  const [methods, setMethods] = useState<Draft>(() => draftFrom(null))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -45,15 +47,43 @@ export function Setup({ onDone }: Props) {
     setBusy(false)
   }
 
+  async function saveInstance(event: FormEvent) {
+    event.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      // Saved before the sign-in step, because the redirect URI those providers
+      // need is built from this address.
+      await api.completeSetup({
+        public_url: address.trim() || null,
+        signup_open: signupOpen,
+      })
+      setStep('methods')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function finish(event: FormEvent) {
     event.preventDefault()
     setBusy(true)
     setError(null)
     try {
-      await api.completeSetup({
-        public_url: address.trim() || null,
-        signup_open: signupOpen,
+      const saved = await api.saveAuthMethods({
+        ...methods,
+        // Blank means "keep what is stored", which is what a form that cannot
+        // show a secret back has to mean.
+        google_client_secret: methods.google_client_secret || null,
+        microsoft_client_secret: methods.microsoft_client_secret || null,
+        smtp_password: methods.smtp_password || null,
       })
+      if (saved.problems.length > 0) {
+        setError(saved.problems.join(' '))
+        setBusy(false)
+        return
+      }
       onDone()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -112,7 +142,7 @@ export function Setup({ onDone }: Props) {
               One more thing, and it is the only one.
             </p>
             <div className="card">
-              <form onSubmit={finish}>
+              <form onSubmit={saveInstance}>
                 {error && <div className="banner error">{error}</div>}
 
                 <label>
@@ -149,6 +179,30 @@ export function Setup({ onDone }: Props) {
                   either way.
                 </p>
 
+                <button className="primary" disabled={busy}>
+                  {busy ? 'Saving…' : 'Next'}
+                </button>
+              </form>
+            </div>
+          </>
+        )}
+
+        {step === 'methods' && (
+          <>
+            <p className="tagline">How should people sign in?</p>
+            <div className="card">
+              <form onSubmit={finish}>
+                {error && <div className="banner error">{error}</div>}
+                <SignInMethods
+                  draft={methods}
+                  onChange={setMethods}
+                  redirectUri={`${address.replace(/\/$/, '')}/auth/v1/callback`}
+                  addressMissing={!address.trim()}
+                />
+                <p className="hint">
+                  All of this can be changed later in Settings. Nothing here is written to
+                  a file on the server.
+                </p>
                 <button className="primary" disabled={busy}>
                   {busy ? 'Saving…' : 'Finish'}
                 </button>

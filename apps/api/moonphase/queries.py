@@ -1605,3 +1605,83 @@ async def mark_alerted_privileged(
         text(f"update usage_limits set {column} = :anchor where user_id = :u"),
         {"anchor": anchor, "u": user_id},
     )
+
+
+async def get_auth_methods_privileged(conn: AsyncConnection) -> dict[str, Any]:
+    """Everything needed to render GoTrue's configuration, secrets included."""
+    row = (
+        await conn.execute(
+            text(
+                """
+                select m.*, s.google_client_secret, s.microsoft_client_secret,
+                       s.smtp_password, i.public_url
+                  from auth_methods m
+                  cross join private.auth_secrets s
+                  cross join instance_settings i
+                 limit 1
+                """
+            )
+        )
+    ).first()
+    if row is None:
+        return {}
+    found = _row_to_dict(row)
+    for key in ("google_client_secret", "microsoft_client_secret", "smtp_password"):
+        if found.get(key):
+            found[key] = decrypt(found[key])
+    return found
+
+
+async def get_auth_methods(conn: AsyncConnection) -> dict[str, Any]:
+    """The half a client may see. No secrets, by construction."""
+    row = (await conn.execute(text("select * from auth_methods limit 1"))).first()
+    return _row_to_dict(row) if row is not None else {}
+
+
+async def set_auth_methods(
+    conn: AsyncConnection, *, fields: dict[str, Any]
+) -> dict[str, Any]:
+    result = await conn.execute(
+        text(
+            """
+            update auth_methods set
+              password_enabled    = :password_enabled,
+              magic_link_enabled  = :magic_link_enabled,
+              smtp_host           = :smtp_host,
+              smtp_port           = :smtp_port,
+              smtp_user           = :smtp_user,
+              smtp_sender         = :smtp_sender,
+              google_enabled      = :google_enabled,
+              google_client_id    = :google_client_id,
+              microsoft_enabled   = :microsoft_enabled,
+              microsoft_client_id = :microsoft_client_id,
+              microsoft_tenant    = :microsoft_tenant,
+              updated_at          = now()
+            returning *
+            """
+        ),
+        fields,
+    )
+    row = result.first()
+    if row is None:
+        raise PermissionError("Only an owner can change how people sign in.")
+    return _row_to_dict(row)
+
+
+async def set_auth_secrets_privileged(
+    conn: AsyncConnection, *, secrets: dict[str, str | None]
+) -> None:
+    """Only what was supplied. A blank field means "leave it alone", because a
+    write form cannot show a secret back and would otherwise erase it."""
+    sets, params = [], {}
+    for key, value in secrets.items():
+        if value is None:
+            continue
+        sets.append(f"{key} = :{key}")
+        params[key] = encrypt(value) if value else None
+    if not sets:
+        return
+    await conn.execute(
+        text(f"update private.auth_secrets set {', '.join(sets)}, updated_at = now()"),
+        params,
+    )

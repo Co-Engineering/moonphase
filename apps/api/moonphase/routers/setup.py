@@ -17,14 +17,17 @@ never what is configured.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import text
 
+from .. import authconfig, queries
 from ..auth import Principal, current_principal
 from ..db import service_session, user_session
-from ..schemas import SetupIn, SetupStateOut
+from ..schemas import AuthMethodsIn, AuthMethodsOut, SetupIn, SetupStateOut
 
 log = logging.getLogger(__name__)
 
@@ -158,3 +161,128 @@ async def tls_allowed(domain: str = Query(default="")) -> Response:
 
     log.info("refused a certificate for %r (configured: %r)", asked, configured or None)
     return Response(status_code=403)
+
+
+# --- how people sign in --------------------------------------------------------
+
+
+def _methods_from(row: dict) -> authconfig.AuthMethods:
+    return authconfig.AuthMethods(
+        password_enabled=bool(row.get("password_enabled", True)),
+        magic_link_enabled=bool(row.get("magic_link_enabled")),
+        smtp_host=row.get("smtp_host") or "",
+        smtp_port=int(row.get("smtp_port") or 587),
+        smtp_user=row.get("smtp_user") or "",
+        smtp_sender=row.get("smtp_sender") or "",
+        smtp_password=row.get("smtp_password") or "",
+        google_enabled=bool(row.get("google_enabled")),
+        google_client_id=row.get("google_client_id") or "",
+        google_client_secret=row.get("google_client_secret") or "",
+        microsoft_enabled=bool(row.get("microsoft_enabled")),
+        microsoft_client_id=row.get("microsoft_client_id") or "",
+        microsoft_client_secret=row.get("microsoft_client_secret") or "",
+        microsoft_tenant=row.get("microsoft_tenant") or "common",
+        public_url=row.get("public_url") or "",
+    )
+
+
+async def publish_auth_config() -> list[str]:
+    """Render the current settings and hand them to the auth container.
+
+    Written only when it has actually changed, because the container restarts
+    whenever the file does and rewriting identical bytes on every save would
+    sign everyone out for no reason.
+    """
+    async with service_session() as conn:
+        row = await queries.get_auth_methods_privileged(conn)
+    methods = _methods_from(row)
+    rendered = authconfig.render(methods)
+
+    await asyncio.to_thread(_write_config, rendered)
+    return authconfig.usable(methods)
+
+
+def _write_config(rendered: str) -> None:
+    """Off the event loop: small, but a write to a shared volume all the same."""
+    path = Path(authconfig.CONFIG_PATH)
+    try:
+        if path.exists() and path.read_text() == rendered:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(rendered)
+        log.info("wrote auth configuration; the auth service will restart")
+    except OSError as exc:
+        # Running the API outside the compose stack, which is development. The
+        # settings are still saved; they simply are not handed anywhere.
+        log.warning("could not write %s (%s)", authconfig.CONFIG_PATH, exc)
+
+
+@router.get("/methods", response_model=AuthMethodsOut)
+async def read_methods() -> AuthMethodsOut:
+    """Which ways in exist.
+
+    Unauthenticated, and deliberately thin: a sign-in screen has to know which
+    buttons to draw before anyone has signed in. It lists what is enabled and
+    working, and nothing about how any of it is configured.
+    """
+    async with service_session() as conn:
+        row = await queries.get_auth_methods_privileged(conn)
+    methods = _methods_from(row)
+    return AuthMethodsOut(
+        enabled=authconfig.usable(methods),
+        password_enabled=methods.password_enabled,
+        magic_link_enabled=methods.magic_link_enabled,
+        google_enabled=methods.google_enabled,
+        microsoft_enabled=methods.microsoft_enabled,
+        smtp_host=methods.smtp_host,
+        smtp_port=methods.smtp_port,
+        smtp_user=methods.smtp_user,
+        smtp_sender=methods.smtp_sender,
+        google_client_id=methods.google_client_id,
+        microsoft_client_id=methods.microsoft_client_id,
+        microsoft_tenant=methods.microsoft_tenant,
+        redirect_uri=authconfig.redirect_uri(methods.public_url),
+        problems=authconfig.incomplete(methods),
+    )
+
+
+@router.put("/methods", response_model=AuthMethodsOut)
+async def write_methods(
+    payload: AuthMethodsIn, principal: Principal = Depends(current_principal)
+) -> AuthMethodsOut:
+    """Change how people sign in, and hand the result to the auth service."""
+    async with user_session(principal.claims) as conn:
+        try:
+            await queries.set_auth_methods(
+                conn,
+                fields={
+                    "password_enabled": payload.password_enabled,
+                    "magic_link_enabled": payload.magic_link_enabled,
+                    "smtp_host": payload.smtp_host,
+                    "smtp_port": payload.smtp_port,
+                    "smtp_user": payload.smtp_user,
+                    "smtp_sender": payload.smtp_sender,
+                    "google_enabled": payload.google_enabled,
+                    "google_client_id": payload.google_client_id,
+                    "microsoft_enabled": payload.microsoft_enabled,
+                    "microsoft_client_id": payload.microsoft_client_id,
+                    "microsoft_tenant": payload.microsoft_tenant or "common",
+                },
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    # Secrets go through the service role, because `private` is unreachable
+    # from the authenticated one — which is the point of it.
+    async with service_session() as conn:
+        await queries.set_auth_secrets_privileged(
+            conn,
+            secrets={
+                "google_client_secret": payload.google_client_secret,
+                "microsoft_client_secret": payload.microsoft_client_secret,
+                "smtp_password": payload.smtp_password,
+            },
+        )
+
+    await publish_auth_config()
+    return await read_methods()

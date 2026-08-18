@@ -66,6 +66,13 @@ services:
       GOTRUE_MAILER_AUTOCONFIRM: ${MOONPHASE_MAILER_AUTOCONFIRM:-true}
       GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
       GOTRUE_LOG_LEVEL: warn
+    # Sign-in methods are configured in the setup screen and written here by the
+    # API. The entrypoint reloads when that file changes, so turning on Google
+    # does not mean editing anything on the server.
+    entrypoint: ["sh", "/entrypoint.sh"]
+    volumes:
+      - ./docker/auth-entrypoint.sh:/entrypoint.sh:ro
+      - auth-config:/config
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:9999/health"]
       interval: 10s
@@ -147,6 +154,9 @@ services:
       # Managed SSH keys are encrypted in the database, but asyncssh writes
       # known_hosts and control files; give it somewhere durable.
       - api-state:/home/moonphase/.moonphase
+      # Where the generated auth configuration is written. Shared with the auth
+      # container, which reloads when it changes.
+      - auth-config:/config
 
   proxy:
     image: caddy:2-alpine
@@ -169,6 +179,7 @@ services:
 
 volumes:
   db-data:
+  auth-config:
   api-state:
   caddy-data:
   caddy-config:

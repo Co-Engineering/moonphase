@@ -1,4 +1,5 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
+import * as api from '../lib/api'
 import { client } from '../lib/supabase'
 
 export function Auth() {
@@ -8,6 +9,50 @@ export function Auth() {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Which ways in this instance actually offers. Drawing a button for a
+  // provider that is not configured sends people to an error page belonging to
+  // someone else.
+  const [methods, setMethods] = useState<string[]>(['password'])
+
+  useEffect(() => {
+    let cancelled = false
+    void api
+      .authMethods()
+      .then((found) => {
+        if (!cancelled && found.enabled.length > 0) setMethods(found.enabled)
+      })
+      .catch(() => {
+        // An instance too old to answer offers what it always did.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const oauth = async (provider: 'google' | 'azure') => {
+    setError(null)
+    const { error: authError } = await client().auth.signInWithOAuth({
+      provider,
+      options: { redirectTo: window.location.origin },
+    })
+    if (authError) setError(authError.message)
+  }
+
+  const magicLink = async () => {
+    if (!email) {
+      setError('Enter your email first, and a link will be sent to it.')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    const { error: authError } = await client().auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: window.location.origin },
+    })
+    if (authError) setError(authError.message)
+    else setNotice('Check your email — the link signs you in.')
+    setBusy(false)
+  }
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -58,21 +103,63 @@ export function Auth() {
               />
             </label>
 
-            <label>
-              <span>Password</span>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
-                minLength={8}
-                required
-              />
-            </label>
+            {methods.includes('password') && (
+              <label>
+                <span>Password</span>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
+                  minLength={8}
+                  required
+                />
+              </label>
+            )}
 
-            <button className="primary" type="submit" disabled={busy} style={{ width: '100%' }}>
-              {busy ? 'Working…' : mode === 'signin' ? 'Sign in' : 'Create account'}
-            </button>
+            {methods.includes('password') && (
+              <button className="primary" type="submit" disabled={busy} style={{ width: '100%' }}>
+                {busy ? 'Working…' : mode === 'signin' ? 'Sign in' : 'Create account'}
+              </button>
+            )}
+
+            {methods.includes('magic_link') && (
+              <button
+                type="button"
+                className={methods.includes('password') ? 'ghost' : 'primary'}
+                disabled={busy}
+                style={{ width: '100%' }}
+                onClick={() => void magicLink()}
+              >
+                Email me a link
+              </button>
+            )}
+
+            {(methods.includes('google') || methods.includes('microsoft')) && (
+              <>
+                {methods.includes('password') && <div className="or">or</div>}
+                {methods.includes('google') && (
+                  <button
+                    type="button"
+                    className="ghost provider"
+                    disabled={busy}
+                    onClick={() => void oauth('google')}
+                  >
+                    Continue with Google
+                  </button>
+                )}
+                {methods.includes('microsoft') && (
+                  <button
+                    type="button"
+                    className="ghost provider"
+                    disabled={busy}
+                    onClick={() => void oauth('azure')}
+                  >
+                    Continue with Microsoft
+                  </button>
+                )}
+              </>
+            )}
           </form>
 
           <div className="auth-toggle">

@@ -737,6 +737,47 @@ class SetupIn(BaseModel):
     signup_open: bool = False
 
 
+class AuthMethodsOut(BaseModel):
+    """How people may sign in. Never carries a secret."""
+
+    # Enabled *and* working. A provider switched on without its credentials
+    # would render a button that fails somewhere the person has never heard of.
+    enabled: list[str] = Field(default_factory=list)
+    password_enabled: bool = True
+    magic_link_enabled: bool = False
+    google_enabled: bool = False
+    microsoft_enabled: bool = False
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_sender: str = ""
+    google_client_id: str = ""
+    microsoft_client_id: str = ""
+    microsoft_tenant: str = "common"
+    # What to paste into Google's and Microsoft's consoles.
+    redirect_uri: str = ""
+    problems: list[str] = Field(default_factory=list)
+
+
+class AuthMethodsIn(BaseModel):
+    password_enabled: bool = True
+    magic_link_enabled: bool = False
+    smtp_host: str | None = None
+    smtp_port: int | None = Field(default=587, ge=1, le=65535)
+    smtp_user: str | None = None
+    smtp_sender: str | None = None
+    google_enabled: bool = False
+    google_client_id: str | None = None
+    microsoft_enabled: bool = False
+    microsoft_client_id: str | None = None
+    microsoft_tenant: str | None = "common"
+    # Omitted rather than blanked to keep an existing one: a form cannot show a
+    # secret back, so an empty field must not mean "erase it".
+    google_client_secret: str | None = None
+    microsoft_client_secret: str | None = None
+    smtp_password: str | None = None
+
+
 class HealthOut(BaseModel):
     status: str
     version: str

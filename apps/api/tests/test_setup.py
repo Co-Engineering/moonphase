@@ -8,6 +8,13 @@ create an account.
 
 from __future__ import annotations
 
+from moonphase.authconfig import (
+    AuthMethods,
+    incomplete,
+    redirect_uri,
+    render,
+    usable,
+)
 from moonphase.routers.setup import host_of
 
 
@@ -34,3 +41,82 @@ def test_nothing_reduces_to_nothing() -> None:
     # Which the endpoint answers 400 to, rather than approving.
     assert host_of("") == ""
     assert host_of("   ") == ""
+
+
+# --- how people sign in --------------------------------------------------------
+
+
+def test_password_alone_needs_nothing_configured() -> None:
+    assert usable(AuthMethods()) == ["password"]
+    assert incomplete(AuthMethods()) == []
+
+
+def test_a_provider_without_credentials_is_not_offered() -> None:
+    """The failure it prevents: a button that sends someone to Google's error
+    page, with nothing to suggest it was misconfigured here."""
+    half = AuthMethods(google_enabled=True, google_client_id="cid")
+
+    assert "google" not in usable(half)
+    assert any("client ID and secret" in problem for problem in incomplete(half))
+
+
+def test_a_provider_with_both_halves_is_offered() -> None:
+    whole = AuthMethods(google_enabled=True, google_client_id="cid", google_client_secret="s")
+
+    assert usable(whole) == ["password", "google"]
+    assert incomplete(whole) == []
+
+
+def test_magic_links_need_somewhere_to_send_from() -> None:
+    assert "magic_link" not in usable(AuthMethods(magic_link_enabled=True))
+    assert any("SMTP" in problem for problem in incomplete(AuthMethods(magic_link_enabled=True)))
+
+    working = AuthMethods(
+        magic_link_enabled=True, smtp_host="smtp.example.com", smtp_sender="a@example.com"
+    )
+    assert "magic_link" in usable(working)
+
+
+def test_turning_everything_off_is_reported_rather_than_allowed() -> None:
+    """It would lock everyone out, including whoever is doing it."""
+    problems = incomplete(AuthMethods(password_enabled=False))
+
+    assert any("nobody could get in" in problem.lower() for problem in problems)
+
+
+def test_the_rendered_config_turns_disabled_providers_off_explicitly() -> None:
+    """A container keeps whatever it started with, so omitting the line would
+    leave a provider on until the next full recreate."""
+    rendered = render(AuthMethods())
+
+    assert "GOTRUE_EXTERNAL_GOOGLE_ENABLED='false'" in rendered
+    assert "GOTRUE_EXTERNAL_AZURE_ENABLED='false'" in rendered
+
+
+def test_the_rendered_config_is_shell_safe() -> None:
+    """It is sourced by the entrypoint, so a quote in a secret must not end the
+    value — or worse, start a command."""
+    rendered = render(AuthMethods(google_client_secret="it's; rm -rf /"))
+
+    assert "rm -rf /" in rendered
+    assert "\n rm -rf" not in rendered
+    assert "'it'\\''s; rm -rf /'" in rendered
+
+
+def test_autoconfirm_follows_whether_mail_can_be_sent() -> None:
+    """Confirmation on an instance with no SMTP locks out password signup,
+    because GoTrue insists on confirming an address it cannot email."""
+    assert "GOTRUE_MAILER_AUTOCONFIRM='true'" in render(AuthMethods())
+    assert "GOTRUE_MAILER_AUTOCONFIRM='false'" in render(
+        AuthMethods(magic_link_enabled=True, smtp_host="h", smtp_sender="s@e.com")
+    )
+
+
+def test_the_redirect_uri_is_what_the_provider_must_be_given() -> None:
+    assert redirect_uri("https://moonphase.example.com") == (
+        "https://moonphase.example.com/auth/v1/callback"
+    )
+    # A trailing slash would make it not match what was pasted into Google.
+    assert redirect_uri("https://moonphase.example.com/") == (
+        "https://moonphase.example.com/auth/v1/callback"
+    )
