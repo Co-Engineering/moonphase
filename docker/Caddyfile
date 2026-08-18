@@ -2,7 +2,7 @@
 #
 # The client uses supabase-js for sign-in, which calls `${SUPABASE_URL}/auth/v1/…`.
 # GoTrue serves those routes at its root, so something has to strip the prefix.
-# A full Supabase deployment uses Kong for this; five lines of Caddy do the same
+# A full Supabase deployment uses Kong for this; a few lines of Caddy do the same
 # job here without a second configuration language.
 #
 # Routing everything through one origin is also what makes the phone client
@@ -17,11 +17,14 @@
 	}
 }
 
+# Always supplied by compose, which defaults it to :8471. Deliberately no
+# default here: the form Caddy needs for a ":port" default is {$VAR::8471}, and
+# it mis-parses that second colon into a stray directive that fails the load.
+#
 # A bare port serves plain HTTP, which is right for trying it out on a laptop.
-# Set MOONPHASE_SITE to a hostname and Caddy provisions a Let's Encrypt
-# certificate for it on its own, listening on 443 and redirecting 80 — no
-# configuration to edit, no certificate to install, nothing to renew.
-{$MOONPHASE_SITE::8471} {
+# A hostname makes Caddy provision a Let's Encrypt certificate for it on its
+# own, listening on 443 and redirecting 80 — nothing to edit, install or renew.
+{$MOONPHASE_SITE} {
 	# handle_path strips the matched prefix, which is exactly the rewrite
 	# GoTrue needs: /auth/v1/token -> /token
 	handle_path /auth/v1/* {
@@ -29,11 +32,7 @@
 	}
 
 	handle {
-		reverse_proxy api# A bare port serves plain HTTP, which is right for trying it out on a laptop.
-# Set MOONPHASE_SITE to a hostname and Caddy provisions a Let's Encrypt
-# certificate for it on its own, listening on 443 and redirecting 80 — no
-# configuration to edit, no certificate to install, nothing to renew.
-{$MOONPHASE_SITE::8471} {
+		reverse_proxy api:8471 {
 			# The terminal and the feed are WebSockets. Caddy upgrades them
 			# without configuration, but buffering would make a live terminal
 			# arrive in batches, so flushing is forced.

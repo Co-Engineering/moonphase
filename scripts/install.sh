@@ -106,7 +106,10 @@ ANON_KEY=$(existing SUPABASE_ANON_KEY)
 [ -n "${ANON_KEY:-}" ] || ANON_KEY=$(supabase_key anon "$JWT_SECRET")
 
 PUBLIC_URL=$(existing MOONPHASE_PUBLIC_URL)
-[ -n "${PUBLIC_URL:-}" ] || PUBLIC_URL="http://localhost:${PORT}"
+# The environment, then the default. Every other setting here reads the
+# environment and this one did not, so `MOONPHASE_PUBLIC_URL=https://... | sh`
+# was accepted in silence and installed a localhost deployment.
+[ -n "${PUBLIC_URL:-}" ] || PUBLIC_URL="${MOONPHASE_PUBLIC_URL:-http://localhost:${PORT}}"
 
 # An https public URL means a real deployment behind a real name, so Caddy is
 # pointed at that name and provisions its own certificate. Derived rather than
