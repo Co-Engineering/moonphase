@@ -154,6 +154,10 @@ services:
     depends_on:
       - api
       - auth
+    environment:
+      # A hostname here turns on automatic HTTPS. Set by the installer from
+      # MOONPHASE_PUBLIC_URL, so there is one thing to get right rather than two.
+      MOONPHASE_SITE: ${MOONPHASE_SITE:-:8471}
     ports:
       - "${MOONPHASE_BIND:-127.0.0.1}:${MOONPHASE_PORT:-8471}:8471"
     volumes:

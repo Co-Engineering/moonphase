@@ -108,6 +108,23 @@ ANON_KEY=$(existing SUPABASE_ANON_KEY)
 PUBLIC_URL=$(existing MOONPHASE_PUBLIC_URL)
 [ -n "${PUBLIC_URL:-}" ] || PUBLIC_URL="http://localhost:${PORT}"
 
+# An https public URL means a real deployment behind a real name, so Caddy is
+# pointed at that name and provisions its own certificate. Derived rather than
+# asked for: one thing to get right instead of two that have to agree.
+case "$PUBLIC_URL" in
+  https://*)
+    SITE=${PUBLIC_URL#https://}
+    SITE=${SITE%%/*}
+    TLS=1
+    COMPOSE_FILES="docker-compose.yml:docker-compose.tls.yml"
+    ;;
+  *)
+    SITE=":${PORT}"
+    TLS=0
+    COMPOSE_FILES="docker-compose.yml"
+    ;;
+esac
+
 GITHUB_CLIENT_ID=$(existing MOONPHASE_GITHUB_CLIENT_ID)
 
 IMAGE=$(existing MOONPHASE_IMAGE)
@@ -149,6 +166,15 @@ MOONPHASE_IMAGE=${IMAGE}
 # tip of main. Pinning an exact version means upgrades happen when you change
 # this line rather than whenever you happen to pull.
 MOONPHASE_VERSION=${VERSION}
+
+# Which compose files describe this install. Read by docker compose itself, so
+# running it later by hand does the same thing this script did — without it, an
+# HTTPS deployment would silently come back up on plain HTTP.
+COMPOSE_FILE=${COMPOSE_FILES}
+
+# What Caddy serves. A bare :port is plain HTTP; a hostname makes it provision
+# a certificate for that name on its own.
+MOONPHASE_SITE=${SITE}
 
 # Interface and port the proxy publishes on. 127.0.0.1 keeps it to this
 # machine; set 0.0.0.0 once something terminates TLS in front of it.
@@ -194,20 +220,26 @@ chmod 600 .env
 # identical bits. Building is for working on Moonphase, or for a commit that
 # has not been published yet.
 
-COMPOSE="docker compose"
-BUILD_COMPOSE="docker compose -f docker-compose.yml -f docker-compose.build.yml"
 
 build_it() {
   info "building from source (a few minutes the first time)"
-  $BUILD_COMPOSE build api
-  COMPOSE="$BUILD_COMPOSE"
+  # Recorded in .env so a later `docker compose up -d` builds too rather than
+  # trying to pull an image that was never published.
+  if ! grep -q "docker-compose.build.yml" .env; then
+    sed -i.tmp "s|^COMPOSE_FILE=.*|COMPOSE_FILE=${COMPOSE_FILES}:docker-compose.build.yml|" .env
+    rm -f .env.tmp
+  fi
+  docker compose build api
 }
 
 if [ "${MOONPHASE_BUILD:-0}" = "1" ]; then
   build_it
 else
   info "pulling the image"
-  if ! docker compose pull --quiet api 2>/dev/null; then
+  # Both streams, not just stderr: compose reports some configuration
+  # complaints on stdout, and one scrolling past a working install is exactly
+  # what makes people think it went wrong. Only the exit code is used.
+  if ! docker compose pull --quiet api >/dev/null 2>&1; then
     warn "could not pull $IMAGE — building from source instead"
     build_it
   fi
@@ -222,7 +254,7 @@ if [ -z "${VAPID_PUBLIC:-}" ]; then
   # stdin, and `docker compose run` attaches to it by default — so it swallowed
   # the rest of the file and the install stopped here without an error, in the
   # one path the documentation actually tells people to use.
-  if keys=$($COMPOSE run --rm --no-deps -T --entrypoint python api \
+  if keys=$(docker compose run --rm --no-deps -T --entrypoint python api \
       /app/scripts/gen_vapid.py 2>/dev/null </dev/null); then
     # gen_vapid.py prints VAR=value lines ready for .env.
     printf '%s\n' "$keys" | grep -E '^MOONPHASE_VAPID_(PUBLIC|PRIVATE)_KEY=' > .vapid.tmp || true
@@ -241,11 +273,22 @@ fi
 # --- run --------------------------------------------------------------------
 
 info "starting"
-$COMPOSE up -d
+docker compose up -d
 
 info "waiting for it to come up"
+# In TLS mode the public address has no certificate yet — DNS usually points
+# here only after this finishes — so readiness is taken from the container
+# itself rather than from a request that cannot succeed.
+ready() {
+  if [ "$TLS" = "1" ]; then
+    [ "$(docker compose ps api --format '{{.Health}}' 2>/dev/null | head -1)" = "healthy" ]
+  else
+    curl -fsS "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1
+  fi
+}
+
 attempt=0
-until curl -fsS "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1; do
+until ready; do
   attempt=$((attempt + 1))
   if [ "$attempt" -gt 90 ]; then
     printf '\n'
@@ -258,7 +301,14 @@ until curl -fsS "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1; do
 done
 
 printf '\n'
-bold "Moonphase is running at http://127.0.0.1:${PORT}"
+if [ "$TLS" = "1" ]; then
+  bold "Moonphase is running, and will answer on ${PUBLIC_URL}"
+  printf '\n'
+  printf '  Point DNS at this machine, then open it. Caddy gets the\n'
+  printf '  certificate by itself the first time someone does.\n'
+else
+  bold "Moonphase is running at http://127.0.0.1:${PORT}"
+fi
 printf '\n'
 printf '  Open it and create an account — the first one is yours.\n'
 printf '\n'

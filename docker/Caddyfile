@@ -17,7 +17,11 @@
 	}
 }
 
-:8471 {
+# A bare port serves plain HTTP, which is right for trying it out on a laptop.
+# Set MOONPHASE_SITE to a hostname and Caddy provisions a Let's Encrypt
+# certificate for it on its own, listening on 443 and redirecting 80 — no
+# configuration to edit, no certificate to install, nothing to renew.
+{$MOONPHASE_SITE::8471} {
 	# handle_path strips the matched prefix, which is exactly the rewrite
 	# GoTrue needs: /auth/v1/token -> /token
 	handle_path /auth/v1/* {
@@ -25,7 +29,11 @@
 	}
 
 	handle {
-		reverse_proxy api:8471 {
+		reverse_proxy api# A bare port serves plain HTTP, which is right for trying it out on a laptop.
+# Set MOONPHASE_SITE to a hostname and Caddy provisions a Let's Encrypt
+# certificate for it on its own, listening on 443 and redirecting 80 — no
+# configuration to edit, no certificate to install, nothing to renew.
+{$MOONPHASE_SITE::8471} {
 			# The terminal and the feed are WebSockets. Caddy upgrades them
 			# without configuration, but buffering would make a live terminal
 			# arrive in batches, so flushing is forced.

@@ -1,0 +1,15 @@
+# Automatic HTTPS.
+#
+# Applied by the installer when MOONPHASE_PUBLIC_URL is an https address, so
+# nobody has to know this file exists. Caddy needs 80 and 443 to answer the ACME
+# challenge and serve the certificate it gets; the plain-HTTP port is dropped
+# because publishing both would be two answers to the same question.
+#
+# The certificate lives in the caddy-data volume, so a restart does not ask
+# Let's Encrypt for another one.
+
+services:
+  proxy:
+    ports: !override
+      - "80:80"
+      - "443:443"
