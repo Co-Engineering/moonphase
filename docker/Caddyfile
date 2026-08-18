@@ -1,32 +1,46 @@
-# One address for the whole product.
+# One address for the whole product, with a certificate it obtains itself.
 #
 # The client uses supabase-js for sign-in, which calls `${SUPABASE_URL}/auth/v1/…`.
 # GoTrue serves those routes at its root, so something has to strip the prefix.
-# A full Supabase deployment uses Kong for this; a few lines of Caddy do the same
-# job here without a second configuration language.
+# A full Supabase deployment uses Kong for this; a few lines of Caddy do the
+# same job without a second configuration language.
 #
 # Routing everything through one origin is also what makes the phone client
 # work: same origin means no CORS to configure, and the service worker lands at
 # the root scope that push requires.
-
 {
 	admin off
-	# Access logs for a self-hosted tool are mostly noise; errors still surface.
 	log {
 		level ERROR
 	}
+
+	# Certificates are obtained on demand, for whatever hostname arrives, after
+	# asking the API whether that name is the configured one. That is what lets
+	# someone type their domain into a setup screen and have HTTPS work: no file
+	# to edit, no container to restart, and nothing about the address baked into
+	# the image or the compose file.
+	#
+	# The ask endpoint refuses anything unconfigured, so pointing a DNS record
+	# at this machine does not let a stranger mint certificates against it.
+	on_demand_tls {
+		ask http://api:8471/api/setup/tls-allowed
+	}
 }
 
-# Always supplied by compose, which defaults it to :8471. Deliberately no
-# default here: the form Caddy needs for a ":port" default is {$VAR::8471}, and
-# it mis-parses that second colon into a stray directive that fails the load.
-#
-# A bare port serves plain HTTP, which is right for trying it out on a laptop.
-# A hostname makes Caddy provision a Let's Encrypt certificate for it on its
-# own, listening on 443 and redirecting 80 — nothing to edit, install or renew.
-{$MOONPHASE_SITE} {
-	# handle_path strips the matched prefix, which is exactly the rewrite
-	# GoTrue needs: /auth/v1/token -> /token
+(moonphase) {
+	# GoTrue's own signup switch is an environment variable, so turning it off
+	# would mean restarting a container. Asking per request keeps the decision
+	# in the database, where the setup screen can change it.
+	handle /auth/v1/signup {
+		forward_auth api:8471 {
+			uri /api/setup/signup-allowed
+		}
+		rewrite * /signup
+		reverse_proxy auth:9999
+	}
+
+	# handle_path strips the matched prefix, which is the rewrite GoTrue needs:
+	# /auth/v1/token -> /token
 	handle_path /auth/v1/* {
 		reverse_proxy auth:9999
 	}
@@ -39,4 +53,18 @@
 			flush_interval -1
 		}
 	}
+}
+
+# Plain HTTP, always. On a laptop this is the whole thing; in front of a domain
+# Caddy redirects it to HTTPS by itself.
+:8471 {
+	import moonphase
+}
+
+# HTTPS for any hostname the API vouches for.
+:443 {
+	tls {
+		on_demand
+	}
+	import moonphase
 }

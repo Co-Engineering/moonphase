@@ -820,3 +820,27 @@ export async function sessionSummary(projectId: string, session: string) {
     `/api/projects/${projectId}/sessions/${encodeURIComponent(session)}/summary`,
   )
 }
+
+// --- first run ---------------------------------------------------------------
+
+export interface SetupState {
+  needs_setup: boolean
+  signup_open: boolean
+}
+
+/** Unauthenticated: the client must know whether to show setup or sign-in. */
+export async function setupState() {
+  const response = await fetch(`${currentHost()}/api/setup`)
+  if (!response.ok) throw new ApiError(response.status, 'Could not reach this host.')
+  return (await response.json()) as SetupState
+}
+
+export async function completeSetup(input: {
+  public_url: string | null
+  signup_open: boolean
+}) {
+  return request<SetupState>('/api/setup', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}

@@ -24,6 +24,7 @@ from .routers import (
     projects,
     review,
     servers,
+    setup,
     shares,
     terminal,
     usage,
@@ -104,6 +105,7 @@ def create_app() -> FastAPI:
 
     app.include_router(meta.router)
     app.include_router(servers.router)
+    app.include_router(setup.router)
     app.include_router(projects.router)
     app.include_router(profile_router.router)
     app.include_router(preview_router.router)

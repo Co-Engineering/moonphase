@@ -4,14 +4,10 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install.sh | sh
 #
-# For a real deployment, give it the address people will use. It sets up
-# automatic HTTPS for that name by itself:
-#
-#   curl -fsSL .../install.sh | sh -s -- https://moonphase.example.com
-#
-# Note the `sh -s --`. Writing `MOONPHASE_PUBLIC_URL=... curl ... | sh` looks
-# right and is not: the assignment applies to curl, not to the shell reading
-# the script, so the setting is silently lost.
+# There is nothing to configure. Docker is installed if missing, every secret is
+# generated, and the address and first account are set up in the browser
+# afterwards — including HTTPS, which the proxy obtains for whatever domain you
+# enter there.
 #
 # Docker is the only requirement. Everything else — the database, sign-in, the
 # keys that encrypt your SSH credentials — is created here.
@@ -28,13 +24,6 @@ REPO="${MOONPHASE_REPO:-https://github.com/oliversvane/moonphase.git}"
 BRANCH="${MOONPHASE_BRANCH:-main}"
 DIR="${MOONPHASE_DIR:-moonphase}"
 PORT="${MOONPHASE_PORT:-8471}"
-# A URL as the first argument, which is the only way to pass one through a pipe
-# without exporting it first.
-case "${1:-}" in
-  http://*|https://*) MOONPHASE_PUBLIC_URL="$1" ;;
-  "") ;;
-  *) printf 'Usage: install.sh [https://your.address]\n' >&2; exit 2 ;;
-esac
 BIND="${MOONPHASE_BIND:-127.0.0.1}"
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -44,12 +33,44 @@ die() { printf '\033[31merror\033[0m %s\n' "$*" >&2; exit 1; }
 
 # --- requirements -----------------------------------------------------------
 
-command -v docker >/dev/null 2>&1 || die "Docker is required: https://docs.docker.com/get-docker/"
-docker compose version >/dev/null 2>&1 \
-  || die "Docker Compose v2 is required (it ships with modern Docker Desktop and docker-ce)."
-docker info >/dev/null 2>&1 \
-  || die "Docker is installed but not running, or this user cannot reach it."
+command -v curl >/dev/null 2>&1 || die "curl is required."
 command -v openssl >/dev/null 2>&1 || die "openssl is required to generate keys."
+
+as_root() {
+  if [ "$(id -u)" = "0" ]; then "$@"; else sudo "$@"; fi
+}
+
+# Docker, installed rather than demanded. "Install Docker first" is a second
+# command, and this is supposed to be one.
+if ! command -v docker >/dev/null 2>&1; then
+  if [ "$(id -u)" != "0" ] && ! command -v sudo >/dev/null 2>&1; then
+    die "Docker is not installed, and installing it needs root. Run this as root, or install Docker yourself: https://docs.docker.com/get-docker/"
+  fi
+  info "installing Docker"
+  curl -fsSL https://get.docker.com | as_root sh >/dev/null 2>&1 \
+    || die "Could not install Docker. Install it yourself and run this again: https://docs.docker.com/get-docker/"
+  # So the next login does not need sudo. It does not affect this shell, which
+  # is why the invocation is worked out below rather than assumed.
+  [ "$(id -u)" = "0" ] || as_root usermod -aG docker "$(id -un)" >/dev/null 2>&1 || true
+  as_root systemctl enable --now docker >/dev/null 2>&1 || true
+fi
+
+# Which invocation actually works. Immediately after an install the current
+# shell is not yet in the docker group, so sudo is the only way until the next
+# login — and silently failing at the first `docker compose` would look like the
+# install broke.
+if docker info >/dev/null 2>&1; then
+  DOCKER="docker"
+  SUDO_NOTE=""
+elif [ "$(id -u)" != "0" ] && sudo docker info >/dev/null 2>&1; then
+  DOCKER="sudo docker"
+  SUDO_NOTE=" (log out and back in to drop the sudo)"
+else
+  die "Docker is installed but not usable. Is the daemon running?"
+fi
+
+$DOCKER compose version >/dev/null 2>&1 \
+  || die "Docker Compose v2 is required (it ships with modern docker-ce and Docker Desktop)."
 
 # --- source -----------------------------------------------------------------
 # Running from inside a checkout is the common case for a second run.
@@ -121,28 +142,7 @@ PG_PASSWORD=$(existing POSTGRES_PASSWORD)
 ANON_KEY=$(existing SUPABASE_ANON_KEY)
 [ -n "${ANON_KEY:-}" ] || ANON_KEY=$(supabase_key anon "$JWT_SECRET")
 
-PUBLIC_URL=$(existing MOONPHASE_PUBLIC_URL)
-# The environment, then the default. Every other setting here reads the
-# environment and this one did not, so `MOONPHASE_PUBLIC_URL=https://... | sh`
-# was accepted in silence and installed a localhost deployment.
-[ -n "${PUBLIC_URL:-}" ] || PUBLIC_URL="${MOONPHASE_PUBLIC_URL:-http://localhost:${PORT}}"
-
-# An https public URL means a real deployment behind a real name, so Caddy is
-# pointed at that name and provisions its own certificate. Derived rather than
-# asked for: one thing to get right instead of two that have to agree.
-case "$PUBLIC_URL" in
-  https://*)
-    SITE=${PUBLIC_URL#https://}
-    SITE=${SITE%%/*}
-    TLS=1
-    COMPOSE_FILES="docker-compose.yml:docker-compose.tls.yml"
-    ;;
-  *)
-    SITE=":${PORT}"
-    TLS=0
-    COMPOSE_FILES="docker-compose.yml"
-    ;;
-esac
+COMPOSE_FILES="docker-compose.yml"
 
 GITHUB_CLIENT_ID=$(existing MOONPHASE_GITHUB_CLIENT_ID)
 
@@ -172,11 +172,6 @@ POSTGRES_DB=postgres
 SUPABASE_JWT_SECRET=${JWT_SECRET}
 SUPABASE_ANON_KEY=${ANON_KEY}
 
-# Where people reach this install. Change it to your real address — the client
-# is served from here and signs in against the same origin, so it has to be
-# somewhere a browser can actually get to.
-MOONPHASE_PUBLIC_URL=${PUBLIC_URL}
-
 # Where the image comes from. ghcr.io does not rate-limit anonymous pulls;
 # oliversvanecoec/moonphase on Docker Hub is the same image, mirrored.
 MOONPHASE_IMAGE=${IMAGE}
@@ -190,10 +185,6 @@ MOONPHASE_VERSION=${VERSION}
 # running it later by hand does the same thing this script did — without it, an
 # HTTPS deployment would silently come back up on plain HTTP.
 COMPOSE_FILE=${COMPOSE_FILES}
-
-# What Caddy serves. A bare :port is plain HTTP; a hostname makes it provision
-# a certificate for that name on its own.
-MOONPHASE_SITE=${SITE}
 
 # Interface and port the proxy publishes on. 127.0.0.1 keeps it to this
 # machine; set 0.0.0.0 once something terminates TLS in front of it.
@@ -248,7 +239,7 @@ build_it() {
     sed -i.tmp "s|^COMPOSE_FILE=.*|COMPOSE_FILE=${COMPOSE_FILES}:docker-compose.build.yml|" .env
     rm -f .env.tmp
   fi
-  docker compose build api
+  $DOCKER compose build api
 }
 
 if [ "${MOONPHASE_BUILD:-0}" = "1" ]; then
@@ -258,7 +249,7 @@ else
   # Both streams, not just stderr: compose reports some configuration
   # complaints on stdout, and one scrolling past a working install is exactly
   # what makes people think it went wrong. Only the exit code is used.
-  if ! docker compose pull --quiet api >/dev/null 2>&1; then
+  if ! $DOCKER compose pull --quiet api >/dev/null 2>&1; then
     warn "could not pull $IMAGE — building from source instead"
     build_it
   fi
@@ -273,7 +264,7 @@ if [ -z "${VAPID_PUBLIC:-}" ]; then
   # stdin, and `docker compose run` attaches to it by default — so it swallowed
   # the rest of the file and the install stopped here without an error, in the
   # one path the documentation actually tells people to use.
-  if keys=$(docker compose run --rm --no-deps -T --entrypoint python api \
+  if keys=$($DOCKER compose run --rm --no-deps -T --entrypoint python api \
       /app/scripts/gen_vapid.py 2>/dev/null </dev/null); then
     # gen_vapid.py prints VAR=value lines ready for .env.
     printf '%s\n' "$keys" | grep -E '^MOONPHASE_VAPID_(PUBLIC|PRIVATE)_KEY=' > .vapid.tmp || true
@@ -292,50 +283,31 @@ fi
 # --- run --------------------------------------------------------------------
 
 info "starting"
-docker compose up -d
+$DOCKER compose up -d
 
 info "waiting for it to come up"
-# In TLS mode the public address has no certificate yet — DNS usually points
-# here only after this finishes — so readiness is taken from the container
-# itself rather than from a request that cannot succeed.
-ready() {
-  if [ "$TLS" = "1" ]; then
-    [ "$(docker compose ps api --format '{{.Health}}' 2>/dev/null | head -1)" = "healthy" ]
-  else
-    curl -fsS "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1
-  fi
-}
-
 attempt=0
-until ready; do
+until curl -fsS "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1; do
   attempt=$((attempt + 1))
   if [ "$attempt" -gt 90 ]; then
     printf '\n'
     warn "it did not answer in time. What the services say:"
-    docker compose ps
-    docker compose logs --tail 40 api migrate
+    $DOCKER compose ps
+    $DOCKER compose logs --tail 40 api migrate
     exit 1
   fi
   sleep 2
 done
 
 printf '\n'
-if [ "$TLS" = "1" ]; then
-  bold "Moonphase is running, and will answer on ${PUBLIC_URL}"
-  printf '\n'
-  printf '  Point DNS at this machine, then open it. Caddy gets the\n'
-  printf '  certificate by itself the first time someone does.\n'
-else
-  bold "Moonphase is running at http://127.0.0.1:${PORT}"
-fi
+bold "Moonphase is running at http://127.0.0.1:${PORT}"
 printf '\n'
-printf '  Open it and create an account — the first one is yours.\n'
+printf '  Open it and follow the setup. The first account is yours, and\n  the address and HTTPS are set up there — nothing to edit here.\n'
 printf '\n'
 printf '  Next:\n'
 printf '    Add a server        any machine you can reach over SSH\n'
 printf '    Connect Claude      Settings -> Accounts\n'
-printf '    Notifications       need HTTPS; put a proxy in front and set\n'
-printf '                        MOONPHASE_PUBLIC_URL to its address\n'
+printf '    Your address        set it during setup; HTTPS is automatic\n'
 printf '\n'
 printf '  Manage it:\n'
 printf '    docker compose logs -f api\n'

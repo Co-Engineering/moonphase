@@ -723,6 +723,20 @@ class ModelPriceOut(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
 
+class SetupStateOut(BaseModel):
+    """What the client needs to decide between a setup screen and a sign-in."""
+
+    needs_setup: bool
+    signup_open: bool = True
+
+
+class SetupIn(BaseModel):
+    # The address people will use. Decides which hostname the proxy may get a
+    # certificate for, so it is load-bearing rather than cosmetic.
+    public_url: str | None = Field(default=None, max_length=255)
+    signup_open: bool = False
+
+
 class HealthOut(BaseModel):
     status: str
     version: str

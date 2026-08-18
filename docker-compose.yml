@@ -49,11 +49,11 @@ services:
     environment:
       GOTRUE_API_HOST: 0.0.0.0
       GOTRUE_API_PORT: "9999"
-      API_EXTERNAL_URL: ${MOONPHASE_PUBLIC_URL:?set MOONPHASE_PUBLIC_URL in .env}
+      API_EXTERNAL_URL: ${MOONPHASE_PUBLIC_URL:-http://localhost:8471}
       GOTRUE_DB_DRIVER: postgres
       GOTRUE_DB_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-postgres}?search_path=auth&sslmode=disable
-      GOTRUE_SITE_URL: ${MOONPHASE_PUBLIC_URL}
-      GOTRUE_URI_ALLOW_LIST: ${MOONPHASE_PUBLIC_URL}
+      GOTRUE_SITE_URL: ${MOONPHASE_PUBLIC_URL:-http://localhost:8471}
+      GOTRUE_URI_ALLOW_LIST: ${MOONPHASE_PUBLIC_URL:-*}
       # HS256 with a shared secret. The API accepts both this and asymmetric
       # tokens over JWKS; the shared secret keeps the stack to two services.
       GOTRUE_JWT_SECRET: ${SUPABASE_JWT_SECRET:?set SUPABASE_JWT_SECRET in .env}
@@ -119,7 +119,7 @@ services:
       # The public address, because it is what the browser must be able to
       # reach — the client is served from here and signs in against the same
       # origin.
-      SUPABASE_URL: ${MOONPHASE_PUBLIC_URL}
+      SUPABASE_URL: ${MOONPHASE_PUBLIC_URL:-http://localhost:8471}
       SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:?set SUPABASE_ANON_KEY in .env}
       SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET}
 
@@ -127,7 +127,7 @@ services:
       MOONPHASE_API_HOST: 0.0.0.0
       MOONPHASE_API_PORT: "8471"
       # Same origin through the proxy, so there is nothing to allow.
-      MOONPHASE_CORS_ORIGINS: ${MOONPHASE_PUBLIC_URL}
+      MOONPHASE_CORS_ORIGINS: ${MOONPHASE_PUBLIC_URL:-http://localhost:8471}
 
       MOONPHASE_RUNTIME_IMAGE: ${MOONPHASE_RUNTIME_IMAGE:-moonphase/runtime-claude:latest}
       MOONPHASE_SSH_TRUST_ON_FIRST_USE: ${MOONPHASE_SSH_TRUST_ON_FIRST_USE:-true}
@@ -154,12 +154,14 @@ services:
     depends_on:
       - api
       - auth
-    environment:
-      # A hostname here turns on automatic HTTPS. Set by the installer from
-      # MOONPHASE_PUBLIC_URL, so there is one thing to get right rather than two.
-      MOONPHASE_SITE: ${MOONPHASE_SITE:-:8471}
     ports:
+      # Plain HTTP for trying it out, and 80/443 so Caddy can answer the ACME
+      # challenge and serve the certificate it obtains. Which hostname it may
+      # obtain one for is decided by the database, through the setup screen —
+      # there is nothing about the address here or in .env.
       - "${MOONPHASE_BIND:-127.0.0.1}:${MOONPHASE_PORT:-8471}:8471"
+      - "${MOONPHASE_HTTPS_BIND:-0.0.0.0}:80:80"
+      - "${MOONPHASE_HTTPS_BIND:-0.0.0.0}:443:443"
     volumes:
       - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

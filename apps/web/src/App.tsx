@@ -9,11 +9,13 @@ import {
   type Project,
   type Server,
   type Session,
+  setupState,
 } from './lib/api'
 import { useResource } from './lib/useResource'
 import { ProjectTerminal } from './components/Terminal'
 import { Auth } from './routes/Auth'
 import { Connect } from './routes/Connect'
+import { Setup } from './routes/Setup'
 import { setBadge } from './lib/notifications'
 import {
   currentHost,
@@ -46,6 +48,9 @@ export function App() {
   // because the auth client cannot be built without it.
   const [config, setConfig] = useState<InstanceConfig | null>(null)
   const [hostProblem, setHostProblem] = useState<string | null>(null)
+  // Null until asked. An instance with no accounts shows setup rather than a
+  // sign-in form nobody could satisfy.
+  const [needsSetup, setNeedsSetup] = useState<boolean | null>(null)
 
   const attach = useCallback((next: InstanceConfig) => {
     const supabase = configure(next)
@@ -75,6 +80,24 @@ export function App() {
       cancelled = true
     }
   }, [config, attach])
+
+  // Asked once the host is known, and again after setup finishes. Kept above
+  // every early return for the same reason as the effect below.
+  useEffect(() => {
+    if (!config) return
+    let cancelled = false
+    void setupState()
+      .then((state) => {
+        if (!cancelled) setNeedsSetup(state.needs_setup)
+      })
+      .catch(() => {
+        // An instance too old to answer is an instance that is already set up.
+        if (!cancelled) setNeedsSetup(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [config])
 
   // Above every early return: a hook placed after one runs on some renders and
   // not others, and React tears the whole tree down when the count changes —
@@ -107,6 +130,10 @@ export function App() {
   }
 
   if (!ready) return <div className="auth-shell">Loading…</div>
+  // Before anyone has an account, a sign-in form is a door with no key
+  // behind it. Setup makes the first one, and it owns the instance.
+  if (needsSetup === null) return <div className="auth-shell">Loading…</div>
+  if (needsSetup) return <Setup onDone={() => setNeedsSetup(false)} />
   if (!session) return <Auth />
 
   // A session opened in its own window renders only that session. Same app,

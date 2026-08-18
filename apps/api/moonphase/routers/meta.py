@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import text
 
 from .. import environments, push, queries
@@ -48,8 +48,27 @@ async def health() -> HealthOut:
     )
 
 
+def origin_of(request: Request) -> str:
+    """The address this request actually arrived on.
+
+    Behind the bundled proxy, auth is served from the same origin as the app —
+    so the client should be told "wherever you reached me", not a value someone
+    typed into a file. Getting that value wrong produced "Invalid token" on
+    every request, which is the single most confusing failure this project has,
+    and deriving it removes the possibility entirely.
+
+    X-Forwarded-* because there is always a proxy in front; falling back to the
+    request URL for a direct connection.
+    """
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+    forwarded_host = request.headers.get("x-forwarded-host", "").split(",")[0].strip()
+    scheme = forwarded_proto or request.url.scheme
+    host = forwarded_host or request.headers.get("host", "") or request.url.netloc
+    return f"{scheme}://{host}" if host else ""
+
+
 @router.get("/config", response_model=InstanceConfigOut)
-async def instance_config() -> InstanceConfigOut:
+async def instance_config(request: Request) -> InstanceConfigOut:
     """Everything a client needs to talk to this host, given only its URL.
 
     Deliberately unauthenticated, because it is what makes "install the app and
@@ -63,8 +82,11 @@ async def instance_config() -> InstanceConfigOut:
     anyone who can reach the port could establish anyway.
     """
     settings = get_settings()
+    # Same origin as this request, because that is where the proxy serves auth.
+    # The configured value is a fallback for running the API directly, without
+    # the proxy in front, which is only ever development.
     return InstanceConfigOut(
-        supabase_url=settings.supabase_url,
+        supabase_url=origin_of(request) or settings.supabase_url,
         supabase_anon_key=settings.supabase_anon_key,
         vapid_public_key=push.public_key() or None,
         version="0.1.0",
