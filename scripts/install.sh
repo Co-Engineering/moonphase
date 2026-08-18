@@ -4,6 +4,15 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install.sh | sh
 #
+# For a real deployment, give it the address people will use. It sets up
+# automatic HTTPS for that name by itself:
+#
+#   curl -fsSL .../install.sh | sh -s -- https://moonphase.example.com
+#
+# Note the `sh -s --`. Writing `MOONPHASE_PUBLIC_URL=... curl ... | sh` looks
+# right and is not: the assignment applies to curl, not to the shell reading
+# the script, so the setting is silently lost.
+#
 # Docker is the only requirement. Everything else — the database, sign-in, the
 # keys that encrypt your SSH credentials — is created here.
 #
@@ -19,6 +28,13 @@ REPO="${MOONPHASE_REPO:-https://github.com/oliversvane/moonphase.git}"
 BRANCH="${MOONPHASE_BRANCH:-main}"
 DIR="${MOONPHASE_DIR:-moonphase}"
 PORT="${MOONPHASE_PORT:-8471}"
+# A URL as the first argument, which is the only way to pass one through a pipe
+# without exporting it first.
+case "${1:-}" in
+  http://*|https://*) MOONPHASE_PUBLIC_URL="$1" ;;
+  "") ;;
+  *) printf 'Usage: install.sh [https://your.address]\n' >&2; exit 2 ;;
+esac
 BIND="${MOONPHASE_BIND:-127.0.0.1}"
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }

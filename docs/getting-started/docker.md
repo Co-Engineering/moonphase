@@ -9,6 +9,19 @@ $ curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/script
 
 Then open **<http://127.0.0.1:8471>** and create an account. The first one is yours.
 
+For a real deployment, give it the address people will use — it sets up HTTPS
+for that name by itself:
+
+```console
+$ curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install.sh \
+    | sh -s -- https://moonphase.example.com
+```
+
+!!! warning "`sh -s --`, not a variable in front of curl"
+    `MOONPHASE_PUBLIC_URL=… curl … | sh` looks right and is not: the assignment
+    applies to `curl`, not to the shell reading the script, so the setting is
+    silently lost and you get a localhost install.
+
 !!! tip "Read it before you pipe it"
     Piping a script from the internet into a shell is a thing worth being suspicious
     of. [The script is here](https://github.com/oliversvane/moonphase/blob/main/scripts/install.sh)
@@ -127,14 +140,25 @@ MOONPHASE_BIND=0.0.0.0                               # publish beyond loopback
 
 Then `docker compose up -d`.
 
-!!! danger "Put TLS in front of it"
+### HTTPS is automatic
+
+Give the installer an `https://` address and Caddy provisions a Let's Encrypt
+certificate for it, listens on 443, and redirects 80. There is nothing to edit,
+install or renew, and the certificate lives in a volume so a restart does not ask
+for another one.
+
+It needs two things: ports **80 and 443** reachable from the internet, and DNS
+pointing at the machine. The certificate is obtained the first time someone visits,
+so installing before the DNS record exists is fine — it simply gets one later.
+
+!!! danger "Do not run it on plain HTTP in public"
     The WebSocket carries a live terminal, and during harness sign-in it carries
     credentials. [Push notifications also require a secure context](../guides/from-your-phone.md),
     so without HTTPS the feature that makes leaving a session running worthwhile does not
     exist at all.
 
-    A reverse proxy with a real certificate, a Tailscale HTTPS address, or a Cloudflare
-    tunnel all work.
+    A Tailscale HTTPS address or a Cloudflare tunnel work too, if you would rather not
+    expose 80 and 443.
 
 `MOONPHASE_PUBLIC_URL` has to be the address a **browser** uses. The client is served from
 it and signs in against the same origin, so an unreachable value breaks sign-in rather
