@@ -55,9 +55,22 @@
 	}
 }
 
-# Plain HTTP, always. On a laptop this is the whole thing; in front of a domain
-# Caddy redirects it to HTTPS by itself.
+# Plain HTTP, always. On a laptop this is the whole thing.
 :8471 {
+	import moonphase
+}
+
+# Port 80 serves the app rather than only redirecting, because on a fresh
+# install there is no certificate yet — DNS usually points here only after
+# someone has been through setup, and redirecting them to an address that
+# cannot answer locks them out of the machine they just installed.
+#
+# Reached by name, it redirects: that is a deployment with DNS, where plain
+# HTTP would be a downgrade. Reached by bare IP, it serves, because that is
+# someone setting up.
+:80 {
+	@by_name not expression {host}.matches("^[0-9a-fA-F.:\\[\\]]+$")
+	redir @by_name https://{host}{uri} 308
 	import moonphase
 }
 
