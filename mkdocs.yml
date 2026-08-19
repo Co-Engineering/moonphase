@@ -109,6 +109,7 @@ nav:
       - guides/from-your-phone.md
       - guides/save-points.md
       - guides/reviewing-changes.md
+      - guides/dns.md
       - guides/previews.md
       - guides/sharing.md
       - guides/configuring-claude.md

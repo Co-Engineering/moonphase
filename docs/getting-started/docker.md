@@ -148,7 +148,8 @@ install or renew, and the certificate lives in a volume so a restart does not as
 for another one.
 
 It needs two things: ports **80 and 443** reachable from the internet, and DNS
-pointing at the machine. The certificate is obtained the first time someone visits,
+pointing at the machine — see [pointing a domain at it](../guides/dns.md) for the
+exact fields on Cloudflare, Namecheap, GoDaddy, Route 53 and the rest. The certificate is obtained the first time someone visits,
 so installing before the DNS record exists is fine — it simply gets one later.
 
 !!! danger "Do not run it on plain HTTP in public"

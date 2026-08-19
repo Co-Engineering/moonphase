@@ -54,14 +54,23 @@ def test_password_alone_needs_nothing_configured() -> None:
 def test_a_provider_without_credentials_is_not_offered() -> None:
     """The failure it prevents: a button that sends someone to Google's error
     page, with nothing to suggest it was misconfigured here."""
-    half = AuthMethods(google_enabled=True, google_client_id="cid")
+    half = AuthMethods(
+        public_url="https://moonphase.example.com",
+        google_enabled=True,
+        google_client_id="cid",
+    )
 
     assert "google" not in usable(half)
     assert any("client ID and secret" in problem for problem in incomplete(half))
 
 
 def test_a_provider_with_both_halves_is_offered() -> None:
-    whole = AuthMethods(google_enabled=True, google_client_id="cid", google_client_secret="s")
+    whole = AuthMethods(
+        public_url="https://moonphase.example.com",
+        google_enabled=True,
+        google_client_id="cid",
+        google_client_secret="s",
+    )
 
     assert usable(whole) == ["password", "google"]
     assert incomplete(whole) == []
@@ -120,3 +129,55 @@ def test_the_redirect_uri_is_what_the_provider_must_be_given() -> None:
     assert redirect_uri("https://moonphase.example.com/") == (
         "https://moonphase.example.com/auth/v1/callback"
     )
+
+
+def test_the_first_account_is_possible_even_with_signup_closed() -> None:
+    """The gate allows signup whenever there are no users, which is what lets
+    the default be closed — otherwise nobody could ever make the first one, and
+    an abandoned setup would leave the instance open to anyone who found it."""
+    import inspect
+
+    from moonphase.routers import setup as setup_router
+
+    source = inspect.getsource(setup_router.signup_allowed)
+
+    assert 'found["users"] == 0' in source
+    assert "signup_open" in source
+
+
+def test_an_ip_address_is_not_a_domain() -> None:
+    """Google and Microsoft both refuse to redirect to one, so a provider
+    configured against an IP cannot work however complete its credentials."""
+    from moonphase.authconfig import has_domain
+
+    assert has_domain("https://moonphase.example.com") is True
+    assert has_domain("moonphase.example.com") is True
+
+    assert has_domain("http://203.0.113.10") is False
+    assert has_domain("203.0.113.10:8471") is False
+    assert has_domain("http://localhost:8471") is False
+    assert has_domain("") is False
+
+
+def test_oauth_is_refused_without_a_domain() -> None:
+    on_an_ip = AuthMethods(
+        public_url="http://203.0.113.10",
+        google_enabled=True,
+        google_client_id="cid",
+        google_client_secret="secret",
+    )
+
+    assert "google" not in usable(on_an_ip)
+    assert any("bare IP" in problem for problem in incomplete(on_an_ip))
+
+
+def test_the_same_credentials_work_once_there_is_a_domain() -> None:
+    on_a_domain = AuthMethods(
+        public_url="https://moonphase.example.com",
+        google_enabled=True,
+        google_client_id="cid",
+        google_client_secret="secret",
+    )
+
+    assert "google" in usable(on_a_domain)
+    assert incomplete(on_a_domain) == []

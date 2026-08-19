@@ -26,7 +26,10 @@ export function Setup({ onDone }: Props) {
   const [password, setPassword] = useState('')
   // Wherever this page was loaded from is almost always the right answer, and
   // typing it again is a chance to get it wrong.
-  const [address, setAddress] = useState(() => window.location.origin)
+  // Blank means "use whatever address this was reached on", which is the IP on
+  // a machine with no DNS yet. Stored either way, because the auth service
+  // builds its links from it.
+  const [domain, setDomain] = useState('')
   const [signupOpen, setSignupOpen] = useState(false)
   const [methods, setMethods] = useState<Draft>(() => draftFrom(null))
   const [busy, setBusy] = useState(false)
@@ -55,7 +58,7 @@ export function Setup({ onDone }: Props) {
       // Saved before the sign-in step, because the redirect URI those providers
       // need is built from this address.
       await api.completeSetup({
-        public_url: address.trim() || null,
+        public_url: domain.trim() || window.location.origin,
         signup_open: signupOpen,
       })
       setStep('methods')
@@ -98,7 +101,7 @@ export function Setup({ onDone }: Props) {
           <span className="glyph">◐</span> Moonphase
         </div>
 
-        {step === 'account' ? (
+        {step === 'account' && (
           <>
             <p className="tagline">
               Nobody has an account here yet.
@@ -136,7 +139,9 @@ export function Setup({ onDone }: Props) {
               </form>
             </div>
           </>
-        ) : (
+        )}
+
+        {step === 'instance' && (
           <>
             <p className="tagline">
               One more thing, and it is the only one.
@@ -146,22 +151,35 @@ export function Setup({ onDone }: Props) {
                 {error && <div className="banner error">{error}</div>}
 
                 <label>
-                  <span>The address people will use</span>
+                  <span>Custom domain — optional</span>
                   <input
-                    value={address}
-                    onChange={(e) => setAddress(e.target.value)}
+                    value={domain}
+                    onChange={(e) => setDomain(e.target.value)}
                     placeholder="https://moonphase.example.com"
                     autoFocus
                   />
                 </label>
                 <p className="hint">
-                  Point DNS at this machine and enter the address here. A certificate
-                  is obtained automatically the first time someone visits — there is
-                  nothing to install and nothing to renew.
+                  Leave it blank and Moonphase answers on{' '}
+                  <code>{window.location.host}</code>, which works but stays on plain
+                  HTTP.
                 </p>
                 <p className="hint">
-                  Notifications need HTTPS, so until this is a real name you will not
-                  be told when an agent is waiting for you.
+                  With a domain you get HTTPS: point a DNS record at this machine and
+                  the certificate is obtained the first time someone visits — nothing
+                  to install, nothing to renew.{' '}
+                  <a
+                    href="https://oliversvane.github.io/moonphase/guides/dns/"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    How to add the DNS record →
+                  </a>
+                </p>
+                <p className="hint">
+                  It also unlocks two things an IP address cannot do: notifications,
+                  which browsers only allow over HTTPS, and signing in with Google or
+                  Microsoft, which both refuse to redirect to a bare IP.
                 </p>
 
                 <label className="check">
@@ -196,8 +214,8 @@ export function Setup({ onDone }: Props) {
                 <SignInMethods
                   draft={methods}
                   onChange={setMethods}
-                  redirectUri={`${address.replace(/\/$/, '')}/auth/v1/callback`}
-                  addressMissing={!address.trim()}
+                  redirectUri={`${(domain.trim() || window.location.origin).replace(/\/$/, '')}/auth/v1/callback`}
+                  domainMissing={!domain.trim()}
                 />
                 <p className="hint">
                   All of this can be changed later in Settings. Nothing here is written to

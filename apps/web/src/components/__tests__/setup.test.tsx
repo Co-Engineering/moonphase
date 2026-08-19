@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SignInMethods, draftFrom } from '../SignInMethods'
+import { Setup } from '../../routes/Setup'
 
 vi.mock('../../lib/supabase', () => ({
   accessToken: async () => 'test-token',
@@ -87,16 +88,24 @@ describe('SignInMethods', () => {
     expect(screen.getByPlaceholderText('leave blank to keep the saved one')).toBeTruthy()
   })
 
-  it('warns that a redirect URI without an address will be rejected', () => {
+  it('refuses to offer Google or Microsoft without a custom domain', () => {
+    // Both reject a redirect URI pointing at a bare IP, so a checkbox here
+    // would be offering something that cannot work.
     render(
       <SignInMethods
         draft={{ ...empty, google_enabled: true }}
         onChange={() => {}}
-        redirectUri="/auth/v1/callback"
-        addressMissing
+        redirectUri="http://203.0.113.10/auth/v1/callback"
+        domainMissing
       />,
     )
-    expect(screen.getByText(/reject a redirect that does not match/)).toBeTruthy()
+
+    const google = screen.getByText('Sign in with Google')
+      .closest('label')!
+      .querySelector('input') as HTMLInputElement
+    expect(google.disabled).toBe(true)
+    expect(google.checked).toBe(false)
+    expect(screen.getAllByText(/will not redirect to a bare IP/).length).toBe(2)
   })
 
   it('asks for a mail server before offering magic links', () => {
@@ -109,5 +118,21 @@ describe('SignInMethods', () => {
     )
     expect(screen.getByPlaceholderText('smtp.example.com')).toBeTruthy()
     expect(screen.getByText(/no way to email a link without one/)).toBeTruthy()
+  })
+})
+
+
+describe('Setup', () => {
+  it('does not let other people create accounts unless asked', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('{}', { status: 200 })),
+    )
+    render(<Setup onDone={() => {}} />)
+
+    // Step one is the account; the toggle lives on step two, and its default
+    // is what matters — an instance left open is other people on your machine.
+    expect(screen.getByText(/The first one is yours/)).toBeTruthy()
+    vi.unstubAllGlobals()
   })
 })

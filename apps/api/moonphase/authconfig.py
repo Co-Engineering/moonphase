@@ -51,6 +51,31 @@ class AuthMethods:
     problems: list[str] = field(default_factory=list)
 
 
+def has_domain(public_url: str) -> bool:
+    """Whether the address is a name rather than a bare IP.
+
+    Google and Microsoft both refuse a redirect URI pointing at an IP address,
+    so an OAuth provider configured on one cannot work however complete its
+    credentials are. Enforced here as well as in the interface, because the
+    interface is a convenience and this is the actual rule.
+    """
+    host = public_url.strip().lower()
+    for prefix in ("https://", "http://"):
+        if host.startswith(prefix):
+            host = host[len(prefix) :]
+            break
+    host = host.split("/")[0].split(":")[0].strip()
+    if not host or host == "localhost":
+        return False
+    # An IPv4 literal, or anything bracketed, which is IPv6.
+    if host.startswith("["):
+        return False
+    parts = host.split(".")
+    if len(parts) == 4 and all(part.isdigit() for part in parts):
+        return False
+    return "." in host
+
+
 def usable(methods: AuthMethods) -> list[str]:
     """Which methods are switched on *and* have what they need.
 
@@ -64,10 +89,17 @@ def usable(methods: AuthMethods) -> list[str]:
         out.append("password")
     if methods.magic_link_enabled and methods.smtp_host and methods.smtp_sender:
         out.append("magic_link")
-    if methods.google_enabled and methods.google_client_id and methods.google_client_secret:
+    domain = has_domain(methods.public_url)
+    if (
+        methods.google_enabled
+        and domain
+        and methods.google_client_id
+        and methods.google_client_secret
+    ):
         out.append("google")
     if (
         methods.microsoft_enabled
+        and domain
         and methods.microsoft_client_id
         and methods.microsoft_client_secret
     ):
@@ -78,8 +110,14 @@ def usable(methods: AuthMethods) -> list[str]:
 def incomplete(methods: AuthMethods) -> list[str]:
     """Methods that are on but cannot work, and why."""
     problems: list[str] = []
+    domain = has_domain(methods.public_url)
     if methods.magic_link_enabled and not (methods.smtp_host and methods.smtp_sender):
         problems.append("Magic links need an SMTP server and a sender address.")
+    if (methods.google_enabled or methods.microsoft_enabled) and not domain:
+        problems.append(
+            "Google and Microsoft need a custom domain — neither will redirect "
+            "to a bare IP address."
+        )
     if methods.google_enabled and not (
         methods.google_client_id and methods.google_client_secret
     ):

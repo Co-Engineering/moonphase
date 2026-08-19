@@ -54,11 +54,15 @@ interface Props {
   onChange: (next: Draft) => void
   /** Shown so it can be pasted into the provider's console. */
   redirectUri: string
-  /** True while there is no saved address, which OAuth cannot work without. */
-  addressMissing?: boolean
+  /**
+   * True when no custom domain is set. Google and Microsoft both refuse a
+   * redirect URI pointing at a bare IP, so offering them would be offering
+   * something that cannot work.
+   */
+  domainMissing?: boolean
 }
 
-export function SignInMethods({ draft, onChange, redirectUri, addressMissing }: Props) {
+export function SignInMethods({ draft, onChange, redirectUri, domainMissing }: Props) {
   const [showSmtp, setShowSmtp] = useState(false)
   const set = (patch: Partial<Draft>) => onChange({ ...draft, ...patch })
 
@@ -147,7 +151,7 @@ export function SignInMethods({ draft, onChange, redirectUri, addressMissing }: 
         secret={draft.google_client_secret}
         onSecret={(v) => set({ google_client_secret: v })}
         redirectUri={redirectUri}
-        addressMissing={addressMissing}
+        domainMissing={domainMissing}
         where="Google Cloud console, under APIs & Services → Credentials"
       />
 
@@ -160,7 +164,7 @@ export function SignInMethods({ draft, onChange, redirectUri, addressMissing }: 
         secret={draft.microsoft_client_secret}
         onSecret={(v) => set({ microsoft_client_secret: v })}
         redirectUri={redirectUri}
-        addressMissing={addressMissing}
+        domainMissing={domainMissing}
         where="Azure portal, under App registrations"
       >
         <label>
@@ -189,7 +193,7 @@ function Provider({
   secret,
   onSecret,
   redirectUri,
-  addressMissing,
+  domainMissing,
   where,
   children,
 }: {
@@ -201,29 +205,34 @@ function Provider({
   secret: string
   onSecret: (v: string) => void
   redirectUri: string
-  addressMissing?: boolean
+  domainMissing?: boolean
   where: string
   children?: React.ReactNode
 }) {
   return (
     <>
-      <label className="check">
-        <input type="checkbox" checked={enabled} onChange={(e) => onToggle(e.target.checked)} />
+      <label className={domainMissing ? 'check disabled' : 'check'}>
+        <input
+          type="checkbox"
+          checked={enabled && !domainMissing}
+          disabled={domainMissing}
+          onChange={(e) => onToggle(e.target.checked)}
+        />
         <span>Sign in with {name}</span>
       </label>
-      {enabled && (
+      {domainMissing && (
+        <p className="hint">
+          Needs a custom domain. {name} will not redirect to a bare IP address, so
+          there is no address to give it yet.
+        </p>
+      )}
+      {enabled && !domainMissing && (
         <div className="method-detail">
           <p className="hint">Create an OAuth client in the {where}.</p>
           <label>
             <span>Redirect URI — paste this into {name}</span>
             <input readOnly value={redirectUri} onFocus={(e) => e.target.select()} />
           </label>
-          {addressMissing && (
-            <p className="warn-note">
-              Set the address above first. {name} will reject a redirect that does not
-              match exactly, and this one is not final until the address is.
-            </p>
-          )}
           <label>
             <span>Client ID</span>
             <input value={clientId} onChange={(e) => onClientId(e.target.value)} />
