@@ -105,7 +105,14 @@ describe('SignInMethods', () => {
       .querySelector('input') as HTMLInputElement
     expect(google.disabled).toBe(true)
     expect(google.checked).toBe(false)
-    expect(screen.getAllByText(/will not redirect to a bare IP/).length).toBe(2)
+
+    const microsoft = screen.getByText('Sign in with Microsoft')
+      .closest('label')!
+      .querySelector('input') as HTMLInputElement
+    expect(microsoft.disabled).toBe(true)
+
+    // Said once for both, rather than the same paragraph under each.
+    expect(screen.getAllByText(/need a custom domain/).length).toBe(1)
   })
 
   it('asks for a mail server before offering magic links', () => {
@@ -116,8 +123,10 @@ describe('SignInMethods', () => {
         redirectUri="https://x/auth/v1/callback"
       />,
     )
+    // The fields it cannot work without appear with it, rather than a
+    // paragraph explaining that they will be needed later.
     expect(screen.getByPlaceholderText('smtp.example.com')).toBeTruthy()
-    expect(screen.getByText(/no way to email a link without one/)).toBeTruthy()
+    expect(screen.getByPlaceholderText('moonphase@example.com')).toBeTruthy()
   })
 })
 
@@ -132,7 +141,9 @@ describe('Setup', () => {
 
     // Step one is the account; the toggle lives on step two, and its default
     // is what matters — an instance left open is other people on your machine.
-    expect(screen.getByText(/The first one is yours/)).toBeTruthy()
+    expect(screen.getByText(/The first account owns this instance/)).toBeTruthy()
+    // And it says which of three steps you are on.
+    expect(screen.getByLabelText('Step 1 of 3')).toBeTruthy()
     vi.unstubAllGlobals()
   })
 })

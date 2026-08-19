@@ -29,7 +29,29 @@ attempt=0
 until $PSQL --command 'select 1' >/dev/null 2>&1; do
   attempt=$((attempt + 1))
   if [ "$attempt" -gt 60 ]; then
-    echo "postgres did not become ready in time" >&2
+    # Why it failed matters enormously here. A server that is up and rejecting
+    # the password is a leftover data volume from an earlier install with a
+    # different one — and "did not become ready" sends people looking at the
+    # database when the answer is a volume.
+    reason=$($PSQL --command 'select 1' 2>&1 || true)
+    echo "" >&2
+    case "$reason" in
+      *"password authentication failed"*|*"authentication failed"*)
+        echo "The database is running but rejected the password." >&2
+        echo "" >&2
+        echo "That almost always means a data volume left over from an earlier" >&2
+        echo "install, created with a different password. To start fresh —" >&2
+        echo "this deletes everything in it:" >&2
+        echo "" >&2
+        echo "    docker compose down -v && docker compose up -d" >&2
+        echo "" >&2
+        echo "To keep it instead, put its original POSTGRES_PASSWORD in .env." >&2
+        ;;
+      *)
+        echo "Could not reach the database after 2 minutes:" >&2
+        echo "  $reason" >&2
+        ;;
+    esac
     exit 1
   fi
   sleep 2

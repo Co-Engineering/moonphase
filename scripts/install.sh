@@ -144,6 +144,39 @@ ANON_KEY=$(existing SUPABASE_ANON_KEY)
 
 COMPOSE_FILES="docker-compose.yml"
 
+# Caddy answers the certificate challenge on 80 and serves on 443, so automatic
+# HTTPS needs both. A machine already running a web server has them taken, and
+# claiming them unconditionally turned "install Moonphase" into "first move your
+# other site" — with no error saying so.
+COMPOSE_FILES="docker-compose.yml"
+PUBLIC_PORTS=1
+
+listening_on() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn 2>/dev/null | grep -qE ":$1[[:space:]]"
+  elif command -v netstat >/dev/null 2>&1; then
+    netstat -ltn 2>/dev/null | grep -qE ":$1[[:space:]]"
+  else
+    return 1
+  fi
+}
+
+for port in 80 443; do
+  if listening_on "$port"; then
+    PUBLIC_PORTS=0
+  fi
+done
+
+if [ "$PUBLIC_PORTS" = "1" ]; then
+  COMPOSE_FILES="docker-compose.yml:docker-compose.public.yml"
+else
+  warn "ports 80 and 443 are already in use on this machine"
+  warn "installing without them: Moonphase will answer on http://127.0.0.1:${PORT}"
+  warn "a custom domain and HTTPS need those ports. Free them, then add"
+  warn "  COMPOSE_FILE=docker-compose.yml:docker-compose.public.yml"
+  warn "to .env and bring it up again."
+fi
+
 GITHUB_CLIENT_ID=$(existing MOONPHASE_GITHUB_CLIENT_ID)
 
 IMAGE=$(existing MOONPHASE_IMAGE)
@@ -212,7 +245,7 @@ if [ -f .env.bak ]; then
   kept=$(awk -F= '
     /^[A-Z_]+=/ {
       key = $1
-      if (key !~ /^(MOONPHASE_SECRET_KEY|POSTGRES_(USER|PASSWORD|DB)|SUPABASE_(JWT_SECRET|ANON_KEY)|MOONPHASE_(PUBLIC_URL|IMAGE|VERSION|BIND|PORT|MONITOR_INTERVAL|GITHUB_CLIENT_ID|VAPID_PUBLIC_KEY|VAPID_PRIVATE_KEY|VAPID_SUBJECT))$/) print
+      if (key !~ /^(MOONPHASE_SECRET_KEY|POSTGRES_(USER|PASSWORD|DB)|SUPABASE_(JWT_SECRET|ANON_KEY)|MOONPHASE_(PUBLIC_URL|IMAGE|VERSION|BIND|PORT|MONITOR_INTERVAL|GITHUB_CLIENT_ID|VAPID_PUBLIC_KEY|VAPID_PRIVATE_KEY|VAPID_SUBJECT)|COMPOSE_FILE)$/) print
     }' .env.bak)
   if [ -n "$kept" ]; then
     {

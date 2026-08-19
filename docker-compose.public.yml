@@ -1,0 +1,18 @@
+# The ports a certificate needs.
+#
+# Caddy answers the ACME challenge on 80 and serves on 443, so automatic HTTPS
+# needs both. They are here rather than in the main file because a machine that
+# already runs a web server has them taken, and publishing them unconditionally
+# turned "install Moonphase" into "first move your other site".
+#
+# The installer adds this file when both are free, and says what is lost when
+# they are not. Freeing them later is one line in .env:
+#
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.public.yml
+
+services:
+  proxy:
+    ports: !override
+      - "${MOONPHASE_BIND:-127.0.0.1}:${MOONPHASE_PORT:-8471}:8471"
+      - "${MOONPHASE_PUBLIC_BIND:-0.0.0.0}:80:80"
+      - "${MOONPHASE_PUBLIC_BIND:-0.0.0.0}:443:443"

@@ -75,8 +75,8 @@ export function SignInMethods({ draft, onChange, redirectUri, domainMissing }: P
           onChange={(e) => set({ password_enabled: e.target.checked })}
         />
         <span>Email and password</span>
+        <span className="method-note">nothing to configure</span>
       </label>
-      <p className="hint">Needs nothing configured. Leave it on until another way in works.</p>
 
       <label className="check">
         <input
@@ -85,13 +85,10 @@ export function SignInMethods({ draft, onChange, redirectUri, domainMissing }: P
           onChange={(e) => set({ magic_link_enabled: e.target.checked, })}
         />
         <span>Magic link by email</span>
+        <span className="method-note">needs a mail server</span>
       </label>
       {draft.magic_link_enabled && (
         <div className="method-detail">
-          <p className="hint">
-            Needs a mail server to send from — there is no way to email a link without
-            one.
-          </p>
           <div className="pair-row">
             <label>
               <span>SMTP host</span>
@@ -140,6 +137,13 @@ export function SignInMethods({ draft, onChange, redirectUri, domainMissing }: P
             {showSmtp ? 'Hide' : 'Show'} the password
           </button>
         </div>
+      )}
+
+      {domainMissing && (
+        <p className="hint methods-blocked">
+          Google and Microsoft need a custom domain — neither will redirect to a bare
+          IP address. Add one on the previous step and these become available.
+        </p>
       )}
 
       <Provider
@@ -220,12 +224,6 @@ function Provider({
         />
         <span>Sign in with {name}</span>
       </label>
-      {domainMissing && (
-        <p className="hint">
-          Needs a custom domain. {name} will not redirect to a bare IP address, so
-          there is no address to give it yet.
-        </p>
-      )}
       {enabled && !domainMissing && (
         <div className="method-detail">
           <p className="hint">Create an OAuth client in the {where}.</p>

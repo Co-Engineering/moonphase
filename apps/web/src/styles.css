@@ -2344,3 +2344,54 @@ label.check.disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
+
+/* --- the setup wizard ----------------------------------------------------- */
+/* Three screens with no sense of where you are read as a form rather than a
+   setup, and there was no way back from a step you had already answered. */
+
+.auth-card.setup { max-width: 460px; }
+
+.steps {
+  display: flex;
+  gap: 18px;
+  justify-content: center;
+  list-style: none;
+  margin: 0 0 18px;
+  padding: 0;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.steps li { display: flex; align-items: center; gap: 6px; }
+.steps .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+.steps li.now { color: var(--text); }
+.steps li.now .dot { background: var(--accent); }
+.steps li.done { color: var(--text-dim); }
+.steps li.done .dot { background: var(--accent-dim); }
+
+/* A short label after the option itself, so the common case needs no
+   explanatory paragraph underneath. */
+.method-note {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+label.check.disabled .method-note { color: var(--text-faint); }
+
+/* Not indented: it belongs to the two rows below it, and the indent that the
+   other hints use made it read as a detail of the option above. */
+.methods-blocked {
+  margin: 6px 0 8px;
+  margin-left: 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+}
+
+.method-note::before {
+  content: '· ';
+  color: var(--border-strong);
+}

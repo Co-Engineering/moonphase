@@ -165,13 +165,11 @@ services:
       - api
       - auth
     ports:
-      # Plain HTTP for trying it out, and 80/443 so Caddy can answer the ACME
-      # challenge and serve the certificate it obtains. Which hostname it may
-      # obtain one for is decided by the database, through the setup screen —
-      # there is nothing about the address here or in .env.
+      # Only the plain port here. 80 and 443 are added by
+      # docker-compose.public.yml, which the installer applies when they are
+      # free — publishing them unconditionally meant Moonphase could not be
+      # installed on any machine already running a web server.
       - "${MOONPHASE_BIND:-127.0.0.1}:${MOONPHASE_PORT:-8471}:8471"
-      - "${MOONPHASE_HTTPS_BIND:-0.0.0.0}:80:80"
-      - "${MOONPHASE_HTTPS_BIND:-0.0.0.0}:443:443"
     volumes:
       - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

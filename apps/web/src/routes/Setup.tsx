@@ -94,20 +94,28 @@ export function Setup({ onDone }: Props) {
     }
   }
 
+  const steps: Array<typeof step> = ['account', 'instance', 'methods']
+  const at = steps.indexOf(step)
+
   return (
     <div className="auth-shell">
-      <div className="auth-card">
+      <div className="auth-card setup">
         <div className="brand">
           <span className="glyph">◐</span> Moonphase
         </div>
 
+        <ol className="steps" aria-label={`Step ${at + 1} of ${steps.length}`}>
+          {['Account', 'Address', 'Signing in'].map((name, index) => (
+            <li key={name} className={index === at ? 'now' : index < at ? 'done' : ''}>
+              <span className="dot" />
+              {name}
+            </li>
+          ))}
+        </ol>
+
         {step === 'account' && (
           <>
-            <p className="tagline">
-              Nobody has an account here yet.
-              <br />
-              The first one is yours, and it owns this instance.
-            </p>
+            <p className="tagline">The first account owns this instance.</p>
             <div className="card">
               <form onSubmit={createAccount}>
                 {error && <div className="banner error">{error}</div>}
@@ -133,6 +141,7 @@ export function Setup({ onDone }: Props) {
                     required
                   />
                 </label>
+                <p className="hint">At least 8 characters.</p>
                 <button className="primary" disabled={busy}>
                   {busy ? 'Creating…' : 'Create my account'}
                 </button>
@@ -143,9 +152,7 @@ export function Setup({ onDone }: Props) {
 
         {step === 'instance' && (
           <>
-            <p className="tagline">
-              One more thing, and it is the only one.
-            </p>
+            <p className="tagline">Where people will reach it.</p>
             <div className="card">
               <form onSubmit={saveInstance}>
                 {error && <div className="banner error">{error}</div>}
@@ -160,14 +167,9 @@ export function Setup({ onDone }: Props) {
                   />
                 </label>
                 <p className="hint">
-                  Leave it blank and Moonphase answers on{' '}
-                  <code>{window.location.host}</code>, which works but stays on plain
-                  HTTP.
-                </p>
-                <p className="hint">
-                  With a domain you get HTTPS: point a DNS record at this machine and
-                  the certificate is obtained the first time someone visits — nothing
-                  to install, nothing to renew.{' '}
+                  Blank keeps <code>{window.location.host}</code> on plain HTTP. A
+                  domain adds HTTPS automatically, and is required for notifications
+                  and for signing in with Google or Microsoft.{' '}
                   <a
                     href="https://oliversvane.github.io/moonphase/guides/dns/"
                     target="_blank"
@@ -175,11 +177,6 @@ export function Setup({ onDone }: Props) {
                   >
                     How to add the DNS record →
                   </a>
-                </p>
-                <p className="hint">
-                  It also unlocks two things an IP address cannot do: notifications,
-                  which browsers only allow over HTTPS, and signing in with Google or
-                  Microsoft, which both refuse to redirect to a bare IP.
                 </p>
 
                 <label className="check">
@@ -191,15 +188,15 @@ export function Setup({ onDone }: Props) {
                   <span>Let other people create accounts</span>
                 </label>
                 <p className="hint">
-                  Off is the safe default. Anyone who signs up gets their own empty
-                  organization and can see nothing of yours, but it is still your
-                  machine they are on. You can share servers and projects by email
-                  either way.
+                  Off means only you. Servers and projects can still be shared by
+                  email.
                 </p>
 
-                <button className="primary" disabled={busy}>
-                  {busy ? 'Saving…' : 'Next'}
-                </button>
+                <div className="actions">
+                  <button className="primary" disabled={busy}>
+                    {busy ? 'Saving…' : 'Next'}
+                  </button>
+                </div>
               </form>
             </div>
           </>
@@ -207,7 +204,7 @@ export function Setup({ onDone }: Props) {
 
         {step === 'methods' && (
           <>
-            <p className="tagline">How should people sign in?</p>
+            <p className="tagline">How people sign in. All of it is changeable later.</p>
             <div className="card">
               <form onSubmit={finish}>
                 {error && <div className="banner error">{error}</div>}
@@ -217,13 +214,14 @@ export function Setup({ onDone }: Props) {
                   redirectUri={`${(domain.trim() || window.location.origin).replace(/\/$/, '')}/auth/v1/callback`}
                   domainMissing={!domain.trim()}
                 />
-                <p className="hint">
-                  All of this can be changed later in Settings. Nothing here is written to
-                  a file on the server.
-                </p>
-                <button className="primary" disabled={busy}>
-                  {busy ? 'Saving…' : 'Finish'}
-                </button>
+                <div className="actions">
+                  <button type="button" className="ghost" onClick={() => setStep('instance')}>
+                    Back
+                  </button>
+                  <button className="primary" disabled={busy}>
+                    {busy ? 'Saving…' : 'Finish'}
+                  </button>
+                </div>
               </form>
             </div>
           </>
