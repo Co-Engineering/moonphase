@@ -159,14 +159,46 @@ function ClaudeAccount({
 
   useEffect(() => () => window.clearInterval(pollRef.current), [])
 
+  /**
+   * Starting only asks for a sign-in; the URL arrives later.
+   *
+   * Preparing one means building an environment image on a server that may
+   * never have run a container, starting it, and waiting for the harness to
+   * print a URL — minutes on a cold machine. Waiting for all of that inside the
+   * request had the browser give up and report a network error for a sign-in
+   * that was working, so the state to watch for is `starting` and the session
+   * says what it is doing while it lasts.
+   */
   const start = async () => {
     setWorking(true)
     setError(null)
     try {
-      setLogin(await api.startHarnessLogin())
+      const started = await api.startHarnessLogin()
+      setLogin(started)
+      if (started.state !== 'starting') {
+        setWorking(false)
+        return
+      }
+      window.clearInterval(pollRef.current)
+      pollRef.current = window.setInterval(async () => {
+        try {
+          const next = await api.pollHarnessLogin(started.session_id)
+          setLogin(next)
+          if (next.state === 'starting') return
+          window.clearInterval(pollRef.current)
+          setWorking(false)
+          if (next.state === 'error') {
+            setError(next.detail ?? 'Could not start the sign-in.')
+            setLogin(null)
+          }
+        } catch (err) {
+          window.clearInterval(pollRef.current)
+          setWorking(false)
+          setError(err instanceof Error ? err.message : String(err))
+        }
+      }, 2000)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
-    } finally {
       setWorking(false)
     }
   }
@@ -260,6 +292,12 @@ function ClaudeAccount({
 
       {error && <div className="banner error">{error}</div>}
 
+      {/* The slow step is a container build, and a button that says "Starting…"
+          for four minutes is indistinguishable from one that is stuck. */}
+      {login?.state === 'starting' && (
+        <div className="banner">{login.detail ?? 'Preparing the sign-in…'}</div>
+      )}
+
       {/* The terminal is shown whenever something is happening or went wrong,
           so a flow that stalls is diagnosable rather than a spinner. */}
       {(verifying || error) && login?.pane && (
@@ -313,9 +351,15 @@ function ClaudeAccount({
             <button className="primary" disabled={working} onClick={start}>
               {working ? 'Starting…' : 'Sign in with Claude'}
             </button>
-            <button onClick={() => setShowKey((v) => !v)}>
-              {showKey ? 'Hide API key option' : 'Use an API key instead'}
-            </button>
+            {login?.state === 'starting' ? (
+              // Waiting on a container build is a long time to be stuck with no
+              // way out but closing the dialog.
+              <button onClick={cancel}>Cancel</button>
+            ) : (
+              <button onClick={() => setShowKey((v) => !v)}>
+                {showKey ? 'Hide API key option' : 'Use an API key instead'}
+              </button>
+            )}
           </div>
 
           {showKey && (
