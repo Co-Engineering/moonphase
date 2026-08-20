@@ -428,3 +428,96 @@ def test_creating_a_project_does_not_wait_for_the_build() -> None:
     # Every failure has to land on the row: there is no request left to raise
     # into, and a project stuck at `creating` says nothing at all.
     assert 'status="error"' in background
+
+
+@pytest.mark.asyncio
+async def test_a_second_attempt_replaces_the_first(fake_server: str) -> None:
+    """A button that looked like it did nothing got clicked again, and every
+    click started another container — six of them on a server, from one person
+    trying to sign in once.
+
+    Only the same person's own attempts, though: an organization is shared, and
+    retiring by organization would have one person cancel a colleague's sign-in.
+    """
+    target = await _connect()
+    conn = await ssh.pool.get(target)
+    try:
+        mine = login.LoginSession(
+            id="mine",
+            org_id="org",
+            harness_kind=str(HarnessKind.CLAUDE_CODE),
+            server_id="server",
+            container=f"{login.CONTAINER_PREFIX}mine",
+            user_id="me",
+            state="awaiting_code",
+        )
+        theirs = login.LoginSession(
+            id="theirs",
+            org_id="org",
+            harness_kind=str(HarnessKind.CLAUDE_CODE),
+            server_id="server",
+            container=f"{login.CONTAINER_PREFIX}theirs",
+            user_id="someone-else",
+            state="awaiting_code",
+        )
+        newer = login.LoginSession(
+            id="newer",
+            org_id="org",
+            harness_kind=str(HarnessKind.CLAUDE_CODE),
+            server_id="server",
+            container=f"{login.CONTAINER_PREFIX}newer",
+            user_id="me",
+        )
+        for session in (mine, theirs, newer):
+            login._sessions[session.id] = session
+
+        try:
+            await login._supersede(conn, newer)
+        finally:
+            for session in (mine, theirs, newer):
+                login.forget(session.id)
+
+        assert mine.state == "error"
+        assert mine.detail == "Replaced by a newer sign-in."
+        assert theirs.state == "awaiting_code"
+        assert newer.state == "starting"
+    finally:
+        await ssh.pool.close_all()
+
+
+@pytest.mark.asyncio
+async def test_a_sign_in_being_verified_is_left_alone(fake_server: str) -> None:
+    """Interrupting one mid-exchange loses the credential it is about to
+    produce, which is worse than an extra container."""
+    target = await _connect()
+    conn = await ssh.pool.get(target)
+    try:
+        verifying = login.LoginSession(
+            id="verifying",
+            org_id="org",
+            harness_kind=str(HarnessKind.CLAUDE_CODE),
+            server_id="server",
+            container=f"{login.CONTAINER_PREFIX}verifying",
+            user_id="me",
+            state="verifying",
+        )
+        newer = login.LoginSession(
+            id="newer2",
+            org_id="org",
+            harness_kind=str(HarnessKind.CLAUDE_CODE),
+            server_id="server",
+            container=f"{login.CONTAINER_PREFIX}newer2",
+            user_id="me",
+        )
+        for session in (verifying, newer):
+            login._sessions[session.id] = session
+        try:
+            await login._supersede(conn, newer)
+        finally:
+            for session in (verifying, newer):
+                login.forget(session.id)
+
+        assert verifying.state == "verifying"
+        assert verifying.cleaned_up is False
+    finally:
+        await ssh.pool.close_all()

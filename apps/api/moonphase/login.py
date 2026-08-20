@@ -66,6 +66,9 @@ class LoginSession:
     harness_kind: str
     server_id: str
     container: str
+    # Who asked. A person can only finish one sign-in, so a second one from the
+    # same account replaces the first rather than joining it — see _supersede.
+    user_id: str | None = None
     state: State = "starting"
     url: str | None = None
     detail: str | None = None
@@ -129,6 +132,7 @@ async def start(
     image: str,
     base_image: str | None = None,
     setup_script: str | None = None,
+    user_id: str | None = None,
 ) -> LoginSession:
     """Begin a sign-in. Returns immediately; poll the session for progress."""
     _prune()
@@ -145,6 +149,7 @@ async def start(
         harness_kind=str(harness.kind),
         server_id=server_id,
         container=container,
+        user_id=user_id,
     )
     _sessions[session_id] = session
 
@@ -208,6 +213,12 @@ async def _prepare(
                 session.state = "error"
                 session.detail = f"Could not prepare the container image: {exc}"[:300]
                 return
+
+        # A second attempt from the same account replaces the first. A button
+        # that looked like it did nothing got clicked again, and every click
+        # started another container — six of them, on a server, from one person
+        # trying to sign in once.
+        await _supersede(conn, session)
 
         # Before adding one of our own, so finished attempts do not pile up on
         # the server. Best effort: a sign-in should not fail because tidying up
@@ -412,6 +423,34 @@ async def cleanup(conn: asyncssh.SSHClientConnection, session: LoginSession) -> 
         await ssh.run(conn, f"docker rm -f {shlex.quote(session.container)}", timeout=60)
     except SSHError as exc:
         log.warning("could not remove login container %s: %s", session.container, exc)
+
+
+async def _supersede(
+    conn: asyncssh.SSHClientConnection, session: LoginSession
+) -> None:
+    """Retire this caller's earlier attempts at the same sign-in.
+
+    Only their own, and only ones still waiting: an organization is shared, and
+    superseding by organization would have one person cancel a colleague's
+    sign-in. One that is already exchanging a code is left alone — it is nearly
+    done, and interrupting it loses the credential it is about to produce.
+    """
+    if session.user_id is None:
+        return
+
+    for other in list(_sessions.values()):
+        if other is session or other.user_id != session.user_id:
+            continue
+        if other.harness_kind != session.harness_kind:
+            continue
+        if other.state not in {"starting", "awaiting_code"}:
+            continue
+        other.state = "error"
+        other.detail = "Replaced by a newer sign-in."
+        try:
+            await cleanup(conn, other)
+        except SSHError as exc:
+            log.warning("could not retire login %s: %s", other.id, exc)
 
 
 async def sweep_stale(conn: asyncssh.SSHClientConnection) -> int:

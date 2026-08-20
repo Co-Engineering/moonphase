@@ -228,6 +228,9 @@ async def start_harness_login(
             image=default_env.image,
             base_image=default_env.base_image,
             setup_script=default_env.setup_script,
+            # So a second click replaces this person's own earlier attempt
+            # rather than starting another container beside it.
+            user_id=str(principal.user_id),
         )
     except (SSHError, NotFound) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
