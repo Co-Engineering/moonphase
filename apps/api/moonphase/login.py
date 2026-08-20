@@ -209,9 +209,9 @@ async def _prepare(
                 session.detail = f"Could not prepare the container image: {exc}"[:300]
                 return
 
-        # Before adding one of our own, so an abandoned attempt does not outlive
-        # the process that started it. Best effort: a sign-in should not fail
-        # because tidying up did.
+        # Before adding one of our own, so finished attempts do not pile up on
+        # the server. Best effort: a sign-in should not fail because tidying up
+        # did.
         try:
             await sweep_stale(conn)
         except SSHError as exc:
@@ -415,30 +415,33 @@ async def cleanup(conn: asyncssh.SSHClientConnection, session: LoginSession) -> 
 
 
 async def sweep_stale(conn: asyncssh.SSHClientConnection) -> int:
-    """Remove login containers no live session is using any more.
+    """Remove login containers that have finished and been left behind.
 
     A sign-in is tracked in memory, so restarting the API — an upgrade, say —
-    forgets every session in flight while their containers keep running on the
-    server. Nothing ever removed them, so they accumulated one per abandoned
-    attempt, each sitting on a half-finished authorization for as long as the
-    machine stayed up.
+    forgets every attempt in flight while their containers stay on the server.
+    Nothing ever removed them, so they accumulated one per abandoned attempt for
+    as long as the machine stayed up.
 
-    Containers belonging to sessions this process still knows about are left
-    alone: two people signing in at once is ordinary, and sweeping by label
-    alone would have one kill the other's container out from under it.
+    Only ones that have exited. A container that is still running is either a
+    sign-in someone is part-way through or one whose own timeout has not
+    expired yet — and it might not be ours at all: nothing stops two Moonphase
+    instances from sharing a server, and this process's idea of which sessions
+    are live says nothing about the other's. Every abandoned container exits on
+    its own when its sleep runs out, so waiting for that costs a quarter of an
+    hour and removes the chance of killing a sign-in someone is using.
     """
-    keep = {session.container for session in _sessions.values()}
     result = await ssh.run(
         conn,
-        "docker ps -a --filter label=moonphase.login=1 --format '{{.Names}}'",
+        "docker ps -a --filter label=moonphase.login=1 --filter status=exited "
+        "--format '{{.Names}}'",
         timeout=30,
     )
     if not result.ok:
         return 0
 
-    stale = [name for name in result.stdout.split() if name not in keep]
-    for name in stale:
+    names = result.stdout.split()
+    for name in names:
         await ssh.run(conn, f"docker rm -f {shlex.quote(name)}", timeout=60)
-    if stale:
-        log.info("removed %d abandoned login container(s)", len(stale))
-    return len(stale)
+    if names:
+        log.info("removed %d finished login container(s)", len(names))
+    return len(names)

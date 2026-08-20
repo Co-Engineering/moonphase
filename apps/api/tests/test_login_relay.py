@@ -358,42 +358,40 @@ def test_the_session_says_what_it_is_doing_while_it_does_it() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sweeping_spares_the_sessions_still_in_flight(fake_server: str) -> None:
+async def test_sweeping_leaves_a_sign_in_that_is_still_running(fake_server: str) -> None:
     """A sign-in lives in memory, so restarting the API forgets every attempt in
-    flight while their containers keep running on the server. Nothing removed
-    them, so they piled up one per abandoned attempt.
+    flight while their containers stay on the server. Nothing removed them, so
+    they piled up one per abandoned attempt.
 
-    Sweeping by label alone would have two simultaneous sign-ins kill each
-    other, so a container a live session still names is left where it is.
+    Only the ones that have exited, though. A container still running is either
+    a sign-in someone is part-way through or one whose own timeout has not run
+    out — and nothing stops two Moonphase instances from sharing a server, where
+    sweeping by label would have one kill the other's.
     """
     target = await _connect()
     conn = await ssh.pool.get(target)
     try:
-        live = f"{login.CONTAINER_PREFIX}keepme"
-        orphan = f"{login.CONTAINER_PREFIX}orphan"
-        for name in (live, orphan):
-            result = await ssh.run(
-                conn,
-                f"docker run -d --name {name} --label moonphase.login=1 "
-                f"{RUNTIME_IMAGE} sleep 300",
-                timeout=120,
-            )
-            assert result.ok, result.stderr
+        running = f"{login.CONTAINER_PREFIX}running"
+        finished = f"{login.CONTAINER_PREFIX}finished"
 
-        session = login.LoginSession(
-            id="live",
-            org_id=str(uuid.uuid4()),
-            harness_kind=str(HarnessKind.CLAUDE_CODE),
-            server_id=str(uuid.uuid4()),
-            container=live,
+        started = await ssh.run(
+            conn,
+            f"docker run -d --name {running} --label moonphase.login=1 "
+            f"{RUNTIME_IMAGE} sleep 300",
+            timeout=120,
         )
-        login._sessions[session.id] = session
-        try:
-            removed = await login.sweep_stale(conn)
-        finally:
-            login.forget(session.id)
+        assert started.ok, started.stderr
+        # Exits immediately: this is the abandoned attempt whose sleep ran out.
+        done = await ssh.run(
+            conn,
+            f"docker run -d --name {finished} --label moonphase.login=1 "
+            f"{RUNTIME_IMAGE} true",
+            timeout=120,
+        )
+        assert done.ok, done.stderr
+        await ssh.run(conn, f"docker wait {finished}", timeout=60)
 
-        assert removed == 1
+        assert await login.sweep_stale(conn) == 1
 
         listing = await ssh.run(
             conn,
@@ -401,10 +399,10 @@ async def test_sweeping_spares_the_sessions_still_in_flight(fake_server: str) ->
             timeout=60,
         )
         names = listing.stdout.split()
-        assert live in names
-        assert orphan not in names
+        assert running in names
+        assert finished not in names
 
-        await ssh.run(conn, f"docker rm -f {live}", timeout=60)
+        await ssh.run(conn, f"docker rm -f {running}", timeout=60)
     finally:
         await ssh.pool.close_all()
 
