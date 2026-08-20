@@ -167,6 +167,10 @@ pre {
 .brand .glyph {
   color: var(--accent);
   font-size: 16px;
+  /* The mark is an inline SVG now, and inline elements sit on the text
+     baseline — which left it a few pixels low beside the wordmark. */
+  display: inline-flex;
+  align-items: center;
 }
 
 .sidebar-scroll {

@@ -12,6 +12,7 @@ import {
   setupState,
 } from './lib/api'
 import { useResource } from './lib/useResource'
+import { Logo } from './components/Logo'
 import { ProjectTerminal } from './components/Terminal'
 import { Auth } from './routes/Auth'
 import { Connect } from './routes/Connect'
@@ -261,7 +262,10 @@ function Shell({ email, onDisconnect }: { email: string; onDisconnect: () => voi
     <div className={`app${showSidebar ? ' show-sidebar' : ''}`}>
       <aside className="sidebar">
         <div className="brand">
-          <span className="glyph">◐</span> Moonphase
+          <span className="glyph">
+            <Logo />
+          </span>{' '}
+          Moonphase
         </div>
 
         <div className="sidebar-scroll">

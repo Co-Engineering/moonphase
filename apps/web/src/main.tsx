@@ -2,12 +2,14 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
 import { ErrorBoundary, reportUncaught } from './components/ErrorBoundary'
+import { trackMoonInFavicon } from './lib/favicon'
 import './styles.css'
 
 const root = document.getElementById('root')
 if (!root) throw new Error('#root is missing from index.html')
 
 reportUncaught()
+trackMoonInFavicon()
 
 createRoot(root).render(
   <StrictMode>

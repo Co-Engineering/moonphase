@@ -6,7 +6,9 @@
     <title>Moonphase</title>
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
-    <link rel="apple-touch-icon" href="/icon.svg" />
+    <!-- iOS ignores an SVG here and falls back to a screenshot of the page,
+         which is why the home-screen icon never looked like the app. -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="theme-color" content="#0b0c12" />
     <!-- Installed to a home screen, the app should look like an app. -->
     <meta name="apple-mobile-web-app-capable" content="yes" />
