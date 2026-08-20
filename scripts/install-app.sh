@@ -87,33 +87,51 @@ curl -fL --progress-bar "$url" -o "$tmp/download" || die "Download failed."
 
 if [ "$os" = "Linux" ]; then
   bin_dir="${XDG_BIN_HOME:-$HOME/.local/bin}"
+  lib_dir="${XDG_DATA_HOME:-$HOME/.local/share}/moonphase"
   app_dir="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
   icon_dir="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/512x512/apps"
   mkdir -p "$bin_dir" "$app_dir" "$icon_dir"
 
-  install -m 755 "$tmp/download" "$bin_dir/moonphase"
-
-  # The icon lives inside the AppImage. Extracting it is one call and the
-  # difference between an entry in the launcher and a nameless grey square, so
-  # it is worth doing — but only worth trying: a missing icon is a blemish, not
-  # a failed install.
-  # Asked for by directory rather than by "*.png": the icon at the top of an
-  # AppImage is a symlink into that directory, so matching the name alone
-  # extracts a link pointing at something that was not extracted with it.
+  # Unpacked rather than left as an AppImage.
   #
-  # Every step here is optional. A missing icon is a blemish; an install that
-  # stops half way because of one is a bug.
+  # An AppImage mounts itself through FUSE 2, and a machine without it — which
+  # includes anything modern enough to have moved to FUSE 3, so Arch and Fedora
+  # among others — gets "dlopen(): error loading libfuse.so.2" and nothing else.
+  # Telling people to install a compatibility package to open an app is a second
+  # command, and this is supposed to be one.
+  #
+  # Extraction is exactly what the AppImage's own error message suggests, needs
+  # no FUSE at all, and leaves something that starts faster because it is not
+  # mounting a squashfs on every launch. It costs disk: about 350 MB unpacked
+  # against 100 MB compressed.
+  info "Unpacking"
+  chmod +x "$tmp/download"
+  (cd "$tmp" && "./download" --appimage-extract >/dev/null 2>&1) \
+    || die "Could not unpack the download."
+  [ -x "$tmp/squashfs-root/AppRun" ] || die "The download does not look like a Moonphase build."
+
+  rm -rf "$lib_dir"
+  mkdir -p "$(dirname "$lib_dir")"
+  mv "$tmp/squashfs-root" "$lib_dir"
+
+  # A launcher rather than a symlink: AppRun works out where it lives from $0,
+  # and a symlink into it resolves to the wrong place.
+  cat > "$bin_dir/moonphase" <<EOF
+#!/bin/sh
+exec "$lib_dir/AppRun" "\$@"
+EOF
+  chmod 755 "$bin_dir/moonphase"
+
+  # Now that the tree is unpacked the icon is simply a file in it. A missing one
+  # is a blemish, not a failed install, so nothing here is fatal.
   icon="moonphase"
-  if (cd "$tmp" && "$bin_dir/moonphase" --appimage-extract "usr/share/icons/*" \
-        >/dev/null 2>&1); then
-    extracted="$(find "$tmp/squashfs-root" -name "*.png" -type f 2>/dev/null | head -1)"
-    if [ -n "$extracted" ] && install -m 644 "$extracted" "$icon_dir/moonphase.png"; then
-      command -v gtk-update-icon-cache >/dev/null 2>&1 \
-        && gtk-update-icon-cache -f -t "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor" \
-           >/dev/null 2>&1 || true
-    else
-      warn "Could not extract the app icon; the launcher entry will use a default."
-    fi
+  extracted="$(find "$lib_dir/usr/share/icons" -name "*.png" -type f 2>/dev/null | head -1)"
+  if [ -n "$extracted" ] && install -m 644 "$extracted" "$icon_dir/moonphase.png"; then
+    command -v gtk-update-icon-cache >/dev/null 2>&1 \
+      && gtk-update-icon-cache -f -t "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor" \
+         >/dev/null 2>&1 || true
+  else
+    warn "Could not install the app icon; the launcher entry will use a default."
   fi
 
   cat > "$app_dir/moonphase.desktop" <<EOF
@@ -147,18 +165,6 @@ EOF
       echo
       ;;
   esac
-
-  # AppImages mount themselves through FUSE, and say so with a bare
-  # "dlopen(): error loading libfuse.so.2" when it is missing. Either version
-  # will do — a machine with only libfuse3 runs these perfectly well, and
-  # warning there would send people to install something they do not need.
-  if ! ldconfig -p 2>/dev/null | grep -qE "libfuse\.so\.2|libfuse3\.so"; then
-    warn "AppImages need FUSE, which does not appear to be installed."
-    echo "       Debian/Ubuntu:  sudo apt install libfuse2"
-    echo "       Fedora:         sudo dnf install fuse"
-    echo "       Arch:           sudo pacman -S fuse2"
-    echo
-  fi
 else
   target="$HOME/Applications"
   mkdir -p "$target"

@@ -17,10 +17,23 @@ One command on a computer, two taps on a phone.
     $ curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-app.sh | sh
     ```
 
-    Installs to `~/.local/bin/moonphase` with an entry in your applications
-    menu. No root, nothing outside your home directory.
+    Installs to `~/.local/share/moonphase` with a launcher at
+    `~/.local/bin/moonphase` and an entry in your applications menu. No root,
+    nothing outside your home directory, and about 350 MB.
 
     Launch it from the menu, or run `moonphase`.
+
+    !!! note "Why it unpacks instead of leaving an AppImage"
+        An AppImage mounts itself through FUSE 2, and distributions that have
+        moved on to FUSE 3 — Arch and Fedora among them — answer with
+        `dlopen(): error loading libfuse.so.2` and nothing else. Installing a
+        compatibility package to open an app is a second command, and this is
+        meant to be one. Unpacked, it needs no FUSE and starts faster.
+
+        The `.AppImage` on [the releases
+        page](https://github.com/oliversvane/moonphase/releases) is the same
+        build if you would rather have the single file — that one does need
+        `libfuse2`.
 
     !!! note "If nothing appears in the menu"
         Some desktops only rescan on login. `moonphase` from a terminal works
@@ -144,6 +157,7 @@ download, without the download.
 === "Linux"
 
     ```console
+    $ rm -rf ~/.local/share/moonphase
     $ rm ~/.local/bin/moonphase
     $ rm ~/.local/share/applications/moonphase.desktop
     $ rm ~/.local/share/icons/hicolor/512x512/apps/moonphase.png
