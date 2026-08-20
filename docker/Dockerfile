@@ -34,6 +34,7 @@ RUN apt-get update \
         ca-certificates \
         curl \
         openssh-client \
+        postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Never as root. The API opens outbound SSH connections and runs a proxy; there
@@ -49,6 +50,17 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 COPY apps/api/moonphase apps/api/moonphase
 COPY scripts/gen_vapid.py scripts/gen_vapid.py
+
+# The schema travels with the code that expects it.
+#
+# These used to be bind-mounted from a checkout on the server, which meant
+# `docker compose pull` upgraded the API and left the database exactly where it
+# was — silently, because a migration that is not on disk is not a migration
+# that failed. The first schema change after that was noticed only because the
+# feature needing it did nothing.
+COPY supabase/migrations /app/migrations
+COPY docker/bootstrap.sql /app/bootstrap.sql
+COPY docker/migrate.sh /app/migrate.sh
 
 # The API resolves the client relative to its own file: moonphase/main.py ->
 # apps/api/moonphase -> apps/api -> apps -> apps/web/dist. Keeping the source

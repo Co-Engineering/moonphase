@@ -83,7 +83,12 @@ services:
   # One-shot. Creates the roles and `auth.uid()` that the policies are written
   # against, then applies every migration that has not run yet.
   migrate:
-    image: postgres:16-alpine
+    # The same image as the API, because that is what carries the migrations.
+    # They used to be mounted from a checkout on the server, which meant
+    # `docker compose pull` upgraded the code and left the schema behind —
+    # and said nothing, because a migration that is not there is not a
+    # migration that failed.
+    image: ${MOONPHASE_IMAGE:-ghcr.io/oliversvane/moonphase}:${MOONPHASE_VERSION:-edge}
     depends_on:
       db:
         condition: service_healthy
@@ -94,11 +99,9 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-postgres}
-    volumes:
-      - ./supabase/migrations:/migrations:ro
-      - ./docker/bootstrap.sql:/bootstrap.sql:ro
-      - ./docker/migrate.sh:/migrate.sh:ro
-    entrypoint: ["sh", "/migrate.sh"]
+      MIGRATIONS_DIR: /app/migrations
+      BOOTSTRAP: /app/bootstrap.sql
+    entrypoint: ["sh", "/app/migrate.sh"]
     restart: "no"
 
   api:

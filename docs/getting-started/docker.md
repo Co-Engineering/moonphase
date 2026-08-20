@@ -179,7 +179,9 @@ $ docker compose pull
 $ docker compose up -d
 ```
 
-Migrations run automatically on start, and are additive and forward-only.
+Migrations run automatically on start, and are additive and forward-only. They
+travel inside the image alongside the code that expects them, so those two
+cannot arrive separately — an upgrade that needs a schema change gets one.
 
 If you build from source, `git pull` first and add the override:
 

@@ -18,3 +18,9 @@ services:
       dockerfile: docker/Dockerfile
     image: ${MOONPHASE_IMAGE:-ghcr.io/oliversvane/moonphase}:${MOONPHASE_VERSION:-edge}
     pull_policy: never
+
+  # Same image, so it must not try to pull one that was built locally and never
+  # pushed. The migrations it runs come from that build, which is the point:
+  # code and schema move together whichever way the image was made.
+  migrate:
+    pull_policy: never

@@ -1,0 +1,40 @@
+# What the image build must not see.
+#
+# Without this the build works in CI and fails on a developer's machine, which
+# is the worst way round. A checkout in CI has no `node_modules`; a checkout
+# someone has worked in does, and `COPY apps/web apps/web` then copies pnpm's
+# symlink farm over the install the image just did. The links point outside the
+# image, so they resolve to nothing, and the build fails claiming a dependency
+# is missing that is sitting right there.
+#
+# It also keeps the context small. Sending a few hundred megabytes of
+# `node_modules` and `.venv` to the daemon before anything starts is most of the
+# wait on a cold build.
+
+# --- dependency trees, installed inside the image instead --------------------
+**/node_modules
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+
+# --- build output ------------------------------------------------------------
+# apps/web/dist is deliberately *not* here: it is built in the image's own web
+# stage, and excluding it costs nothing either way. These are the ones that
+# would be copied in and shadow something.
+apps/desktop/dist
+apps/desktop/release
+apps/desktop/web
+site
+
+# --- things with no business in an image -------------------------------------
+.git
+.github
+.env
+.env.*
+!.env.example
+docs
+*.md
+!apps/api/README.md
