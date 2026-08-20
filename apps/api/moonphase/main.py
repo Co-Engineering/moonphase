@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import preflight, preview, socks, ssh
+from . import preflight, preview, ssh
 from .config import get_settings
 from .db import dispose_engine
 from .monitor import monitor
@@ -21,6 +21,7 @@ from .routers import (
     feedsocket,
     meta,
     notifications,
+    previewsocket,
     projects,
     review,
     servers,
@@ -57,7 +58,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await monitor.stop()
     log.info("shutting down: closing preview tunnels and SSH connections")
     await preview.registry.close_all()
-    await socks.registry.close_all()
     await ssh.pool.close_all()
     await dispose_engine()
 
@@ -109,6 +109,7 @@ def create_app() -> FastAPI:
     app.include_router(projects.router)
     app.include_router(profile_router.router)
     app.include_router(preview_router.router)
+    app.include_router(previewsocket.router)
     app.include_router(notifications.router)
     app.include_router(feed.router)
     app.include_router(feedsocket.router)

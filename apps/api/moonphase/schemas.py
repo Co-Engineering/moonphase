@@ -518,7 +518,6 @@ class PreviewOut(BaseModel):
     """Where to point a browser so the container's own addresses resolve."""
 
     proxy_host: str
-    proxy_port: int
     # Ordered by what a person most likely meant to open. Not a declaration and
     # not exhaustive: the proxy carries whatever is asked for, including ports
     # that appear after this was built.

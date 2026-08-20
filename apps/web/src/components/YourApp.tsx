@@ -113,7 +113,6 @@ export function YourApp({ projectId, projectName, running, readOnly = false }: P
       await openPreviewWindow({
         projectId,
         projectName,
-        proxyPort: found.proxy_port,
         url: `http://localhost:${port ?? primary(found.services)?.port ?? 3000}`,
       })
     } catch (err) {

@@ -9,6 +9,7 @@
 import { app, BrowserWindow, ipcMain, session, shell } from 'electron'
 import { existsSync } from 'node:fs'
 import * as path from 'node:path'
+import { closeAllRelays, closeRelay, ensureRelay } from './socksrelay'
 
 // Set by `pnpm dev`; in a packaged build we load the built assets from disk.
 const DEV_SERVER_URL = process.env.MOONPHASE_DEV_SERVER_URL ?? 'http://127.0.0.1:8472'
@@ -95,13 +96,7 @@ function createWindow(): void {
  * terminal, and this is the one call that can point a window at an arbitrary
  * address. Both arguments are therefore checked rather than trusted.
  */
-function validate(request: {
-  proxyPort: number
-  url: string
-}): string | null {
-  if (!Number.isInteger(request.proxyPort) || request.proxyPort < 1 || request.proxyPort > 65535) {
-    return 'Invalid proxy port.'
-  }
+function validate(request: { url: string }): string | null {
   let parsed: URL
   try {
     parsed = new URL(request.url)
@@ -119,11 +114,26 @@ function validate(request: {
 async function openPreview(request: {
   projectId: string
   projectName: string
-  proxyPort: number
+  apiUrl: string
+  token: string
   url: string
 }): Promise<{ ok: boolean; error?: string }> {
   const invalid = validate(request)
   if (invalid) return { ok: false, error: invalid }
+
+  // The proxy runs wherever the API does, which for an installed app is not
+  // this machine. A local port that carries each connection there is what makes
+  // the window's proxy setting mean something.
+  let proxyPort: number
+  try {
+    proxyPort = await ensureRelay({
+      apiUrl: request.apiUrl,
+      projectId: request.projectId,
+      token: request.token,
+    })
+  } catch (error) {
+    return { ok: false, error: String(error) }
+  }
 
   const existing = previews.get(request.projectId)
   if (existing && !existing.isDestroyed()) {
@@ -140,7 +150,7 @@ async function openPreview(request: {
 
   try {
     await previewSession.setProxy({
-      proxyRules: `socks5://127.0.0.1:${request.proxyPort}`,
+      proxyRules: `socks5://127.0.0.1:${proxyPort}`,
       // The load-bearing line. Chromium never proxies loopback addresses by
       // default, so without this every `localhost` request — which is to say
       // all of them — would go straight to this machine and miss the container
@@ -165,7 +175,13 @@ async function openPreview(request: {
   })
 
   previews.set(request.projectId, preview)
-  preview.on('closed', () => previews.delete(request.projectId))
+  preview.on('closed', () => {
+    previews.delete(request.projectId)
+    // The relay exists for this window. Leaving it listening would keep a port
+    // open, and a WebSocket's worth of server-side proxy, for a preview nobody
+    // has open any more.
+    closeRelay({ apiUrl: request.apiUrl, projectId: request.projectId })
+  })
   // Links inside a previewed app open in the same window: it is the app's own
   // navigation, and sending it to the real browser would drop it off the proxy
   // and back onto this machine's localhost.
@@ -173,7 +189,7 @@ async function openPreview(request: {
     // The app's own navigation stays in this window, on the proxy. Sending it
     // to the real browser would drop it back onto this machine's localhost,
     // where it means something else entirely.
-    if (validate({ proxyPort: request.proxyPort, url }) === null) {
+    if (validate({ url }) === null) {
       void preview.loadURL(url)
     }
     return { action: 'deny' }
@@ -203,7 +219,7 @@ async function openSessionWindow(request: {
   title: string
   url: string
 }): Promise<{ ok: boolean; error?: string }> {
-  const invalid = validate({ proxyPort: 1, url: request.url })
+  const invalid = validate({ url: request.url })
   if (invalid) return { ok: false, error: invalid }
 
   const key = `${request.projectId}:${request.session}`
@@ -248,4 +264,10 @@ void app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+// On macOS the app stays alive with no windows, so relays are closed here
+// rather than above: a listening port must not outlive the app on any platform.
+app.on('will-quit', () => {
+  closeAllRelays()
 })

@@ -19,7 +19,6 @@ from .. import (
     queries,
     runtime,
     sessions,
-    socks,
     ssh,
     workspaces,
 )
@@ -411,7 +410,6 @@ async def stop_project(
     # The ports behind them are gone; leaving listeners open would advertise
     # previews that refuse every connection.
     await preview.registry.close_project(str(project_id))
-    await socks.registry.close(str(project_id))
 
     async with user_session(principal.claims) as conn:
         await queries.update_project_state(
@@ -897,7 +895,6 @@ async def delete_project(
         log.warning("cleanup for project %s failed: %s", project_id, exc)
 
     await preview.registry.close_project(str(project_id))
-    await socks.registry.close(str(project_id))
 
     async with user_session(principal.claims) as conn:
         deleted = await queries.delete_project(conn, project_id)

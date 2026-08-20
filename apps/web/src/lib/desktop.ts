@@ -10,10 +10,22 @@
  * which works for a single-service app and cannot work for one that calls its
  * own API by name. Better to say so than to open something half-broken.
  */
+import { currentHost } from './host'
+import { accessToken } from './supabase'
+
 export interface PreviewRequest {
   projectId: string
   projectName: string
-  proxyPort: number
+  /**
+   * Where the API is, and who is asking.
+   *
+   * The proxy runs on the API's machine and listens on its loopback, which for
+   * an installed app is not this machine at all — so the shell opens a local
+   * port of its own and carries each connection to the API over an
+   * authenticated WebSocket. It needs the address and a token to do that.
+   */
+  apiUrl: string
+  token: string
   url: string
 }
 
@@ -72,9 +84,19 @@ export function sessionWindowUrl(projectId: string, session: string): string {
   return `${window.location.origin}${window.location.pathname}?${params}`
 }
 
-export async function openPreviewWindow(request: PreviewRequest): Promise<void> {
+export async function openPreviewWindow(
+  request: Omit<PreviewRequest, 'apiUrl' | 'token'>,
+): Promise<void> {
   const bridge = window.moonphase
   if (!bridge) throw new Error('Preview windows are only available in the desktop app.')
-  const result = await bridge.openPreview(request)
+
+  const token = await accessToken()
+  if (!token) throw new Error('You are signed out. Sign in and try again.')
+
+  const result = await bridge.openPreview({
+    ...request,
+    apiUrl: currentHost(),
+    token,
+  })
   if (!result.ok) throw new Error(result.error ?? 'Could not open the preview.')
 }

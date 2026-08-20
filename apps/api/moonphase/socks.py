@@ -35,6 +35,7 @@ import logging
 import shlex
 import socket
 import struct
+from typing import Protocol
 
 import asyncssh
 
@@ -42,6 +43,20 @@ from . import ssh
 from .ssh import SSHError, SSHTarget
 
 log = logging.getLogger(__name__)
+
+# Structural, not nominal. The protocol below reads and writes bytes and does
+# not care what carries them: a loopback socket for a local client, a WebSocket
+# for a desktop app talking to a server somewhere else.
+class Reader(Protocol):
+    async def readexactly(self, n: int, /) -> bytes: ...
+    async def read(self, n: int, /) -> bytes: ...
+
+
+class Writer(Protocol):
+    def write(self, data: bytes, /) -> None: ...
+    async def drain(self) -> None: ...
+    def close(self) -> None: ...
+
 
 SOCKS_VERSION = 5
 NO_AUTHENTICATION = 0x00
@@ -65,20 +80,6 @@ RELAY_TIMEOUT_SECONDS = 3600
 
 # A handshake is four small reads. Anything slower is not a browser.
 HANDSHAKE_TIMEOUT_SECONDS = 15.0
-
-# Loopback, always, and not configurable.
-#
-# The port tunnels take their bind address from settings, because a tunnel
-# exposes exactly one port of one container and reaching it from a phone is the
-# point. This is not that. A SOCKS proxy is a general network path *as the
-# container*, unauthenticated — Chromium does not implement SOCKS5
-# username/password, so there is nothing to authenticate with — and the only
-# client that can use it is one whose proxy setting we control, which is on this
-# machine by definition. Following `MOONPHASE_PREVIEW_BIND` would mean anyone
-# who set it to 0.0.0.0 for phone previews, exactly as the sample config
-# suggests, silently published an open proxy into their container.
-BIND_ADDRESS = "127.0.0.1"
-
 
 def relay_command(container: str, host: str, port: int) -> str:
     """Shell command that connects to `host:port` from inside the container.
@@ -131,11 +132,18 @@ def _family(host: str) -> str:
 
 
 class ProjectProxy:
-    """One SOCKS5 listener, bound to loopback, for one container.
+    """The SOCKS5 conversation for one container. It listens on nothing.
 
-    Deliberately unauthenticated and bound to 127.0.0.1: the same trust model
-    as the port tunnels, which any local process can already reach. Auth would
-    also be theatre here, since Chromium does not implement SOCKS5
+    It used to open a port on this machine's loopback, which was reachable only
+    by a browser on this machine — true while the desktop shell was a
+    development build sitting beside the API, and false for every installed app.
+    Since those carry the stream over an authenticated WebSocket instead, the
+    listener had no client left, and an unauthenticated path into a container is
+    not a thing to leave open for nobody.
+
+    So the caller supplies the stream. Whoever opens it has already been
+    authenticated and checked against the project — which is the authentication
+    this protocol cannot do for itself, Chromium having never implemented SOCKS5
     username/password.
     """
 
@@ -143,32 +151,19 @@ class ProjectProxy:
         self.project_id = project_id
         self.container = container
         self.target = target
-        self.local_port = 0
-        self._server: asyncio.AbstractServer | None = None
         self._connections = 0
-
-    async def start(self) -> int:
-        self._server = await asyncio.start_server(self._handle, BIND_ADDRESS, 0)
-        self.local_port = self._server.sockets[0].getsockname()[1]
-        log.info(
-            "socks proxy for %s on %s:%d -> %s",
-            self.project_id, BIND_ADDRESS, self.local_port, self.container,
-        )
-        return self.local_port
-
-    async def stop(self) -> None:
-        if self._server is None:
-            return
-        self._server.close()
-        with contextlib.suppress(Exception):
-            await self._server.wait_closed()
-        self._server = None
 
     # --- the protocol -------------------------------------------------------
 
-    async def _handle(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
+    async def handle_stream(self, reader: Reader, writer: Writer) -> None:
+        """Serve one SOCKS5 conversation on a stream that already exists.
+
+        Public because the local listener is no longer the only way in. The
+        desktop app talks to an instance across the internet, where a proxy on
+        *this* machine's loopback is not reachable from the browser that needs
+        it — so the same conversation is also carried over an authenticated
+        WebSocket, and both paths run this code.
+        """
         try:
             await asyncio.wait_for(
                 self._negotiate(reader, writer), timeout=HANDSHAKE_TIMEOUT_SECONDS
@@ -182,9 +177,7 @@ class ProjectProxy:
             log.warning("socks: connection failed: %s", exc)
             _close(writer)
 
-    async def _negotiate(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
+    async def _negotiate(self, reader: Reader, writer: Writer) -> None:
         version, count = struct.unpack("!BB", await reader.readexactly(2))
         if version != SOCKS_VERSION:
             _close(writer)
@@ -221,11 +214,7 @@ class ProjectProxy:
         await self._connect(reader, writer, host, port)
 
     async def _connect(
-        self,
-        reader: asyncio.StreamReader,
-        writer: asyncio.StreamWriter,
-        host: str,
-        port: int,
+        self, reader: Reader, writer: Writer, host: str, port: int
     ) -> None:
         try:
             process = await ssh.pool.create_process(
@@ -251,9 +240,7 @@ class ProjectProxy:
 
 
 async def _pump(
-    reader: asyncio.StreamReader,
-    writer: asyncio.StreamWriter,
-    process: asyncssh.SSHClientProcess,
+    reader: Reader, writer: Writer, process: asyncssh.SSHClientProcess
 ) -> None:
     """Copy in both directions until both halves are done.
 
@@ -293,7 +280,7 @@ async def _pump(
     await asyncio.gather(to_container(), to_client(), return_exceptions=True)
 
 
-async def _read_address(reader: asyncio.StreamReader, address_type: int) -> str | None:
+async def _read_address(reader: Reader, address_type: int) -> str | None:
     if address_type == ATYP_IPV4:
         return socket.inet_ntop(socket.AF_INET, await reader.readexactly(4))
     if address_type == ATYP_IPV6:
@@ -311,7 +298,7 @@ async def _read_address(reader: asyncio.StreamReader, address_type: int) -> str 
     return None
 
 
-async def _reply(writer: asyncio.StreamWriter, code: int) -> None:
+async def _reply(writer: Writer, code: int) -> None:
     """Minimal reply. The bound address is ignored by every client we care about."""
     writer.write(
         struct.pack("!BBBB", SOCKS_VERSION, code, 0x00, ATYP_IPV4)
@@ -322,47 +309,6 @@ async def _reply(writer: asyncio.StreamWriter, code: int) -> None:
         await writer.drain()
 
 
-def _close(writer: asyncio.StreamWriter) -> None:
+def _close(writer: Writer) -> None:
     with contextlib.suppress(Exception):
         writer.close()
-
-
-class ProxyRegistry:
-    """One proxy per project, started on demand."""
-
-    def __init__(self) -> None:
-        self._proxies: dict[str, ProjectProxy] = {}
-        self._lock = asyncio.Lock()
-
-    async def ensure(
-        self, *, project_id: str, container: str, target: SSHTarget
-    ) -> ProjectProxy:
-        async with self._lock:
-            existing = self._proxies.get(project_id)
-            if existing is not None and existing._server is not None:
-                # The container can be recreated under a project without the
-                # proxy noticing, and relaying into a name that no longer
-                # exists fails in a way that looks like the app is down.
-                if existing.container == container:
-                    return existing
-                await existing.stop()
-
-            proxy = ProjectProxy(project_id, container, target)
-            await proxy.start()
-            self._proxies[project_id] = proxy
-            return proxy
-
-    def get(self, project_id: str) -> ProjectProxy | None:
-        return self._proxies.get(project_id)
-
-    async def close(self, project_id: str) -> None:
-        proxy = self._proxies.pop(project_id, None)
-        if proxy is not None:
-            await proxy.stop()
-
-    async def close_all(self) -> None:
-        for project_id in list(self._proxies):
-            await self.close(project_id)
-
-
-registry = ProxyRegistry()

@@ -12,7 +12,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from .. import preview, runtime, socks, ssh
+from .. import preview, runtime, ssh
 from ..auth import Principal, current_principal
 from ..config import get_settings
 from ..runtime import CAN_CONTROL, CAN_OBSERVE, NotFound
@@ -90,18 +90,20 @@ async def open_preview(
     except NotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    # No proxy is started here any more.
+    #
+    # It used to open a SOCKS listener on this machine's loopback, which was
+    # only ever reachable by a browser on this machine — true while the desktop
+    # shell existed solely as a development build beside the API, and false for
+    # every installed app. Those now carry the SOCKS stream over an
+    # authenticated WebSocket instead, so this listener had no client left at
+    # all: an unauthenticated path into the container, open on the server, for
+    # nobody.
+    #
+    # What is left here is the part that was always the point of this call —
+    # which ports the container is actually listening on, so the preview knows
+    # where to start.
     settings = get_settings()
-    try:
-        proxy = await socks.registry.ensure(
-            project_id=str(project_id),
-            container=ctx.container,
-            target=ctx.target,
-        )
-    except OSError as exc:
-        raise HTTPException(
-            status_code=502, detail=f"Could not start the preview proxy: {exc}"
-        ) from exc
-
     services: list[PreviewServiceOut] = []
     try:
         conn_ssh = await ssh.pool.get(ctx.target)
@@ -124,13 +126,12 @@ async def open_preview(
             key=lambda item: preview.rank(item.port, item.kind, item.title)
         )
     except SSHError as exc:
-        # The proxy is what matters; this list only chooses a starting URL, and
-        # a slow container should not stop the preview opening.
+        # Only a starting URL depends on this, so a slow container should not
+        # stop the preview opening.
         log.debug("preview: could not inspect services: %s", exc)
 
     return PreviewOut(
         proxy_host=settings.moonphase_preview_host,
-        proxy_port=proxy.local_port,
         services=services,
         container=ctx.container,
     )
@@ -146,7 +147,6 @@ async def close_preview(
         )
     except NotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    await socks.registry.close(str(project_id))
 
 
 @router.post("/{project_id}/ports/{port}/share", response_model=DetectedPortOut)

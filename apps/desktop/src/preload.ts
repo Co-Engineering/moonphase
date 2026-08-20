@@ -12,8 +12,13 @@ import { contextBridge, ipcRenderer } from 'electron'
 export interface PreviewRequest {
   projectId: string
   projectName: string
-  /** Local SOCKS port the backend opened for this project. */
-  proxyPort: number
+  /**
+   * Where the API is, and who is asking. The proxy runs on the API's machine,
+   * which is not this one, so the shell opens a local port that carries each
+   * connection there over an authenticated WebSocket.
+   */
+  apiUrl: string
+  token: string
   /** Where to start, in the container's own terms — e.g. http://localhost:5173 */
   url: string
 }

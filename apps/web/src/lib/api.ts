@@ -364,7 +364,6 @@ export interface PreviewService {
 
 export interface Preview {
   proxy_host: string
-  proxy_port: number
   /** Ordered by what you most likely meant to open. */
   services: PreviewService[]
   container: string
