@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 
 from .. import docker_remote, provision, queries, ssh
 from ..auth import Principal, current_principal
@@ -46,11 +48,17 @@ async def get_server(
 async def create_server(
     payload: ServerCreate, principal: Principal = Depends(current_principal)
 ) -> ServerBootstrapOut:
-    """Create a server row, then immediately try to bootstrap it.
+    """Create a server row and start bootstrapping it in the background.
 
-    The row is committed before bootstrapping so a slow or failing SSH attempt
-    still leaves something in the UI to retry against, rather than losing what
-    the user typed.
+    Bootstrapping installs a key, probes for Docker and often installs it, which
+    on a cold machine takes minutes. Holding an HTTP request open for that long
+    is a bet against every proxy, browser and phone network between here and
+    the person waiting — and it is a bet that loses: the browser gave up on a
+    bootstrap that went on to succeed, and reported a network error for a server
+    that was coming up fine.
+
+    So this returns as soon as the row exists, and the client watches the
+    server's status the same way the sidebar already does.
     """
     try:
         payload.validate_credentials()
@@ -75,6 +83,16 @@ async def create_server(
             )
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except IntegrityError as exc:
+            # Names are unique per organization. Retrying an add after a failure
+            # hits this every time, and a raw constraint violation is not an
+            # answer anyone can act on.
+            if "servers_org_id_name_key" in str(exc):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"You already have a server called “{payload.name.strip()}”.",
+                ) from exc
+            raise
 
     server_id = row["id"]
 
@@ -89,11 +107,43 @@ async def create_server(
             password=payload.password,
         )
 
-    return await _run_bootstrap(
-        principal,
-        server_id,
-        auto_install_docker=payload.auto_install_docker,
+    # Deliberately not awaited. Failures are recorded on the row, which is what
+    # the client is watching; nothing here has anywhere better to report them.
+    task = asyncio.create_task(
+        _bootstrap_in_background(
+            principal, server_id, auto_install_docker=payload.auto_install_docker
+        )
     )
+    _background.add(task)
+    task.add_done_callback(_background.discard)
+
+    return ServerBootstrapOut(
+        server=_to_out({**row, "status": "bootstrapping"}),
+        status="bootstrapping",
+        detail="Connecting…",
+    )
+
+
+# Held so the event loop does not collect a task that nothing is awaiting.
+_background: set[asyncio.Task] = set()
+
+
+async def _bootstrap_in_background(
+    principal: Principal, server_id: UUID, *, auto_install_docker: bool
+) -> None:
+    try:
+        await _run_bootstrap(
+            principal, server_id, auto_install_docker=auto_install_docker
+        )
+    except Exception as exc:  # noqa: BLE001 — the row is the only place to report
+        log.warning("bootstrap of %s failed: %s", server_id, exc)
+        async with service_session() as conn:
+            await queries.update_server_state(
+                conn,
+                server_id,
+                status="error",
+                status_detail=str(exc)[:500],
+            )
 
 
 @router.post("/{server_id}/bootstrap", response_model=ServerBootstrapOut)

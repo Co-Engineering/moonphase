@@ -45,6 +45,38 @@ export function AddServer({ onClose, onCreated }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<ServerBootstrap | null>(null)
 
+  /**
+   * Watch the server come up.
+   *
+   * Bootstrapping installs a key, probes for Docker and often installs it,
+   * which on a cold machine takes minutes. Waiting on one long request meant
+   * the browser gave up on a bootstrap that went on to succeed and reported a
+   * network error for a server that was fine.
+   */
+  const watch = async (id: string): Promise<ServerBootstrap> => {
+    const deadline = Date.now() + 8 * 60 * 1000
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, 2000))
+      const server = await api.server(id)
+      if (server.status !== 'bootstrapping' && server.status !== 'pending') {
+        return {
+          server,
+          status: server.status,
+          detail: server.status_detail ?? null,
+          public_key_to_install: server.managed_public_key ?? null,
+        }
+      }
+      if (Date.now() > deadline) {
+        return {
+          server,
+          status: 'error',
+          detail: 'It is still connecting after eight minutes. Something is wrong.',
+          public_key_to_install: null,
+        }
+      }
+    }
+  }
+
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     setBusy(true)
@@ -63,7 +95,25 @@ export function AddServer({ onClose, onCreated }: Props) {
       })
       setResult(created)
       onCreated()
-      if (created.status === 'online') onClose()
+
+      const settled =
+        created.status === 'bootstrapping' || created.status === 'pending'
+          ? await watch(created.server.id)
+          : created
+      setResult(settled)
+      onCreated()
+
+      if (settled.status === 'online') {
+        onClose()
+      } else if (settled.status === 'error') {
+        // Nothing half-added left behind: a server that never connected is not
+        // a server, and leaving it in the sidebar means tidying up after a
+        // typo. The form keeps what was typed, so fixing it is one edit.
+        await api.deleteServer(created.server.id).catch(() => {})
+        setResult(null)
+        onCreated()
+        setError(settled.detail ?? 'Could not connect to that machine.')
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -76,10 +126,15 @@ export function AddServer({ onClose, onCreated }: Props) {
     setBusy(true)
     setError(null)
     try {
-      const next = await api.bootstrapServer(result.server.id)
+      const started = await api.bootstrapServer(result.server.id)
+      const next =
+        started.status === 'bootstrapping' || started.status === 'pending'
+          ? await watch(result.server.id)
+          : started
       setResult(next)
       onCreated()
       if (next.status === 'online') onClose()
+      else if (next.status === 'error') setError(next.detail ?? 'Could not connect.')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {

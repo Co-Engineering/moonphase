@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 
 import asyncssh
 
-from . import docker_remote, ssh
+from . import docker_remote, imagebuild, ssh
 from .harness import Harness, SessionSpace
 from .ssh import SSHError
 
@@ -127,6 +127,8 @@ async def start(
     server_id: str,
     harness: Harness,
     image: str,
+    base_image: str | None = None,
+    setup_script: str | None = None,
 ) -> LoginSession:
     """Begin a sign-in and return once the authorization URL is known."""
     _prune()
@@ -146,8 +148,25 @@ async def start(
     )
     _sessions[session_id] = session
 
-    # A throwaway container, not a project one: signing in must not depend on
-    # having created a project first, and must not disturb a running session.
+    # Signing in must not depend on having created a project first — but it did,
+    # because the image it runs in is only ever built by creating one. On a
+    # freshly added server `docker run` failed with "Unable to find image
+    # locally" and the button appeared to do nothing.
+    #
+    # Built with the same recipe and tag a project would use, so the work is
+    # shared: whichever happens first pays for it and the other finds it there.
+    if base_image:
+        try:
+            built = await imagebuild.ensure_image(
+                conn, tag=image, base_image=base_image, setup_script=setup_script
+            )
+            if built:
+                log.info("built %s for a sign-in on %s", image, server_id)
+        except SSHError as exc:
+            session.state = "error"
+            session.detail = f"Could not prepare the container image: {exc}"[:300]
+            return session
+
     run = await ssh.run(
         conn,
         " ".join(

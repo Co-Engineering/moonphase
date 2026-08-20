@@ -108,7 +108,13 @@ export interface Server {
 
 export interface ServerBootstrap {
   server: Server
-  status: 'online' | 'error' | 'awaiting_key_install'
+  /**
+   * 'bootstrapping' is the answer to creating one: the work happens in the
+   * background and the client watches the server's own status, because a key
+   * install and a Docker install take longer than a request should be held
+   * open for.
+   */
+  status: 'bootstrapping' | 'online' | 'error' | 'awaiting_key_install' | 'pending' | 'offline'
   detail: string | null
   public_key_to_install: string | null
 }

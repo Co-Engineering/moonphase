@@ -14,7 +14,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from .. import github, login, queries, runtime, ssh
+from .. import environments, github, login, queries, runtime, ssh
 from ..auth import Principal, current_principal
 from ..config import get_settings
 from ..db import service_session, user_session
@@ -207,19 +207,27 @@ async def start_harness_login(
     org_id = await _resolve_org(principal, payload.org_id)
     server = await _pick_login_server(principal, payload.server_id)
     harness = get_harness(payload.harness)
-    settings = get_settings()
 
     try:
         target = await runtime.load_server_target(
             principal.claims, server["id"], require=CAN_CONTROL
         )
         conn_ssh = await ssh.pool.get(target)
+        # Whatever a project on this server would get by default, so the image
+        # is shared between signing in and running.
+        default_env = environments.resolve(None, [])
+
         session = await login.start(
             conn_ssh,
             org_id=str(org_id),
             server_id=str(server["id"]),
             harness=harness,
-            image=settings.moonphase_runtime_image,
+            # The default environment's image, and its recipe so the relay can
+            # build it when the server has never run a project. Passing the bare
+            # settings tag meant an image nothing ever builds.
+            image=default_env.image,
+            base_image=default_env.base_image,
+            setup_script=default_env.setup_script,
         )
     except (SSHError, NotFound) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

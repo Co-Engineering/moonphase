@@ -273,3 +273,36 @@ async def test_a_rejected_code_fails_fast_with_the_terminal_shown(
         print(f"\n  rejected cleanly: {session.detail}")
     finally:
         await ssh.pool.close_all()
+
+
+def test_signing_in_builds_its_image_rather_than_assuming_one() -> None:
+    """Signing in must not depend on having created a project first.
+
+    It did: the relay was handed the bare MOONPHASE_RUNTIME_IMAGE tag, which
+    nothing ever builds — projects use a per-environment tag instead. On a
+    freshly added server `docker run` failed with "Unable to find image
+    locally", and the button appeared to do nothing at all.
+    """
+    import inspect
+
+    from moonphase import login
+
+    source = inspect.getsource(login.start)
+
+    assert "ensure_image" in source
+    # And before the container is started, not after. Matched on the argument
+    # list rather than the word, which also appears in the comment explaining
+    # why this is here.
+    assert source.index("ensure_image") < source.index('"docker", "run"')
+
+
+def test_the_relay_uses_the_same_image_a_project_would() -> None:
+    """So whichever happens first pays for the build and the other finds it."""
+    import inspect
+
+    from moonphase.routers import profile
+
+    source = inspect.getsource(profile)
+
+    assert "default_env.image" in source
+    assert "moonphase_runtime_image" not in source
