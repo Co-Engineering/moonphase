@@ -1,7 +1,12 @@
 # Install with Docker
 
-The fastest way to run Moonphase. Docker is the only thing you need — the
-database, sign-in, and every key that encrypts your credentials are created for you.
+What to run **on the server itself**. Docker is the only thing you need — the
+database, sign-in, and every key that encrypts your credentials are created for
+you.
+
+!!! tip "Installing on a machine somewhere else?"
+    [Install it over SSH](server.md) from your own computer instead. Same
+    result, and it installs Docker for you if the machine has none.
 
 ```console
 $ curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install.sh | sh

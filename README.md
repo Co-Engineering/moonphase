@@ -36,6 +36,26 @@ Implemented:
 Not yet: zrok tunnels (previews are reachable from the backend host today), OpenCode,
 organization invites and role management UI.
 
+## Installing it on a server
+
+One command on your own machine, which does the rest over SSH — it asks for the
+address, a username, and a key or password, and installs Docker on the way if
+the machine has none:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-server.sh -o install-server.sh
+sh install-server.sh
+```
+
+Or, on the server itself:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install.sh | sh
+```
+
+Either way there is nothing to configure: every secret is generated, and the
+address, HTTPS and your first account are set up in the browser afterwards.
+
 ## Installing the app
 
 One command on a computer:

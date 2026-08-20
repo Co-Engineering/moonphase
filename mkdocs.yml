@@ -102,6 +102,7 @@ extra:
 nav:
   - Home: index.md
   - Getting started:
+      - getting-started/server.md
       - getting-started/docker.md
       - getting-started/app.md
       - getting-started/installation.md

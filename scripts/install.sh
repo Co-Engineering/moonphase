@@ -161,13 +161,33 @@ listening_on() {
   fi
 }
 
-for port in 80 443; do
-  if listening_on "$port"; then
-    PUBLIC_PORTS=0
-  fi
-done
+# An install that already took those ports is listening on them itself, and a
+# second run must not read its own proxy as somebody else's web server. It did:
+# re-running this on a working public install found 80 busy, dropped the
+# override, and took the site off 80 — an upgrade that quietly unpublished the
+# thing it was upgrading.
+#
+# So the earlier decision stands. It is only made afresh when there is none.
+case "$(existing COMPOSE_FILE)" in
+  *docker-compose.public.yml*)
+    KEEP_PUBLIC=1
+    ;;
+  *)
+    KEEP_PUBLIC=0
+    ;;
+esac
 
-if [ "$PUBLIC_PORTS" = "1" ]; then
+if [ "$KEEP_PUBLIC" = "1" ]; then
+  info "keeping ports 80 and 443, which this install already has"
+else
+  for port in 80 443; do
+    if listening_on "$port"; then
+      PUBLIC_PORTS=0
+    fi
+  done
+fi
+
+if [ "$KEEP_PUBLIC" = "1" ] || [ "$PUBLIC_PORTS" = "1" ]; then
   COMPOSE_FILES="docker-compose.yml:docker-compose.public.yml"
 else
   warn "ports 80 and 443 are already in use on this machine"
