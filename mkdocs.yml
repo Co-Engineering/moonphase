@@ -101,6 +101,7 @@ nav:
   - Home: index.md
   - Getting started:
       - getting-started/docker.md
+      - getting-started/app.md
       - getting-started/installation.md
       - getting-started/first-server.md
       - getting-started/first-project.md

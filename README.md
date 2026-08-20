@@ -31,32 +31,44 @@ Implemented:
 - A readable transcript feed for phones, streaming, that writes back into the same session
 - Activity detection and Web Push, so you learn the agent is waiting without a client open
 - Share a server or a project with one person, by email, as a viewer or a collaborator
-- Electron desktop shell
+- Desktop app for Linux, macOS and Windows, installed with one command
 
 Not yet: zrok tunnels (previews are reachable from the backend host today), OpenCode,
 organization invites and role management UI.
 
-## Installing it on your phone
+## Installing the app
 
-Moonphase serves the built frontend from the API, so one address is the whole
-thing. Open it on your phone and add it to your home screen; the first launch
-asks for your host only if it cannot work that out from where it was served.
+One command on a computer:
 
 ```bash
-pnpm --filter @moonphase/web build   # the API serves apps/web/dist when present
+# Linux and macOS
+curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-app.sh | sh
 ```
+
+```powershell
+# Windows, in PowerShell
+irm https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-app.ps1 | iex
+```
+
+On a phone there is no store download: open your Moonphase address and add it to
+the home screen — Share → **Add to Home Screen** on iOS, ⋮ → **Install app** on
+Android. The app is served by your own instance, so it is always the same
+version as the server it talks to.
+
+Full instructions, including what to do about the unsigned builds on macOS and
+Windows, are in [installing the app](https://oliversvane.github.io/moonphase/getting-started/app/).
 
 Then **Settings → Notifications → Enable**, and you get a push whenever one of
 your sessions starts waiting for you. Notifications go to the person who owns
 the session and nobody else — someone watching a colleague's agent cannot
 answer its questions, so waking them would be noise.
 
-**It has to be HTTPS.** Service workers and push are only available in a secure
+**Phones need HTTPS.** Service workers and push are only available in a secure
 context, so a phone pointed at `http://192.168.1.x:8471` will not be able to
-install the app or receive anything, and browsers say very little about why. A
-reverse proxy with a real certificate, a Tailscale HTTPS address, or a
-Cloudflare tunnel all work. `localhost` is exempt, which is why it works on the
-machine running it.
+install the app or receive anything, and browsers say very little about why.
+Give the instance a domain during setup and the certificate arrives on its own;
+a Tailscale HTTPS address or a Cloudflare tunnel work too. `localhost` is
+exempt, which is why it works on the machine running it.
 
 ## Sharing
 

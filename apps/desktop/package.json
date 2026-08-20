@@ -2,17 +2,109 @@
   "name": "@moonphase/desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "Moonphase desktop shell",
+  "description": "Moonphase desktop app",
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json && electron .",
     "start": "electron .",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "bundle": "node scripts/collect-web.mjs",
+    "package": "pnpm run build && pnpm run bundle && electron-builder",
+    "package:dir": "pnpm run build && pnpm run bundle && electron-builder --dir"
   },
   "devDependencies": {
     "@types/node": "^22.7.5",
     "electron": "^33.0.2",
+    "electron-builder": "^26.15.3",
     "typescript": "^5.6.3"
-  }
+  },
+  "build": {
+    "appId": "dk.coec.moonphase",
+    "productName": "Moonphase",
+    "copyright": "Moonphase",
+    "directories": {
+      "output": "release",
+      "buildResources": "packaging"
+    },
+    "files": [
+      "dist/**/*",
+      "web/**/*",
+      "package.json"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "oliversvane",
+        "repo": "moonphase"
+      }
+    ],
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "category": "Development",
+      "synopsis": "Coding agents on servers you own",
+      "desktop": {
+        "entry": {
+          "StartupWMClass": "Moonphase"
+        }
+      },
+      "syncDesktopName": true
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.developer-tools",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "deleteAppDataOnUninstall": false
+    },
+    "executableName": "moonphase"
+  },
+  "desktopName": "moonphase.desktop",
+  "author": "Moonphase"
 }

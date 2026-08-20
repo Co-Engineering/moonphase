@@ -1,0 +1,126 @@
+# Build the desktop app for the three desktops, and publish it.
+#
+# Each installer has to be built on the system it targets: electron-builder
+# assembles a .dmg with macOS tooling and an .exe with Windows tooling, and
+# neither cross-compiles. So this fans out to three runners and collects the
+# results into one release.
+#
+# Every push to main refreshes the `edge` prerelease, which is what the install
+# scripts download. A tag publishes a permanent release beside it, so people who
+# want a fixed version can pin one and everyone else gets the current build.
+#
+# Nothing here is code-signed. An unsigned app is refused on first open by both
+# macOS and Windows, and the install scripts and documentation say how to get
+# past it. Signing needs paid certificates, which is a decision with a bill
+# attached rather than something to quietly enable.
+name: app
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths-ignore:
+      - docs/**
+      - mkdocs.yml
+      - "**/*.md"
+  pull_request:
+    paths-ignore:
+      - docs/**
+      - mkdocs.yml
+      - "**/*.md"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: app-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+          - os: macos-latest
+            platform: mac
+          - os: windows-latest
+            platform: win
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The shell renders the same frontend the browser and the phone use, so
+      # the web build is a prerequisite rather than a separate artefact.
+      - run: pnpm --filter @moonphase/web build
+
+      - name: Build installers
+        run: pnpm --filter @moonphase/desktop run package -- --${{ matrix.platform }} --publish never
+        env:
+          # Without a certificate, signing is a failure rather than a no-op.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: moonphase-${{ matrix.platform }}
+          path: |
+            apps/desktop/release/*.AppImage
+            apps/desktop/release/*.deb
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    # Only from the canonical branch or a tag: a fork's pull request must not be
+    # able to replace what the install scripts hand people.
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - run: ls -la artifacts
+
+      # A rolling prerelease. `edge` is what install.sh and install.ps1 ask for,
+      # so this is the download people actually get.
+      - name: Publish edge
+        if: startsWith(github.ref, 'refs/tags/') == false
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: edge
+          name: Edge build
+          body: |
+            The current build of `main`, refreshed on every commit.
+
+            Install it with one command — see
+            <https://oliversvane.github.io/moonphase/getting-started/app/>.
+
+            Built from ${{ github.sha }}.
+          prerelease: true
+          files: artifacts/*
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

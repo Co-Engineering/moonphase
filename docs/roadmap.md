@@ -102,6 +102,18 @@ The schema is already here; this is screens and flows.
 - [ ] Multiple harnesses in one workspace as separate tmux sessions
 - [ ] Per-harness runtime images
 
+## Not scheduled — signed desktop builds
+
+The desktop app is built for Linux, macOS and Windows and installs with one
+command, but nothing is code-signed: macOS quarantines the download and Windows
+shows a SmartScreen panel. [The installers deal with
+both](getting-started/app.md#about-the-unsigned-builds), which is not the same as
+fixing it.
+
+Signing needs an Apple Developer membership and a Windows certificate, each
+renewed annually. That is a recurring bill rather than an afternoon, so it waits
+for someone to decide the project should carry one.
+
 ## Known issues
 
 - **Container images are large** (~1.5 GB). A slimmer base and a shared layer

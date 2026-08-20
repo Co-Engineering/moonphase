@@ -7,11 +7,34 @@
  * than stopping anything.
  */
 import { app, BrowserWindow, ipcMain, session, shell } from 'electron'
+import { existsSync } from 'node:fs'
 import * as path from 'node:path'
 
 // Set by `pnpm dev`; in a packaged build we load the built assets from disk.
 const DEV_SERVER_URL = process.env.MOONPHASE_DEV_SERVER_URL ?? 'http://127.0.0.1:8472'
 const isDev = process.env.NODE_ENV !== 'production' && !app.isPackaged
+
+/**
+ * Where the built frontend ended up.
+ *
+ * Two layouts, because there are two ways to arrive here. Packaging copies the
+ * web build in beside this one, so it travels inside the app; a checkout builds
+ * it in its own workspace and leaves it there. Guessing wrong shows an empty
+ * window with nothing in the log, so both are tried and the failure names the
+ * places it looked.
+ */
+function frontendEntry(): string {
+  const candidates = [
+    path.join(__dirname, '..', 'web', 'index.html'),
+    path.join(__dirname, '..', '..', 'web', 'dist', 'index.html'),
+  ]
+  const found = candidates.find((candidate) => existsSync(candidate))
+  if (found) return found
+  throw new Error(
+    `Could not find the built frontend. Looked in:\n  ${candidates.join('\n  ')}\n` +
+      'Run `pnpm build` at the repository root.',
+  )
+}
 
 let window: BrowserWindow | null = null
 
@@ -38,7 +61,7 @@ function createWindow(): void {
   if (isDev) {
     void window.loadURL(DEV_SERVER_URL)
   } else {
-    void window.loadFile(path.join(__dirname, '../../web/dist/index.html'))
+    void window.loadFile(frontendEntry())
   }
 
   // Anything the app tries to open in a new window is an external link —

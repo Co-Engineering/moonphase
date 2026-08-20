@@ -7,20 +7,17 @@ database, sign-in, and every key that encrypts your credentials are created for 
 $ curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install.sh | sh
 ```
 
-Then open **<http://127.0.0.1:8471>** and create an account. The first one is yours.
+Then open it in a browser and follow the setup: it asks for your account, an
+optional domain, and which ways people may sign in. Nothing is configured in a
+file, and nothing needs restarting afterwards.
 
-For a real deployment, give it the address people will use — it sets up HTTPS
-for that name by itself:
+On the machine itself that address is **<http://127.0.0.1:8471>**. On a server,
+use its IP — the setup page is served on port 80 as well, so
+`http://203.0.113.10` reaches it.
 
-```console
-$ curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install.sh \
-    | sh -s -- https://moonphase.example.com
-```
-
-!!! warning "`sh -s --`, not a variable in front of curl"
-    `MOONPHASE_PUBLIC_URL=… curl … | sh` looks right and is not: the assignment
-    applies to `curl`, not to the shell reading the script, so the setting is
-    silently lost and you get a localhost install.
+Give it a domain during setup and HTTPS starts working on its own: the
+certificate is obtained the first time someone visits by name, and renews
+itself. [Pointing a domain at it](../guides/dns.md) is one DNS record.
 
 !!! tip "Read it before you pipe it"
     Piping a script from the internet into a shell is a thing worth being suspicious
@@ -128,24 +125,22 @@ and does nothing.
 
 ## Making it reachable
 
-The default publishes to `127.0.0.1` only, which is right for trying it out and wrong for
-the thing Moonphase is actually for — being reachable from your phone.
+The point of Moonphase is a session you can leave, which means reaching it from
+your phone. On a server the installer publishes 80 and 443 when they are free,
+so it is reachable by IP the moment it is up; on a machine that already runs a
+web server it stays on 8471 and you put your own proxy in front.
 
-Two things to change in `.env`:
+The domain is set **in setup**, not in a file. There is nothing to edit and
+nothing to restart: the address is stored in the database, and the proxy asks it
+which names it may obtain certificates for.
 
-```bash
-MOONPHASE_PUBLIC_URL=https://moonphase.example.com   # where people reach it
-MOONPHASE_BIND=0.0.0.0                               # publish beyond loopback
-```
-
-Then `docker compose up -d`.
+To change it later, use **Settings → Instance**.
 
 ### HTTPS is automatic
 
-Give the installer an `https://` address and Caddy provisions a Let's Encrypt
-certificate for it, listens on 443, and redirects 80. There is nothing to edit,
-install or renew, and the certificate lives in a volume so a restart does not ask
-for another one.
+Enter a domain during setup and Caddy provisions a Let's Encrypt certificate for
+it, listens on 443, and redirects 80. There is nothing to edit, install or renew,
+and the certificate lives in a volume so a restart does not ask for another one.
 
 It needs two things: ports **80 and 443** reachable from the internet, and DNS
 pointing at the machine — see [pointing a domain at it](../guides/dns.md) for the
@@ -161,9 +156,11 @@ so installing before the DNS record exists is fine — it simply gets one later.
     A Tailscale HTTPS address or a Cloudflare tunnel work too, if you would rather not
     expose 80 and 443.
 
-`MOONPHASE_PUBLIC_URL` has to be the address a **browser** uses. The client is served from
-it and signs in against the same origin, so an unreachable value breaks sign-in rather
-than degrading it.
+The domain has to be the address a **browser** uses. The client is served from it
+and signs in against the same origin, so a name that does not resolve to this
+machine breaks sign-in rather than degrading it. Setup only lets certificates be
+issued for the name it was given, so a stranger pointing a record at your server
+cannot mint one against it.
 
 ## Managing it
 
@@ -206,23 +203,35 @@ $ docker compose exec db pg_dump -U postgres postgres > moonphase.sql
 
 ## Settings worth knowing
 
-Set in `.env`, read by `docker-compose.yml`:
+Almost nothing. The domain, who may sign in, and how they sign in are all set in
+the setup screen and stored in the database — so they can be changed from a phone
+and take effect without a restart.
+
+What is left in `.env` is the handful of things needed before there is a database
+to read them from:
 
 | Variable | Default | Meaning |
 | -------- | ------- | ------- |
-| `MOONPHASE_PUBLIC_URL` | `http://localhost:8471` | Where browsers reach it |
 | `MOONPHASE_BIND` | `127.0.0.1` | Interface the proxy publishes on |
 | `MOONPHASE_PORT` | `8471` | Port it publishes on |
-| `MOONPHASE_DISABLE_SIGNUP` | `false` | Set `true` once your account exists |
-| `MOONPHASE_MAILER_AUTOCONFIRM` | `true` | Set `false` when you have a mail server |
 | `MOONPHASE_MONITOR_INTERVAL` | `20` | Seconds between activity checks; `0` disables notifications |
+| `MOONPHASE_VERSION` | `edge` | Image tag to run |
+
+The secrets beside them — `MOONPHASE_SECRET_KEY`, the database password, the JWT
+secret — are generated by the installer and should be left alone.
+`MOONPHASE_SECRET_KEY` in particular: rotating it makes every stored SSH key and
+harness credential unreadable.
 
 Everything the API itself understands is in the
 [configuration reference](../reference/configuration.md).
 
-!!! tip "Close signup once you are in"
-    Anyone who can reach the address can create an account by default. Set
-    `MOONPHASE_DISABLE_SIGNUP=true` and restart once yours exists.
+!!! tip "Signup is closed by default"
+    Only the first account can be created without permission — the one you make
+    during setup. After that, **Let other people create accounts** in the setup
+    screen decides, and it starts unchecked.
+
+    Earlier versions used `MOONPHASE_DISABLE_SIGNUP` in `.env`. That is now only
+    a bootstrap default; the setting stored by setup overrides it.
 
 ## If it does not come up
 
@@ -234,8 +243,10 @@ $ docker compose logs migrate api
 **`migrate` exited 1.** Usually the database was not ready or the auth schema had not
 appeared. It is safe to re-run: `docker compose up -d migrate`.
 
-**Sign-in fails with a network error.** `MOONPHASE_PUBLIC_URL` is probably not an address
-your browser can reach. It is used for the auth endpoint as well as for serving the app.
+**Sign-in fails with a network error.** The domain set in setup is probably not an
+address your browser can reach. It is used for the auth endpoint as well as for
+serving the app, so a name that resolves elsewhere breaks sign-in rather than
+degrading it. Reach the instance by IP and correct it in **Settings → Instance**.
 
 **Port already in use.** Change `MOONPHASE_PORT` in `.env` and bring it up again.
 
