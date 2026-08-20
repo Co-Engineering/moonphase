@@ -104,3 +104,41 @@ describe('starting sessions', () => {
     await waitFor(() => expect(create).toHaveBeenCalledWith('p1', 'refactor'))
   })
 })
+
+/**
+ * The other half of being able to start several. The endpoint has always
+ * existed and nothing in the app called it, so a list that only grew was the
+ * only list you could have.
+ */
+describe('closing a session', () => {
+  it('offers it on your own sessions', async () => {
+    const remove = vi.spyOn(api, 'deleteSession').mockResolvedValue(undefined)
+    view([session({})])
+
+    fireEvent.click(await screen.findByRole('button', { name: 'close' }))
+
+    await waitFor(() => expect(remove).toHaveBeenCalledWith('p1', 'olol'))
+  })
+
+  it('offers it on a colleague\'s only to an owner', () => {
+    const theirs = session({ tmux_session: 'sam', is_mine: false, owner: 'sam@x.test' })
+
+    const asOwner = view([theirs])
+    expect(screen.queryByRole('button', { name: 'close' })).toBeTruthy()
+    asOwner.unmount()
+
+    render(
+      <ProjectView
+        project={{ ...project, access: 'member' } as unknown as Project}
+        session={null}
+        sessions={[theirs]}
+        onEnter={() => {}}
+        onChanged={() => {}}
+        onToggleSidebar={() => {}}
+        onShare={() => {}}
+        onRemoved={() => {}}
+      />,
+    )
+    expect(screen.queryByRole('button', { name: 'close' })).toBeNull()
+  })
+})

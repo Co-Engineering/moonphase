@@ -899,6 +899,22 @@ export function ProjectView({
                     >
                       window
                     </button>
+                    {(item.is_mine || project.access === 'admin') && (
+                      // The other half of being able to start several: a list
+                      // that only ever grows is its own kind of stuck. The
+                      // branch survives this — it may hold the only copy of the
+                      // work — so what goes is the agent and its worktree.
+                      <button
+                        className="ghost danger"
+                        disabled={busy}
+                        title="Close this session. Its branch is kept."
+                        onClick={() =>
+                          void act(() => api.deleteSession(project.id, item.tmux_session))
+                        }
+                      >
+                        close
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>

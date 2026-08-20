@@ -85,6 +85,14 @@ button.ghost:hover:not(:disabled) {
   background: var(--bg-elev);
 }
 
+/* Quiet until you reach for it: closing a session sits next to the button that
+   opens one, and a red control beside a blue one reads as the point of the row
+   rather than the last resort. */
+button.ghost.danger:hover:not(:disabled) {
+  color: var(--red);
+  background: var(--bg-elev);
+}
+
 input,
 select,
 textarea {
