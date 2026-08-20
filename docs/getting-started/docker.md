@@ -77,17 +77,18 @@ MOONPHASE_IMAGE=oliversvanecoec/moonphase
 `.env` chooses the tag:
 
 ```bash
-MOONPHASE_VERSION=0.2.1     # or 0.2, or latest, or edge
+MOONPHASE_VERSION=edge      # or a version, once one is released
 ```
 
 | Tag | What it is |
 | --- | ---------- |
-| `latest` | The most recent release. The default. |
-| `0.2.1`, `0.2` | Pin as tightly or as loosely as you like |
-| `edge` | The tip of `main`. Builds and passes tests; not a release. |
+| `edge` | The tip of `main`. Builds and passes tests. **The default, and currently the only tag.** |
+| `0.2.1`, `0.2` | Once versions are released, pin as tightly or as loosely as you like |
 
-Pinning an exact version is the right call for anything you depend on — an upgrade then
-happens when you change that line, rather than whenever you happen to pull.
+There is no `latest` yet — nothing has been released, so there is nothing for it
+to point at. Once there is, pinning an exact version is the right call for
+anything you depend on: an upgrade then happens when you change that line, rather
+than whenever you happen to pull.
 
 ### Building it yourself
 

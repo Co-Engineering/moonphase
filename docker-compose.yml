@@ -114,7 +114,7 @@ services:
     #
     # To run from source, add the override:
     #   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
-    image: ${MOONPHASE_IMAGE:-ghcr.io/oliversvane/moonphase}:${MOONPHASE_VERSION:-latest}
+    image: ${MOONPHASE_IMAGE:-ghcr.io/oliversvane/moonphase}:${MOONPHASE_VERSION:-edge}
     restart: unless-stopped
     depends_on:
       db:

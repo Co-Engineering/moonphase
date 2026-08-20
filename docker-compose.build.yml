@@ -16,5 +16,5 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    image: ${MOONPHASE_IMAGE:-ghcr.io/oliversvane/moonphase}:${MOONPHASE_VERSION:-latest}
+    image: ${MOONPHASE_IMAGE:-ghcr.io/oliversvane/moonphase}:${MOONPHASE_VERSION:-edge}
     pull_policy: never
