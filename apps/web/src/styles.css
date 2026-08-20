@@ -1544,6 +1544,25 @@ button.linkish:hover:not(:disabled) {
   margin-top: 10px;
 }
 
+/* Naming a second session sits beside the button that makes it, so the
+   optional part reads as optional rather than as a form to fill in. */
+.new-session {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.new-session input {
+  flex: 1;
+  min-width: 0;
+  max-width: 260px;
+}
+
+.new-session button {
+  flex: none;
+}
+
 .session-card {
   display: flex;
   align-items: center;

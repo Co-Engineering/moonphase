@@ -595,7 +595,7 @@ function ProjectRow({
   )
 }
 
-function ProjectView({
+export function ProjectView({
   project,
   session,
   sessions,
@@ -617,7 +617,11 @@ function ProjectView({
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Optional: blank names itself after you, then -2, -3. Naming is worth
+  // offering once there is more than one to tell apart.
+  const [newSession, setNewSession] = useState('')
   const active = sessions.find((s) => s.tmux_session === session) ?? null
+  const mine = sessions.filter((s) => s.is_mine)
   // Set briefly when a keystroke is refused, so the explanation reacts to the
   // attempt instead of sitting there having already been read and dismissed.
   const [nudged, setNudged] = useState(false)
@@ -899,20 +903,39 @@ function ProjectView({
                 ))}
               </div>
             )}
-            {canControl(project.access) && !sessions.some((s) => s.is_mine) && (
-              <button
-                className="primary"
-                disabled={busy}
-                style={{ marginTop: 12 }}
-                onClick={() =>
-                  void act(async () => {
-                    const created = await api.createSession(project.id)
-                    onEnter(created.tmux_session)
-                  })
-                }
-              >
-                Start my session
-              </button>
+            {canControl(project.access) && (
+              // More than one, and the button says so. A session is a whole
+              // agent — its own home, its own worktree, its own branch — so
+              // running two in a project is the ordinary way to have one
+              // refactoring while another chases a bug. This used to disappear
+              // once you had a session, which made one per project look like
+              // the rule rather than the default.
+              <div className="new-session">
+                <input
+                  value={newSession}
+                  onChange={(e) => setNewSession(e.target.value)}
+                  placeholder={mine.length ? 'Name it (optional)' : ''}
+                  aria-label="New session name"
+                  disabled={busy}
+                  style={{ display: mine.length ? undefined : 'none' }}
+                />
+                <button
+                  className="primary"
+                  disabled={busy}
+                  onClick={() =>
+                    void act(async () => {
+                      const created = await api.createSession(
+                        project.id,
+                        newSession.trim() || undefined,
+                      )
+                      setNewSession('')
+                      onEnter(created.tmux_session)
+                    })
+                  }
+                >
+                  {mine.length ? 'New session' : 'Start my session'}
+                </button>
+              </div>
             )}
           </div>
           <YourApp
