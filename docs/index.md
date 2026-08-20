@@ -11,11 +11,26 @@ coding harness running inside a persistent `tmux` session.
 Attach from your desktop. Detach by shutting the lid. Reattach from your phone on the
 train. The session never noticed.
 
+Installing it onto a server, from your own machine — it asks for the address and
+a way in, and does the rest over SSH:
+
+```console
+$ curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-server.sh -o install-server.sh
+$ sh install-server.sh
+```
+
+Or, run this **on** the machine itself:
+
 ```console
 $ curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install.sh | sh
 ```
 
-Docker is the only requirement. [More ways to install →](getting-started/docker.md)
+Either way there is nothing to configure. Docker is installed if the machine has
+none, every secret is generated, and the address, HTTPS and your first account
+are set up in the browser afterwards.
+
+[Installing on a server →](getting-started/server.md){ .md-button .md-button--primary }
+[More ways to install →](getting-started/docker.md){ .md-button }
 
 ## Why
 
@@ -53,19 +68,17 @@ Moonphase is mostly about solving:
 
 ## How it fits together
 
-```text
-  phone ──┐
-  laptop ──┼──►  ┌──────────────────────┐
-  desktop ─┘     │  Moonphase backend   │  always on
-                 │  FastAPI + Supabase  │
-                 └──────────┬───────────┘
-                            │ ssh
-              ┌─────────────┼─────────────┐
-           srv-a          srv-b         srv-c
-         ┌────────┐     ┌────────┐   ┌────────┐
-         │ docker │     │ docker │   │ docker │
-         │ proj×3 │     │ proj×1 │   │ proj×2 │
-         └────────┘     └────────┘   └────────┘
+```mermaid
+flowchart TB
+    phone["📱 Phone"] --> backend
+    laptop["💻 Laptop"] --> backend
+    desktop["🖥️ Desktop app"] --> backend
+
+    backend["<b>Moonphase</b><br/>FastAPI · Postgres · GoTrue<br/><i>always on</i>"]
+
+    backend -- ssh --> a["<b>srv-a</b><br/>docker · 3 projects"]
+    backend -- ssh --> b["<b>srv-b</b><br/>docker · 1 project"]
+    backend -- ssh --> c["<b>srv-c</b><br/>docker · 2 projects"]
 ```
 
 The backend is the only component that holds SSH credentials and the only one that talks
@@ -74,11 +87,12 @@ over a WebSocket.
 
 [Read the architecture →](concepts/architecture.md){ .md-button }
 
-## Self-hosted means self-hosted
+## Self-hosted first
 
-There is no Moonphase service to sign up for. You run the backend, you point it at
-machines you control, and your agents run on your own Claude account or API key. Nothing
-about your code, your transcripts or your credentials passes through anyone else.
+You run the backend, you point it at machines you control, and your agents run on your
+own Claude account or API key. Nothing about your code, your transcripts or your
+credentials passes through anyone else — not because there is no alternative, but
+because this is the arrangement Moonphase is built around.
 
 That also means the security decisions are yours, and the
 [security model](concepts/security.md) documents exactly where the boundaries are.

@@ -6,12 +6,17 @@ it is worth being precise.
 Inside each project container, one **detached tmux session** owns the harness
 process. Nothing about that session belongs to a client:
 
-```
-container
-└── tmux server (detached, survives everything)
-    └── session "moonphase"
-        └── launch-moonphase.sh      ← sources credentials, sets job control
-            └── claude               ← owns the terminal foreground group
+```mermaid
+flowchart TB
+    subgraph container["Project container"]
+        subgraph tmux["tmux server — detached, survives everything"]
+            subgraph session["session &quot;moonphase&quot;"]
+                launcher["launch-moonphase.sh<br/><i>sources credentials, sets job control</i>"]
+                harness["claude<br/><i>owns the terminal foreground group</i>"]
+                launcher --> harness
+            end
+        end
+    end
 ```
 
 Attaching runs `docker exec -it … tmux attach` on a fresh SSH channel with a

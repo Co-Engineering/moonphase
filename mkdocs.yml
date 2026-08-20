@@ -72,7 +72,15 @@ markdown_extensions:
       pygments_lang_class: true
   - pymdownx.inlinehilite
   - pymdownx.snippets
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        # Renders ```mermaid blocks as diagrams. Material ships the library and
+        # themes it to match, so a diagram follows light and dark without a
+        # second copy — which is the whole reason to draw them here rather than
+        # commit pictures that go stale and cannot be diffed.
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.tasklist:
@@ -110,6 +118,8 @@ nav:
       - getting-started/first-project.md
       - getting-started/tour.md
   - Guides:
+      - guides/people.md
+      - guides/github.md
       - guides/from-your-phone.md
       - guides/save-points.md
       - guides/reviewing-changes.md

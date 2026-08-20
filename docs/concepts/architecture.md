@@ -11,23 +11,22 @@ thin, disposable view onto it.
 
 ## Shape
 
-```
-  phone ──┐
-  laptop ──┼──►  ┌──────────────────────┐
-  desktop ─┘     │  Moonphase backend   │ always on
-                 │  FastAPI + Supabase  │
-                 └──────────┬───────────┘
-                            │ ssh (asyncssh)
-              ┌─────────────┼─────────────┐
-           srv-a          srv-b         srv-c
-         ┌────────┐     ┌────────┐   ┌────────┐
-         │ docker │     │ docker │   │ docker │
-         │ proj×3 │     │ proj×1 │   │ proj×2 │
-         └────────┘     └────────┘   └────────┘
+```mermaid
+flowchart TB
+    phone["📱 Phone"] --> backend
+    laptop["💻 Laptop"] --> backend
+    desktop["🖥️ Desktop app"] --> backend
+
+    backend["<b>Moonphase</b><br/>FastAPI · Postgres · GoTrue<br/><i>always on</i>"]
+
+    backend -- ssh --> a["<b>srv-a</b><br/>docker · 3 projects"]
+    backend -- ssh --> b["<b>srv-b</b><br/>docker · 1 project"]
+    backend -- ssh --> c["<b>srv-c</b><br/>docker · 2 projects"]
 ```
 
 The backend is the only component that holds SSH credentials and the only one
-that talks to managed servers. Clients authenticate against GoTrue and stream
+that talks to managed servers, over `asyncssh` — it speaks the protocol itself
+rather than shelling out to `ssh`. Clients authenticate against GoTrue and stream
 terminals over WebSocket; they hold no secrets and no state worth keeping.
 
 ## The session model

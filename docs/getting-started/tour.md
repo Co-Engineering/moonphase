@@ -36,6 +36,12 @@ than inferred from the last thing you saw:
 
 A session's name is greyed until you enter it. Entering is what connects it.
 
+Click a **project** rather than a session and you get its session list, with
+**New session** to add another and **close** to remove one. Several sessions in
+one project is the ordinary way to work: each gets its own home, its own git
+worktree and its own branch, so one can refactor while another chases a bug.
+Closing one keeps its branch.
+
 ## Inside a session
 
 ### Feed
@@ -103,7 +109,10 @@ on how you pay: a subscription gets its limit window, an API key gets the bill.
 | **Claude**        | Permissions, MCP servers and a global `CLAUDE.md` — as forms       |
 | **Workspace**     | Git identity and environment variables                            |
 | **Environments**  | Base images and setup commands, built on the server               |
-| **Notifications** | Push, and installing Moonphase as an app                          |
+| **Instance**      | The domain, who may sign in, and who has an account               |
+
+**Instance** appears only for administrators of the instance — see
+[people and access](../guides/people.md).
 
 ## Sharing
 

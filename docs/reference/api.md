@@ -1,8 +1,12 @@
 # HTTP API
 
-The backend is a plain FastAPI application. Everything the clients do goes through these
-routes, and nothing else is privileged — the desktop app has no capability the web client
-lacks.
+The backend is a plain FastAPI application. Everything the clients do goes through
+these routes.
+
+The desktop app has exactly one capability the web client lacks, and it is a
+browser capability rather than an API one: it can set a window's proxy, which is
+what makes [previews](../guides/previews.md) work. Every route below is open to
+both.
 
 ## Interactive reference
 
@@ -34,7 +38,7 @@ empty set rather than someone else's data — see [the security model](../concep
 | Method | Path           | Purpose |
 | ------ | -------------- | ------- |
 | `GET`  | `/api/health`  | Liveness |
-| `GET`  | `/api/config`  | Supabase URL, anon key and VAPID public key — public by design |
+| `GET`  | `/api/config`  | Auth URL, anon key, VAPID public key, and whether signup is open — public by design |
 
 `/api/config` is what lets a phone connect by typing one address: the client fetches its
 own configuration at runtime rather than having it baked into the bundle.
@@ -107,8 +111,19 @@ Only in sessions you own — they commit as the session's git identity.
 | Method | Path | Purpose |
 | ------ | ---- | ------- |
 | `GET` | `/api/projects/{project_id}/ports` | What the container is listening on |
-| `POST`, `DELETE` | `/api/projects/{project_id}/preview` | Open, close the SOCKS proxy |
+| `POST`, `DELETE` | `/api/projects/{project_id}/preview` | Which ports are worth opening; close a public link |
 | `POST`, `DELETE` | `/api/projects/{project_id}/ports/{port}/share` | Public link on, off |
+
+The proxy itself is a WebSocket, one per connection the app accepts:
+
+```text
+ws(s)://<host>/ws/projects/{project_id}/preview/socks?token=<jwt>
+```
+
+It carries a SOCKS5 conversation that terminates inside the container. The app
+listens on its own loopback and pipes each connection here, which is what lets a
+preview work against an instance running somewhere else — see
+[previews](../guides/previews.md).
 
 ## Usage
 
@@ -137,6 +152,30 @@ Only in sessions you own — they commit as the session's git identity.
 | `DELETE` | `/api/environments/{key}` | Remove |
 | `GET` | `/api/harnesses` | Which harnesses are available and configured |
 | `GET` | `/api/organizations` | Your organizations |
+
+## The instance
+
+Administering the instance rather than your own account. Every route here refuses
+anyone who is not in `instance_admins` — which is not the same as owning an
+organization, since every account owns one. See
+[people and access](../guides/people.md).
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| `GET` | `/api/instance/me` | Whether the caller administers this instance |
+| `GET` | `/api/instance/people` | Every account here |
+| `POST` | `/api/instance/people` | Create one; returns a password, shown once |
+| `DELETE` | `/api/instance/people/{user_id}` | Remove one. Refused while it owns projects |
+| `PUT` | `/api/instance/people/{user_id}/admin` | Grant or revoke administration |
+| `GET`, `PUT` | `/api/instance/settings` | The domain, and whether signup is open |
+| `GET` | `/api/setup` | Whether setup is needed — unauthenticated |
+| `POST` | `/api/setup` | Complete setup. The first caller claims the instance |
+| `GET`, `PUT` | `/api/setup/methods` | Which ways of signing in are offered |
+
+Two of those are asked by the proxy rather than by a client, and answer with a
+status rather than a body: `/api/setup/signup-allowed` gates registration per
+request, and `/api/setup/tls-allowed` decides which hostnames may be issued a
+certificate.
 
 ## Notifications
 

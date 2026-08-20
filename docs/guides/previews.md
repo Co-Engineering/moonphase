@@ -49,14 +49,20 @@ every generated project to use relative paths is a bet you will lose.
 
 **Open** launches a window whose entire network lives inside the container.
 
-Moonphase runs a SOCKS proxy per project, tunnelled over the SSH connection it already
-has, and terminates each connection inside the container itself. The preview window is
-pointed at that proxy, with loopback exempted from the browser's bypass rules so
-`localhost` resolves *there* rather than here.
+Moonphase speaks SOCKS, and terminates each connection inside the container
+itself over the SSH connection it already holds. The preview window is pointed at
+that proxy, with loopback exempted from the browser's bypass rules so `localhost`
+resolves *there* rather than here.
 
-So `http://localhost:5173` loads the frontend, and its call to `http://localhost:8000`
-reaches the container's port 8000. Nothing is renumbered, and nothing has to be written
-any particular way.
+So `http://localhost:5173` loads the frontend, and its call to
+`http://localhost:8000` reaches the container's port 8000. Nothing is renumbered,
+and nothing has to be written any particular way.
+
+The app opens that proxy on its **own** loopback and carries each connection to
+your instance over a WebSocket, authenticated as you and checked against your
+access to the project. That is what lets this work against an instance running
+somewhere else: the proxy has to be somewhere the browser can reach, and the
+browser is on your desk.
 
 !!! note "Desktop only"
     This needs control over the browser's proxy configuration, which a web page cannot
@@ -82,3 +88,9 @@ Where those links are reachable from is set by `MOONPHASE_PREVIEW_BIND` and
 Everything is tunnelled back through the SSH connection Moonphase already holds. Your
 servers never need a port opened for previews, and the containers stay on a private
 network.
+
+Nor does your Moonphase instance open one. The proxy used to listen on the
+machine running the API — which was reachable only by a browser on that same
+machine, and so was safe and useless the moment the app was installed anywhere
+else. Nothing listens there now; the stream is carried over the same authenticated
+connection as everything else.

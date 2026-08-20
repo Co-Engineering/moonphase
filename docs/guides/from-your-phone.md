@@ -3,27 +3,14 @@
 The point of moving a session onto a server is that you can stop watching it. The point
 of the notification is that you find out when that stops being safe.
 
-## Install it
+This page is about what a phone is *for* here. Getting the app onto one is
+[installing the app](../getting-started/app.md#on-a-phone) — two taps, no store
+download.
 
-Open your Moonphase address on the phone and add it to the home screen — Share →
-**Add to Home Screen** on iOS, ⋮ → **Install app** on Android. There is no store
-download: the app is served by your own instance, so it is always the same
-version as the server it talks to.
-
-[Installing the app](../getting-started/app.md#on-a-phone) has the taps for both,
-and the desktop commands.
-
-!!! danger "It has to be HTTPS"
-    Service workers and Web Push are only available in a secure context. A phone pointed
-    at `http://192.168.1.x:8471` cannot install the app or receive anything, and browsers
-    say very little about why.
-
-    [Give the instance a domain](dns.md) and the certificate arrives on its own.
-    A Tailscale HTTPS address or a Cloudflare tunnel work too. `localhost` is
-    exempt, which is why it works on the machine running it.
-
-    On iOS, notifications require the app to be **added to the home screen** — Safari
-    will not deliver push to a normal tab.
+Two things have to be true before any of the below works, and both are covered
+there: the app is on your **home screen**, and your instance is on **HTTPS**.
+iOS will not deliver a push to a Safari tab, and no browser will deliver one over
+plain HTTP.
 
 ## Turn on notifications
 

@@ -30,6 +30,26 @@ SSH private key to whoever now answers on that address. Getting this right
 required not passing `known_hosts=None` to asyncssh — that disables validation
 entirely and never calls the pinning callback.
 
+**Administering the instance is separate from owning anything in it.** Every
+account gets a personal organization on signup, with itself as owner — so "owner
+of an organization" is true of everyone and says nothing. Changing the instance's
+domain, reopening registration and managing accounts are gated on
+`instance_admins`, which starts as whoever completed setup and is edited only by
+someone already on it. The last one cannot be removed, because an instance nobody
+can administer is recoverable only with a database client.
+
+This was not always true. The check used to ask for `owner` or `admin` of any
+organization, which every account satisfies, so any signed-in user could change
+the domain or reopen the door. It mattered little while nothing worse hung off it
+and would have mattered a great deal once account management did.
+
+**The preview proxy listens nowhere.** It is an unauthenticated path *as the
+container*, so it is never published: the stream is carried to the desktop app
+over the same authenticated WebSocket connection as everything else, and the app
+opens the local port itself. It used to bind loopback on the API's machine, which
+was safe only because nothing but a browser on that machine could reach it —
+true of a development build, false of an installed app.
+
 ## Sharing
 
 Organizations answer "my team can use everything we own". They are the wrong

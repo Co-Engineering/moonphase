@@ -29,10 +29,17 @@ $ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key()
 | `SUPABASE_URL`        | `http://127.0.0.1:54721`                                           | The API fetches JWKS from here |
 | `SUPABASE_ANON_KEY`   | —                                                                  | Printed by `supabase start` |
 | `SUPABASE_JWT_SECRET` | `super-secret-jwt-token-…`                                         | Change it for anything real |
+| `MOONPHASE_AUTH_URL`  | —                                                                  | Where GoTrue answers, for the admin calls that create and delete accounts |
 
 `SUPABASE_URL` must point at the auth service the *client* is using. A mismatch produces
 "Invalid token" on every request, because the API cannot verify signatures it fetched keys
 for from somewhere else.
+
+`MOONPHASE_AUTH_URL` is separate because it is the address the **API** uses, not
+the browser. In the Docker stack it is `http://auth:9999` — two containers on one
+network have no reason to go out through the proxy and back to reach each other.
+Left empty it falls back to `SUPABASE_URL` plus `/auth/v1`, which is right when
+the API is run directly.
 
 ## API
 
@@ -51,6 +58,7 @@ same-origin and needs no entry.
 | Variable                   | Default                            | Notes |
 | -------------------------- | ---------------------------------- | ----- |
 | `MOONPHASE_RUNTIME_IMAGE`  | `moonphase/runtime-claude:latest`  | Built by `infra/images/claude` |
+| `MOONPHASE_RUNTIME_IMAGE_TEMPLATE` | `moonphase/runtime-claude:{environment}` | Where per-environment images are published. The catalogue itself lives in `environments.py` |
 
 ## SSH
 

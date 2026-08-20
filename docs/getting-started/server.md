@@ -8,26 +8,9 @@ $ curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/script
 $ sh install-server.sh
 ```
 
-```text
-Install Moonphase on a server
-
-  Any Linux machine you can reach over SSH — a VPS, a box under a desk.
-  It needs nothing installed first.
-
-Server address (IP or hostname): 203.0.113.10
-Username [root]:
-SSH port [22]:
-
-  Found a key at /home/you/.ssh/id_ed25519
-  Use it? [y/N]: y
-
-==> Connecting to root@203.0.113.10:22
-==> Connected
-==> Installing Moonphase, and Docker first — this takes a few minutes
-```
-
-When it finishes it tells you the address to open. The first account you make
-there is yours, and the domain and HTTPS are set on the same screen.
+It asks for the address, a username, and a key or password. When it finishes it
+tells you where to open it. The first account you make there is yours, and the
+domain and HTTPS are set on the same screen.
 
 !!! info "Why not pipe it straight into `sh`?"
     Because it has questions, and piped from `curl` the script *is* the shell's
