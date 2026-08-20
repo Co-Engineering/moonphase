@@ -127,6 +127,10 @@ services:
       # reach — the client is served from here and signs in against the same
       # origin.
       SUPABASE_URL: ${MOONPHASE_PUBLIC_URL:-http://localhost:8471}
+      # GoTrue directly, for the admin calls that manage accounts. The proxy in
+      # front of it serves browsers; two containers on one network do not need
+      # to go out and back to talk to each other.
+      MOONPHASE_AUTH_URL: http://auth:9999
       SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:?set SUPABASE_ANON_KEY in .env}
       SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET}
 

@@ -8,8 +8,10 @@ import {
 } from '../lib/notifications'
 import { InstallPrompt } from '../components/InstallPrompt'
 import { McpEditor, SettingsEditor } from '../components/ClaudeConfig'
+import { InstanceTab } from '../components/InstanceTab'
 import {
   api,
+  instance,
   type Environment,
   type GitHubDevice,
   type HarnessLogin,
@@ -22,7 +24,7 @@ interface Props {
   onSaved: () => void
 }
 
-type Tab = 'accounts' | 'harness' | 'environments' | 'workspace'
+type Tab = 'accounts' | 'harness' | 'environments' | 'workspace' | 'instance'
 
 /**
  * Global settings.
@@ -37,6 +39,18 @@ export function Settings({ onClose, onSaved }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Whether to offer the Instance tab at all. The endpoints refuse either way;
+  // this decides whether anyone is shown a door they cannot open.
+  const [isAdmin, setIsAdmin] = useState(false)
+
+  useEffect(() => {
+    void instance
+      .me()
+      .then((me) => setIsAdmin(me.is_instance_admin))
+      .catch(() => {
+        // An instance too old to answer has no such screen to offer.
+      })
+  }, [])
 
   const load = useCallback(async () => {
     try {
@@ -82,6 +96,9 @@ export function Settings({ onClose, onSaved }: Props) {
               ['harness', 'Claude'],
               ['environments', 'Environments'],
               ['workspace', 'Workspace'],
+              // Only for whoever administers the instance. Everyone else has no
+              // business seeing the list of accounts, let alone the buttons.
+              ...(isAdmin ? ([['instance', 'Instance']] as [Tab, string][]) : []),
             ] as [Tab, string][]
           ).map(([key, label]) => (
             <button
@@ -105,6 +122,8 @@ export function Settings({ onClose, onSaved }: Props) {
           <HarnessSettingsTab profile={profile} busy={busy} run={run} />
         ) : tab === 'environments' ? (
           <EnvironmentsTab busy={busy} run={run} />
+        ) : tab === 'instance' ? (
+          <InstanceTab busy={busy} run={run} />
         ) : (
           <WorkspaceTab profile={profile} busy={busy} run={run} />
         )}

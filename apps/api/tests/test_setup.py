@@ -8,6 +8,8 @@ create an account.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from moonphase.authconfig import (
     AuthMethods,
     incomplete,
@@ -221,3 +223,89 @@ def test_the_sign_in_page_can_find_out_before_offering_to_sign_you_up() -> None:
     # Same rule as the proxy's gate: an instance with no accounts is open,
     # whatever the stored setting says, or the first person could never sign up.
     assert "users == 0" in source
+
+
+# --- who administers the instance -------------------------------------------
+
+
+def test_administering_the_instance_is_not_the_same_as_owning_an_org() -> None:
+    """The check that guarded instance settings passed for everybody.
+
+    It asked whether the caller was 'owner' or 'admin' of any organization —
+    and a trigger makes every account the owner of a personal one the moment it
+    signs up. So any signed-in user could change the instance's domain or
+    reopen registration, which went unnoticed only because nothing worse hung
+    off it. Managing other people's accounts would have.
+    """
+    migration = (
+        Path(__file__).resolve().parents[3]
+        / "supabase/migrations/20260820120000_instance_admins.sql"
+    ).read_text()
+
+    assert "create table if not exists public.instance_admins" in migration
+    # The old policy is replaced, not left beside the new one.
+    assert "drop policy if exists instance_settings_write" in migration
+    assert "from public.instance_admins a where a.user_id = auth.uid()" in migration
+    # Nothing an ordinary account can write: granting goes through the API,
+    # which is where the "not the last one" rule lives.
+    assert "grant select on public.instance_admins to authenticated" in migration
+    assert "grant insert" not in migration
+
+
+def test_an_existing_install_keeps_an_administrator() -> None:
+    """Nobody would be able to administer an instance that already exists, and
+    the fix would be a database client. The earliest account is the one that
+    ran the installer."""
+    migration = (
+        Path(__file__).resolve().parents[3]
+        / "supabase/migrations/20260820120000_instance_admins.sql"
+    ).read_text()
+
+    assert "insert into public.instance_admins (user_id)" in migration
+    assert "order by created_at asc limit 1" in migration
+
+
+def test_the_first_account_can_still_finish_setup() -> None:
+    """A fresh install has no administrators — the backfill found no users —
+    so the person setting it up would be refused by the screen they are setting
+    it up with. Completing setup is what claims the instance."""
+    import inspect
+
+    from moonphase.routers import setup as setup_router
+
+    source = inspect.getsource(setup_router.complete)
+
+    assert "insert into instance_admins" in source
+    # Only ever from empty, or a later signup could claim an instance that
+    # already has an owner.
+    assert "where not exists (select 1 from instance_admins)" in source
+
+
+def test_removing_an_account_refuses_to_take_its_work_with_it() -> None:
+    """Deleting an account cascades through its personal organization, which
+    takes its servers and projects with it — and leaves the containers those
+    describe running on the machines with nothing pointing at them."""
+    import inspect
+
+    from moonphase.routers import people
+
+    source = inspect.getsource(people.remove_person)
+
+    assert "owned_projects" in source
+    assert "409" in source
+    # And an instance nobody can administer is only recoverable with psql.
+    assert "last administrator" in source
+
+
+def test_accounts_are_made_through_gotrue_rather_than_by_hand() -> None:
+    """The columns of `auth.users` belong to GoTrue and change between
+    versions. A row written by hand works until it does not, and the failure
+    would be an account that exists and cannot sign in."""
+    import inspect
+
+    from moonphase.routers import people
+
+    source = inspect.getsource(people.invite_person)
+
+    assert "_gotrue" in source
+    assert "insert into auth.users" not in source

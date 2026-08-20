@@ -1556,6 +1556,54 @@ button.linkish:hover:not(:disabled) {
   margin-top: 10px;
 }
 
+/* The instance's people: a row per account, with what can be done to it. */
+.person-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0 14px;
+}
+
+.person {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+}
+
+.person-email {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-person {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.new-person input[type='text'],
+.new-person > input {
+  flex: 1;
+  min-width: 200px;
+}
+
+.new-person .check {
+  flex: none;
+  white-space: nowrap;
+}
+
+.new-person button {
+  flex: none;
+}
+
 /* Naming a second session sits beside the button that makes it, so the
    optional part reads as optional rather than as a form to fill in. */
 .new-session {

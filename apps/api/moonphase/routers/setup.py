@@ -99,6 +99,27 @@ async def complete(
     installing — by the time it is called they hold a token, which means they
     are the first account.
     """
+    # Claim the instance, if nobody has. Setting it up is what makes you its
+    # administrator, and on a fresh install there is nobody to grant it: the
+    # settings below are behind a policy that asks whether the caller is one,
+    # so without this the person installing would be refused by the screen they
+    # are installing with.
+    #
+    # Only ever from empty. A later caller who is not an administrator falls
+    # through to the update, which quietly matches no rows and answers 403.
+    async with service_session() as conn:
+        await conn.execute(
+            text(
+                """
+                insert into instance_admins (user_id)
+                select cast(:user_id as uuid)
+                 where not exists (select 1 from instance_admins)
+                on conflict (user_id) do nothing
+                """
+            ),
+            {"user_id": str(principal.user_id)},
+        )
+
     async with user_session(principal.claims) as conn:
         result = await conn.execute(
             text(
@@ -115,12 +136,19 @@ async def complete(
         )
         row = result.first()
     if row is None:
-        raise HTTPException(status_code=403, detail="Only an owner can do that.")
+        raise HTTPException(
+            status_code=403,
+            detail="Only an administrator of this Moonphase can change its settings.",
+        )
 
     log.info(
         "setup completed: public_url=%s signup_open=%s", row.public_url, row.signup_open
     )
-    return SetupStateOut(needs_setup=False, signup_open=bool(row.signup_open))
+    return SetupStateOut(
+        needs_setup=False,
+        signup_open=bool(row.signup_open),
+        public_url=row.public_url,
+    )
 
 
 @router.get("/signup-allowed")

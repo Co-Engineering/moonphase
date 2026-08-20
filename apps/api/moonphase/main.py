@@ -21,6 +21,7 @@ from .routers import (
     feedsocket,
     meta,
     notifications,
+    people,
     previewsocket,
     projects,
     review,
@@ -110,6 +111,7 @@ def create_app() -> FastAPI:
     app.include_router(profile_router.router)
     app.include_router(preview_router.router)
     app.include_router(previewsocket.router)
+    app.include_router(people.router)
     app.include_router(notifications.router)
     app.include_router(feed.router)
     app.include_router(feedsocket.router)

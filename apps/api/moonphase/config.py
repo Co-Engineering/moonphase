@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     supabase_url: str = "http://127.0.0.1:54721"
     supabase_anon_key: str = ""
     supabase_jwt_secret: str = ""
+    # Where GoTrue answers, for the handful of things that need its admin API
+    # rather than a table. Empty means "wherever SUPABASE_URL serves auth",
+    # which is right in development; the compose stack points it at the
+    # container directly, because the proxy in front is not on the path
+    # between two containers on the same network.
+    moonphase_auth_url: str = ""
 
     # --- api ---------------------------------------------------------------
     moonphase_api_host: str = "0.0.0.0"

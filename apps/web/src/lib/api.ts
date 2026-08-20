@@ -900,3 +900,46 @@ export async function saveAuthMethods(input: Partial<AuthMethods> & {
     body: JSON.stringify(input),
   })
 }
+
+// --- the instance, for whoever administers it -------------------------------
+
+export interface Person {
+  id: string
+  email: string
+  created_at: string | null
+  last_sign_in_at: string | null
+  /** Administers the instance — not the same as owning an organization. */
+  is_admin: boolean
+  /** Why a removal may be refused: these would go with the account. */
+  owned_projects: number
+  is_you: boolean
+}
+
+export interface InstanceSettings {
+  public_url: string | null
+  signup_open: boolean
+}
+
+export const instance = {
+  /** Whether the caller may see any of the rest of this. */
+  me: () => request<{ is_instance_admin: boolean }>('/api/instance/me'),
+  people: () => request<Person[]>('/api/instance/people'),
+  invite: (email: string, admin = false) =>
+    request<{ id: string; email: string; password: string; is_admin: boolean }>(
+      '/api/instance/people',
+      { method: 'POST', body: JSON.stringify({ email, admin }) },
+    ),
+  remove: (id: string) =>
+    request<void>(`/api/instance/people/${id}`, { method: 'DELETE' }),
+  setAdmin: (id: string, makeAdmin: boolean) =>
+    request<Person>(
+      `/api/instance/people/${id}/admin?make_admin=${makeAdmin}`,
+      { method: 'PUT' },
+    ),
+  settings: () => request<InstanceSettings>('/api/instance/settings'),
+  saveSettings: (input: InstanceSettings) =>
+    request<InstanceSettings>('/api/instance/settings', {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    }),
+}

@@ -731,6 +731,10 @@ class SetupStateOut(BaseModel):
 
     needs_setup: bool
     signup_open: bool = True
+    # The domain this instance was told to serve on, so the settings screen can
+    # show what is configured rather than an empty box. Not a secret: it is the
+    # address whoever is asking already used to get here.
+    public_url: str | None = None
 
 
 class SetupIn(BaseModel):
@@ -785,3 +789,44 @@ class HealthOut(BaseModel):
     status: str
     version: str
     database: str
+
+class PersonOut(BaseModel):
+    """An account on this instance, as an administrator sees it."""
+
+    id: str
+    email: str
+    created_at: datetime | None = None
+    last_sign_in_at: datetime | None = None
+    # Administers the instance — distinct from owning an organization, which
+    # every account does by default and which grants nothing over anyone else.
+    is_admin: bool = False
+    # Why a removal may be refused: deleting the account would take these with
+    # it, and leave their containers running with nothing pointing at them.
+    owned_projects: int = 0
+    is_you: bool = False
+
+
+class PersonInviteIn(BaseModel):
+    email: str
+    admin: bool = False
+
+
+class PersonInviteOut(BaseModel):
+    id: str
+    email: str
+    # Shown once, at creation. Nothing stores it: the row holds a hash, and
+    # there is nowhere to look it up afterwards.
+    password: str
+    is_admin: bool = False
+
+
+class InstanceSettingsOut(BaseModel):
+    """What this instance is set to, for the people who administer it."""
+
+    public_url: str | None = None
+    signup_open: bool = True
+
+
+class InstanceSettingsIn(BaseModel):
+    public_url: str | None = None
+    signup_open: bool = False
