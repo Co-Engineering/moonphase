@@ -53,9 +53,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # No version pinned here: package.json already declares packageManager,
+      # and naming it twice is an error rather than agreement.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - uses: actions/setup-node@v4
         with:
