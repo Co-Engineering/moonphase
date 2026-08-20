@@ -177,6 +177,20 @@ async def _connect() -> SSHTarget:
     )
 
 
+async def _until_ready(
+    session: login.LoginSession, timeout: float = 120.0
+) -> login.LoginSession:
+    """Wait for the background preparation to settle, as the client does.
+
+    Polled rather than signalled: the client has only HTTP and does exactly
+    this, so the test exercises the same path.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline and session.state == "starting":  # noqa: ASYNC110
+        await asyncio.sleep(0.5)
+    return session
+
+
 async def _drive(conn, harness: ScriptedHarness, code: str) -> login.LoginSession:
     session = await login.start(
         conn,
@@ -185,6 +199,10 @@ async def _drive(conn, harness: ScriptedHarness, code: str) -> login.LoginSessio
         harness=harness,
         image=RUNTIME_IMAGE,
     )
+    # start() returns before the work: preparing a sign-in can take minutes on
+    # a cold server, and a request held open that long reported a network error
+    # for a flow that was succeeding. The client polls, and so does this.
+    session = await _until_ready(session)
     assert session.state == "awaiting_code", f"{session.state}: {session.detail}"
     assert session.url and session.url.startswith("https://claude.com/")
 
@@ -287,7 +305,7 @@ def test_signing_in_builds_its_image_rather_than_assuming_one() -> None:
 
     from moonphase import login
 
-    source = inspect.getsource(login.start)
+    source = inspect.getsource(login._prepare)
 
     assert "ensure_image" in source
     # And before the container is started, not after. Matched on the argument
@@ -306,3 +324,34 @@ def test_the_relay_uses_the_same_image_a_project_would() -> None:
 
     assert "default_env.image" in source
     assert "moonphase_runtime_image" not in source
+
+
+def test_starting_a_sign_in_does_not_wait_for_the_work() -> None:
+    """Preparing a sign-in builds an image, starts a container and waits for a
+    URL — minutes on a cold machine. Doing that inside the request is what made
+    the button report a network error while working perfectly underneath.
+
+    The client already polls the session, so there is nothing to wait for.
+    """
+    import inspect
+
+    from moonphase import login
+
+    source = inspect.getsource(login.start)
+
+    assert "ensure_image" not in source
+    assert "ssh.run" not in source
+    assert "_prepare" in source
+
+
+def test_the_session_says_what_it_is_doing_while_it_does_it() -> None:
+    """The slow step is a container build. A spinner with no words next to it
+    is indistinguishable from being stuck."""
+    import inspect
+
+    from moonphase import login
+
+    source = inspect.getsource(login._prepare)
+
+    assert "Preparing the container image" in source
+    assert "Waiting for the sign-in link" in source

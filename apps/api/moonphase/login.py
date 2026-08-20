@@ -148,89 +148,137 @@ async def start(
     )
     _sessions[session_id] = session
 
-    # Signing in must not depend on having created a project first — but it did,
-    # because the image it runs in is only ever built by creating one. On a
-    # freshly added server `docker run` failed with "Unable to find image
-    # locally" and the button appeared to do nothing.
+    # Returned before any of the work happens. Preparing a sign-in means
+    # building a container image on a server that may never have run one,
+    # starting it, and waiting for the harness to print a URL — minutes on a
+    # cold machine. Holding the request open for that is what made this button
+    # report a network error while working perfectly well underneath.
     #
-    # Built with the same recipe and tag a project would use, so the work is
-    # shared: whichever happens first pays for it and the other finds it there.
-    if base_image:
-        try:
-            built = await imagebuild.ensure_image(
-                conn, tag=image, base_image=base_image, setup_script=setup_script
-            )
-            if built:
-                log.info("built %s for a sign-in on %s", image, server_id)
-        except SSHError as exc:
-            session.state = "error"
-            session.detail = f"Could not prepare the container image: {exc}"[:300]
-            return session
-
-    run = await ssh.run(
-        conn,
-        " ".join(
-            shlex.quote(a)
-            for a in [
-                "docker", "run", "-d",
-                "--name", container,
-                "--label", "moonphase.login=1",
-                image, "sleep", str(SESSION_TTL_SECONDS + 120),
-            ]
-        ),
-        timeout=300,
-    )
-    if not run.ok:
-        session.state = "error"
-        session.detail = (run.stderr or run.stdout).strip()[:300]
-        return session
-
-    # Skip the first-run wizard, or it swallows the login prompt.
-    # The relay runs in a throwaway container of its own, so the plain
-    # single-user layout is the right one here.
-    for path, contents in harness.seed_config_files(SessionSpace()).items():
-        quoted = shlex.quote(path)
-        await ssh.run(
+    # The client already polls this session, so there is nothing to wait for.
+    task = asyncio.create_task(
+        _prepare(
             conn,
-            f"docker exec -i -u dev {shlex.quote(container)} sh -c "
-            + shlex.quote(f"mkdir -p $(dirname {quoted}) && cat > {quoted}"),
-            timeout=60,
-            stdin=contents,
+            session,
+            harness=harness,
+            command=command,
+            image=image,
+            base_image=base_image,
+            setup_script=setup_script,
         )
-
-    # tmux gives the command a real PTY and lets us read the pane and type into
-    # it from separate requests, which a single exec channel would not. The
-    # trailing sleep keeps the pane (and anything it printed) alive after the
-    # command exits, so a token on the final screen is still harvestable.
-    inner = " ".join(shlex.quote(a) for a in command)
-    start_cmd = [
-        "tmux", "new-session", "-d", "-s", "login", "-x", "200", "-y", "50",
-        f"{inner}; echo '[moonphase] login command exited'; sleep {SESSION_TTL_SECONDS}",
-    ]
-    started = await docker_remote.exec_capture(conn, container, start_cmd, timeout=60)
-    if not started.ok:
-        session.state = "error"
-        session.detail = (started.stderr or started.stdout).strip()[:300]
-        await cleanup(conn, session)
-        return session
-
-    pattern = re.compile(harness.login_url_pattern() or r"https://\S+")
-    deadline = time.monotonic() + 60
-    while time.monotonic() < deadline:
-        await asyncio.sleep(1.5)
-        session.pane = await capture(conn, container)
-        # The pane hard-wraps long URLs, so rejoin before matching.
-        match = pattern.search(session.pane.replace("\n", ""))
-        if match:
-            session.url = match.group(0).rstrip(")]},.")
-            session.state = "awaiting_code"
-            log.info("login %s: authorization url ready", session_id)
-            return session
-
-    session.state = "error"
-    session.detail = "The harness did not produce an authorization URL in time."
-    await cleanup(conn, session)
+    )
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)
     return session
+
+
+# Held so the loop does not collect work nothing is awaiting.
+_tasks: set[asyncio.Task] = set()
+
+
+async def _prepare(
+    conn: asyncssh.SSHClientConnection,
+    session: LoginSession,
+    *,
+    harness: Harness,
+    command: list[str],
+    image: str,
+    base_image: str | None,
+    setup_script: str | None,
+) -> None:
+    """Everything between asking to sign in and having a URL to open."""
+    session_id = session.id
+    container = session.container
+    try:
+        # Signing in must not depend on having created a project first — but it did,
+        # because the image it runs in is only ever built by creating one. On a
+        # freshly added server `docker run` failed with "Unable to find image
+        # locally" and the button appeared to do nothing.
+        #
+        # Built with the same recipe and tag a project would use, so the work is
+        # shared: whichever happens first pays for it and the other finds it there.
+        if base_image:
+            session.detail = "Preparing the container image. First time only."
+            try:
+                built = await imagebuild.ensure_image(
+                    conn, tag=image, base_image=base_image, setup_script=setup_script
+                )
+                if built:
+                    log.info("built %s for a sign-in on %s", image, session.server_id)
+            except SSHError as exc:
+                session.state = "error"
+                session.detail = f"Could not prepare the container image: {exc}"[:300]
+                return
+
+        session.detail = "Starting a container to sign in from."
+        run = await ssh.run(
+            conn,
+            " ".join(
+                shlex.quote(a)
+                for a in [
+                    "docker", "run", "-d",
+                    "--name", container,
+                    "--label", "moonphase.login=1",
+                    image, "sleep", str(SESSION_TTL_SECONDS + 120),
+                ]
+            ),
+            timeout=300,
+        )
+        if not run.ok:
+            session.state = "error"
+            session.detail = (run.stderr or run.stdout).strip()[:300]
+            return
+
+        # Skip the first-run wizard, or it swallows the login prompt.
+        # The relay runs in a throwaway container of its own, so the plain
+        # single-user layout is the right one here.
+        for path, contents in harness.seed_config_files(SessionSpace()).items():
+            quoted = shlex.quote(path)
+            await ssh.run(
+                conn,
+                f"docker exec -i -u dev {shlex.quote(container)} sh -c "
+                + shlex.quote(f"mkdir -p $(dirname {quoted}) && cat > {quoted}"),
+                timeout=60,
+                stdin=contents,
+            )
+
+        # tmux gives the command a real PTY and lets us read the pane and type into
+        # it from separate requests, which a single exec channel would not. The
+        # trailing sleep keeps the pane (and anything it printed) alive after the
+        # command exits, so a token on the final screen is still harvestable.
+        inner = " ".join(shlex.quote(a) for a in command)
+        start_cmd = [
+            "tmux", "new-session", "-d", "-s", "login", "-x", "200", "-y", "50",
+            f"{inner}; echo '[moonphase] login command exited'; sleep {SESSION_TTL_SECONDS}",
+        ]
+        started = await docker_remote.exec_capture(conn, container, start_cmd, timeout=60)
+        if not started.ok:
+            session.state = "error"
+            session.detail = (started.stderr or started.stdout).strip()[:300]
+            await cleanup(conn, session)
+            return
+
+        session.detail = "Waiting for the sign-in link."
+        pattern = re.compile(harness.login_url_pattern() or r"https://\S+")
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            await asyncio.sleep(1.5)
+            session.pane = await capture(conn, container)
+            # The pane hard-wraps long URLs, so rejoin before matching.
+            match = pattern.search(session.pane.replace("\n", ""))
+            if match:
+                session.url = match.group(0).rstrip(")]},.")
+                session.state = "awaiting_code"
+                log.info("login %s: authorization url ready", session_id)
+                return
+
+        session.state = "error"
+        session.detail = "The harness did not produce an authorization URL in time."
+        await cleanup(conn, session)
+        return
+    except Exception as exc:  # noqa: BLE001 — the session is the only report
+        log.warning("login %s failed while preparing: %s", session.id, exc)
+        session.state = "error"
+        session.detail = str(exc)[:300]
 
 
 async def submit_code(
