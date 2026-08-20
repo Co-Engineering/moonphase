@@ -130,7 +130,7 @@ async def start(
     base_image: str | None = None,
     setup_script: str | None = None,
 ) -> LoginSession:
-    """Begin a sign-in and return once the authorization URL is known."""
+    """Begin a sign-in. Returns immediately; poll the session for progress."""
     _prune()
 
     command = harness.login_command()
@@ -208,6 +208,14 @@ async def _prepare(
                 session.state = "error"
                 session.detail = f"Could not prepare the container image: {exc}"[:300]
                 return
+
+        # Before adding one of our own, so an abandoned attempt does not outlive
+        # the process that started it. Best effort: a sign-in should not fail
+        # because tidying up did.
+        try:
+            await sweep_stale(conn)
+        except SSHError as exc:
+            log.warning("could not sweep abandoned login containers: %s", exc)
 
         session.detail = "Starting a container to sign in from."
         run = await ssh.run(
@@ -407,13 +415,30 @@ async def cleanup(conn: asyncssh.SSHClientConnection, session: LoginSession) -> 
 
 
 async def sweep_stale(conn: asyncssh.SSHClientConnection) -> int:
-    """Remove login containers left behind by a crashed backend."""
+    """Remove login containers no live session is using any more.
+
+    A sign-in is tracked in memory, so restarting the API — an upgrade, say —
+    forgets every session in flight while their containers keep running on the
+    server. Nothing ever removed them, so they accumulated one per abandoned
+    attempt, each sitting on a half-finished authorization for as long as the
+    machine stayed up.
+
+    Containers belonging to sessions this process still knows about are left
+    alone: two people signing in at once is ordinary, and sweeping by label
+    alone would have one kill the other's container out from under it.
+    """
+    keep = {session.container for session in _sessions.values()}
     result = await ssh.run(
-        conn, "docker ps -aq --filter label=moonphase.login=1", timeout=30
+        conn,
+        "docker ps -a --filter label=moonphase.login=1 --format '{{.Names}}'",
+        timeout=30,
     )
     if not result.ok:
         return 0
-    ids = result.stdout.split()
-    for container_id in ids:
-        await ssh.run(conn, f"docker rm -f {shlex.quote(container_id)}", timeout=60)
-    return len(ids)
+
+    stale = [name for name in result.stdout.split() if name not in keep]
+    for name in stale:
+        await ssh.run(conn, f"docker rm -f {shlex.quote(name)}", timeout=60)
+    if stale:
+        log.info("removed %d abandoned login container(s)", len(stale))
+    return len(stale)
