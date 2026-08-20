@@ -68,8 +68,14 @@ jobs:
       # the web build is a prerequisite rather than a separate artefact.
       - run: pnpm --filter @moonphase/web build
 
+      # Three steps rather than one script with arguments: `pnpm run x -- --win`
+      # forwards a literal `--` that electron-builder then reads as an argument,
+      # and the platform flag never arrives.
+      - run: pnpm --filter @moonphase/desktop run build
+      - run: pnpm --filter @moonphase/desktop run bundle
+
       - name: Build installers
-        run: pnpm --filter @moonphase/desktop run package -- --${{ matrix.platform }} --publish never
+        run: pnpm --filter @moonphase/desktop exec electron-builder --${{ matrix.platform }} --publish never
         env:
           # Without a certificate, signing is a failure rather than a no-op.
           CSC_IDENTITY_AUTO_DISCOVERY: false

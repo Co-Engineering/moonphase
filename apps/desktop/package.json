@@ -32,13 +32,6 @@
       "web/**/*",
       "package.json"
     ],
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "oliversvane",
-        "repo": "moonphase"
-      }
-    ],
     "linux": {
       "target": [
         {
@@ -63,7 +56,8 @@
           "StartupWMClass": "Moonphase"
         }
       },
-      "syncDesktopName": true
+      "syncDesktopName": true,
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "mac": {
       "target": [
@@ -106,5 +100,9 @@
     "executableName": "moonphase"
   },
   "desktopName": "moonphase.desktop",
-  "author": "Moonphase"
+  "author": {
+    "name": "Moonphase",
+    "email": "oliversvane@users.noreply.github.com"
+  },
+  "homepage": "https://github.com/oliversvane/moonphase"
 }
