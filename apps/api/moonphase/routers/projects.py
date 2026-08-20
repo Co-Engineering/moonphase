@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import shlex
+from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import UUID
 
@@ -184,39 +186,105 @@ async def create_project(
             home_volume=home_volume,
         )
 
-    try:
-        container_id = await _provision_container(
+    # Returned while the work is still going on. Provisioning pulls or builds an
+    # environment image, and on a server that has never run one that is minutes
+    # — long enough for the browser to give up on the request and report a
+    # network error for a project that was being created perfectly well.
+    #
+    # The row already exists and says `creating`, so the client has something to
+    # poll and something to show.
+    task = asyncio.create_task(
+        _provision_in_background(
             principal,
+            project_id=project_id,
             server_id=payload.server_id,
             container=container,
             workspace_volume=workspace_volume,
             home_volume=home_volume,
             environment=environment,
             repo_url=payload.repo_url,
-            preview_port=None,
             cpus=payload.cpus,
             memory=payload.memory,
         )
-    except (SSHError, NotFound) as exc:
-        async with user_session(principal.claims) as conn:
-            await queries.update_project_state(
-                conn, project_id, status="error", status_detail=str(exc)
-            )
-            refreshed = await queries.get_project(conn, project_id)
-        assert refreshed is not None
-        return _to_out(refreshed)
+    )
+    _background.add(task)
+    task.add_done_callback(_background.discard)
 
     async with user_session(principal.claims) as conn:
         await queries.update_project_state(
-            conn, project_id, status="running", status_detail=None, container_id=container_id
+            conn,
+            project_id,
+            status="creating",
+            status_detail="Preparing the environment. First time on a server is slow.",
+        )
+        fresh = await queries.get_project(conn, project_id)
+    assert fresh is not None
+    return _to_out(fresh)
+
+
+# Held so the event loop does not collect a task that nothing is awaiting.
+_background: set[asyncio.Task] = set()
+
+
+async def _provision_in_background(
+    principal: Principal,
+    *,
+    project_id: UUID,
+    server_id: UUID,
+    container: str,
+    workspace_volume: str,
+    home_volume: str,
+    environment: environments.Environment,
+    repo_url: str | None,
+    cpus: str | None,
+    memory: str | None,
+) -> None:
+    """Do the slow half, and write the outcome where the client is looking.
+
+    Every failure has to land on the row: there is no request left to raise
+    into, and a project stuck at `creating` with nothing said about it is the
+    worst of the possible outcomes.
+    """
+    async def say(message: str) -> None:
+        async with service_session() as conn:
+            await queries.update_project_state(
+                conn, project_id, status="creating", status_detail=message
+            )
+
+    try:
+        container_id = await _provision_container(
+            principal,
+            server_id=server_id,
+            container=container,
+            workspace_volume=workspace_volume,
+            home_volume=home_volume,
+            environment=environment,
+            repo_url=repo_url,
+            preview_port=None,
+            cpus=cpus,
+            memory=memory,
+            progress=say,
+        )
+    except Exception as exc:  # noqa: BLE001 — the row is the only place to report
+        log.warning("provisioning project %s failed: %s", project_id, exc)
+        async with service_session() as conn:
+            await queries.update_project_state(
+                conn, project_id, status="error", status_detail=str(exc)[:500]
+            )
+        return
+
+    async with service_session() as conn:
+        await queries.update_project_state(
+            conn,
+            project_id,
+            status="running",
+            status_detail=None,
+            container_id=container_id,
         )
         # Deliberately no session row here. A session belongs to a person and
         # runs on their subscription, so it is created the first time someone
         # opens the project — not speculatively at provision time on behalf of
         # whoever happened to click Create.
-        refreshed = await queries.get_project(conn, project_id)
-    assert refreshed is not None
-    return _to_out(refreshed)
 
 
 async def _provision_container(
@@ -231,7 +299,12 @@ async def _provision_container(
     preview_port: int | None,
     cpus: str | None,
     memory: str | None,
+    progress: Callable[[str], Awaitable[None]] | None = None,
 ) -> str:
+    async def say(message: str) -> None:
+        if progress is not None:
+            await progress(message)
+
     target = await runtime.load_server_target(
         principal.claims, server_id, require=CAN_CONTROL
     )
@@ -240,6 +313,11 @@ async def _provision_container(
     # Environments are recipes, not published images: build on the server the
     # first time one is used. The tag encodes the recipe, so this is a no-op
     # afterwards and a fresh build whenever the definition changes.
+    #
+    # Announced before it starts rather than after: this is the step that takes
+    # minutes, and a progress line that only appears once the slow part is over
+    # is no use to the person watching it.
+    await say("Building the environment image. First time on this server only.")
     built = await imagebuild.ensure_image(
         conn_ssh,
         tag=environment.image,
@@ -250,6 +328,7 @@ async def _provision_container(
         log.info("built %s on server %s", environment.image, server_id)
     image = environment.image
 
+    await say("Creating the container.")
     await docker_remote.volume_create(conn_ssh, workspace_volume)
     await docker_remote.volume_create(conn_ssh, home_volume)
 

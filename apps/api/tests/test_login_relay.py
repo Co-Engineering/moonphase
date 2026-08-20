@@ -407,3 +407,26 @@ async def test_sweeping_spares_the_sessions_still_in_flight(fake_server: str) ->
         await ssh.run(conn, f"docker rm -f {live}", timeout=60)
     finally:
         await ssh.pool.close_all()
+
+
+def test_creating_a_project_does_not_wait_for_the_build() -> None:
+    """The same failure as signing in, one screen over.
+
+    An environment is a recipe rather than a published image, so the first
+    project on a server builds it. Doing that inside the request had the browser
+    give up on a project that went on to come up fine.
+    """
+    import inspect
+
+    from moonphase.routers import projects
+
+    source = inspect.getsource(projects.create_project)
+
+    assert "_provision_in_background" in source
+    assert "await _provision_container" not in source
+
+    background = inspect.getsource(projects._provision_in_background)
+    assert "_provision_container" in background
+    # Every failure has to land on the row: there is no request left to raise
+    # into, and a project stuck at `creating` says nothing at all.
+    assert 'status="error"' in background

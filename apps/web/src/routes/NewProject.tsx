@@ -1,5 +1,11 @@
 import { useState, type FormEvent } from 'react'
-import { api, type Environment, type HarnessInfo, type Server } from '../lib/api'
+import {
+  api,
+  type Environment,
+  type HarnessInfo,
+  type Project,
+  type Server,
+} from '../lib/api'
 
 interface Props {
   servers: Server[]
@@ -40,23 +46,56 @@ export function NewProject({
   const [repoUrl, setRepoUrl] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [progress, setProgress] = useState<string | null>(null)
+
+  /**
+   * Watch the container get built.
+   *
+   * An environment is a recipe rather than a published image, so the first
+   * project on a server builds it — minutes, during which one long request
+   * would have the browser give up on a project that goes on to come up fine.
+   * The row says what it is doing, so this shows that while it waits.
+   */
+  const watch = async (id: string): Promise<Project> => {
+    const deadline = Date.now() + 15 * 60 * 1000
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, 2000))
+      const project = await api.project(id)
+      setProgress(project.status_detail ?? null)
+      if (project.status !== 'creating') return project
+      if (Date.now() > deadline) {
+        return {
+          ...project,
+          status: 'error',
+          status_detail: 'It is still building after fifteen minutes.',
+        }
+      }
+    }
+  }
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     setBusy(true)
     setError(null)
+    setProgress(null)
     try {
-      const project = await api.createProject({
+      const created = await api.createProject({
         server_id: serverId,
         name,
         harness: harness as 'claude_code' | 'opencode',
         environment,
         repo_url: repoUrl.trim() || null,
       })
-      // The API returns the row even when provisioning failed, so the user can
-      // read the reason instead of losing what they typed.
+      setProgress(created.status_detail ?? null)
+
+      const project = created.status === 'creating' ? await watch(created.id) : created
+
+      // The row is where provisioning reports itself, so a failure arrives as a
+      // status rather than a thrown request. Keeping the form up with the reason
+      // on it beats losing what was typed.
       if (project.status === 'error') {
         setError(project.status_detail ?? 'Provisioning failed.')
+        setProgress(null)
         setBusy(false)
         return
       }
@@ -64,6 +103,7 @@ export function NewProject({
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
+      setProgress(null)
       setBusy(false)
     }
   }
@@ -122,6 +162,7 @@ export function NewProject({
 
         <form onSubmit={submit}>
           {error && <div className="banner error">{error}</div>}
+          {busy && progress && <div className="banner">{progress}</div>}
 
           <label>
             <span>Server</span>
