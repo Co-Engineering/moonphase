@@ -13,6 +13,10 @@ export function Auth() {
   // provider that is not configured sends people to an error page belonging to
   // someone else.
   const [methods, setMethods] = useState<string[]>(['password'])
+  // Whether anyone may sign up here. Assumed open until the instance says
+  // otherwise, so a slow answer never hides the link on an instance that wants
+  // it — the server refuses the attempt either way.
+  const [canSignUp, setCanSignUp] = useState(true)
 
   useEffect(() => {
     let cancelled = false
@@ -24,6 +28,17 @@ export function Auth() {
       .catch(() => {
         // An instance too old to answer offers what it always did.
       })
+    void api
+      .signupOpen()
+      .then((open) => {
+        if (cancelled) return
+        setCanSignUp(open)
+        // Someone who was already on the form when it closed, or who arrived
+        // by a stale link, should not be left typing into something that
+        // cannot work.
+        if (!open) setMode('signin')
+      })
+      .catch(() => {})
     return () => {
       cancelled = true
     }
@@ -163,7 +178,13 @@ export function Auth() {
           </form>
 
           <div className="auth-toggle">
-            {mode === 'signin' ? (
+            {mode === 'signin' && !canSignUp ? (
+              // Offering a link that can only fail is worse than saying so.
+              <span className="hint">
+                This Moonphase is not taking new accounts. Ask whoever runs it
+                for an invitation.
+              </span>
+            ) : mode === 'signin' ? (
               <>
                 No account?
                 <button type="button" onClick={() => setMode('signup')}>

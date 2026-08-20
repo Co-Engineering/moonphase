@@ -18,6 +18,11 @@ export interface InstanceConfig {
   supabase_anon_key: string
   vapid_public_key: string | null
   version: string
+  /**
+   * Whether this instance takes new accounts. Absent on an instance too old to
+   * say, where the honest default is the behaviour it always had.
+   */
+  signup_open?: boolean
 }
 
 /** Trailing slashes and a missing scheme are the two things people type. */

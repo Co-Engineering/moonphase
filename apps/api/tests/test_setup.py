@@ -181,3 +181,43 @@ def test_the_same_credentials_work_once_there_is_a_domain() -> None:
 
     assert "google" in usable(on_a_domain)
     assert incomplete(on_a_domain) == []
+
+
+def test_a_refused_signup_says_why_in_a_shape_the_client_can_read() -> None:
+    """Caddy copies a non-2xx answer from this gate straight to the browser,
+    and the browser is the Supabase library, which calls `.json()` on whatever
+    arrives.
+
+    An empty 403 therefore reached the person trying to sign up as "Failed to
+    execute 'json' on 'Response': Unexpected end of JSON input" — a parser
+    complaining, where a sentence explaining that the instance is closed should
+    have been. GoTrue's own error shape is what the library knows how to read.
+    """
+    import inspect
+
+    from moonphase.routers import setup as setup_router
+
+    source = inspect.getsource(setup_router.signup_allowed)
+
+    assert "JSONResponse" in source
+    assert '"msg"' in source, "the Supabase client reads the message from `msg`"
+    assert "not accepting new accounts" in source
+
+
+def test_the_sign_in_page_can_find_out_before_offering_to_sign_you_up() -> None:
+    """The link was drawn whatever the setting said, so the only way to
+    discover that an instance was closed was to fill the form in and fail.
+
+    That page holds no token — it is the one page nobody has signed in to — so
+    the answer has to come from somewhere unauthenticated.
+    """
+    import inspect
+
+    from moonphase.routers import meta
+
+    source = inspect.getsource(meta.instance_config)
+
+    assert "signup_open" in source
+    # Same rule as the proxy's gate: an instance with no accounts is open,
+    # whatever the stored setting says, or the first person could never sign up.
+    assert "users == 0" in source

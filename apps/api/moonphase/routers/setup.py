@@ -22,6 +22,7 @@ import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from .. import authconfig, queries
@@ -132,10 +133,25 @@ async def signup_allowed(response: Response) -> Response:
 
     Open while there are no accounts, because otherwise nobody could ever make
     the first one.
+
+    A refusal answers in GoTrue's own error shape. Caddy copies a non-2xx
+    response here straight to the client, and the client is the Supabase
+    library, which calls `.json()` on whatever it gets. An empty 403 therefore
+    surfaced as "Failed to execute 'json' on 'Response': Unexpected end of JSON
+    input" — a parser complaining, in place of the one sentence that would have
+    explained it.
     """
     found = await _state()
-    allowed = found["users"] == 0 or found["signup_open"]
-    return Response(status_code=200 if allowed else 403)
+    if found["users"] == 0 or found["signup_open"]:
+        return Response(status_code=200)
+    return JSONResponse(
+        status_code=403,
+        content={
+            "code": 403,
+            "error_code": "signup_disabled",
+            "msg": "This Moonphase is not accepting new accounts.",
+        },
+    )
 
 
 @router.get("/tls-allowed")

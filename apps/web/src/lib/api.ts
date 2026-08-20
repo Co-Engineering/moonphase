@@ -869,6 +869,20 @@ export interface AuthMethods {
   problems: string[]
 }
 
+/**
+ * Whether this instance is taking new accounts.
+ *
+ * Unauthenticated, because the only page that needs it is the one nobody has
+ * signed in to yet. An instance too old to answer is treated as open, which is
+ * what it was.
+ */
+export async function signupOpen(): Promise<boolean> {
+  const response = await fetch(`${currentHost()}/api/config`)
+  if (!response.ok) return true
+  const config = (await response.json()) as { signup_open?: boolean }
+  return config.signup_open !== false
+}
+
 /** Unauthenticated: the sign-in screen must know which buttons to draw. */
 export async function authMethods() {
   const response = await fetch(`${currentHost()}/api/setup/methods`)

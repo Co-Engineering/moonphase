@@ -82,6 +82,20 @@ async def instance_config(request: Request) -> InstanceConfigOut:
     anyone who can reach the port could establish anyway.
     """
     settings = get_settings()
+
+    # Whether anyone may sign up, which the sign-in page needs before it can
+    # decide whether to offer the link. Open while there are no accounts at
+    # all, exactly as the proxy's own gate is — otherwise the first person to
+    # arrive could not create the account that closes it.
+    async with service_session() as conn:
+        users = int(
+            (await conn.execute(text("select count(*) from auth.users"))).scalar() or 0
+        )
+        row = (
+            await conn.execute(text("select signup_open from instance_settings limit 1"))
+        ).first()
+    signup_open = users == 0 or (bool(row.signup_open) if row else True)
+
     # Same origin as this request, because that is where the proxy serves auth.
     # The configured value is a fallback for running the API directly, without
     # the proxy in front, which is only ever development.
@@ -90,6 +104,7 @@ async def instance_config(request: Request) -> InstanceConfigOut:
         supabase_anon_key=settings.supabase_anon_key,
         vapid_public_key=push.public_key() or None,
         version="0.1.0",
+        signup_open=signup_open,
     )
 
 

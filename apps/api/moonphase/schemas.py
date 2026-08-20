@@ -540,6 +540,10 @@ class InstanceConfigOut(BaseModel):
     # which the client should say rather than silently offering notifications.
     vapid_public_key: str | None = None
     version: str
+    # Whether this instance is taking new accounts. The sign-in page has no
+    # token and no other way to know, so without this it offered a "create one"
+    # link that could only ever fail.
+    signup_open: bool = True
 
 
 # --- usage --------------------------------------------------------------------
