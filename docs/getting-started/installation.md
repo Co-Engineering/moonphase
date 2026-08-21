@@ -26,10 +26,10 @@ need Docker installed; Moonphase can install it, given a user with passwordless 
 
 ## Set up
 
-```console
-$ git clone https://github.com/oliversvane/moonphase.git
-$ cd moonphase
-$ cp .env.example .env
+```bash
+git clone https://github.com/oliversvane/moonphase.git
+cd moonphase
+cp .env.example .env
 ```
 
 ### Generate the encryption key
@@ -37,8 +37,8 @@ $ cp .env.example .env
 Moonphase encrypts SSH private keys and harness credentials before they touch the
 database. That key is not derived from anything, so you have to make it:
 
-```console
-$ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
 Paste the result into `MOONPHASE_SECRET_KEY` in `.env`.
@@ -49,8 +49,8 @@ Paste the result into `MOONPHASE_SECRET_KEY` in `.env`.
 
 ### Start Supabase
 
-```console
-$ supabase start
+```bash
+supabase start
 ```
 
 It prints an `anon key` and a JWT secret. Paste the anon key into **both**
@@ -58,8 +58,8 @@ It prints an `anon key` and a JWT secret. Paste the anon key into **both**
 
 ### Run it
 
-```console
-$ ./scripts/dev.sh
+```bash
+./scripts/dev.sh
 ```
 
 That starts Supabase if it is not already up, applies migrations, builds the runtime
@@ -83,8 +83,8 @@ image if it is missing, then runs:
 Push notifications are what make leaving a session running worthwhile. They need a VAPID
 keypair:
 
-```console
-$ apps/api/.venv/bin/python scripts/gen_vapid.py >> .env
+```bash
+apps/api/.venv/bin/python scripts/gen_vapid.py >> .env
 ```
 
 Then set `MOONPHASE_VAPID_SUBJECT` to a `mailto:` address you control, and restart the
@@ -98,8 +98,8 @@ API.
 
 ## Verify the install
 
-```console
-$ cd apps/api && .venv/bin/python -m pytest tests/ -q
+```bash
+cd apps/api && .venv/bin/python -m pytest tests/ -q
 ```
 
 Two of those tests are the ones that matter:
@@ -110,9 +110,9 @@ Two of those tests are the ones that matter:
 
 For a full-stack check against the running API:
 
-```console
-$ docker build -t moonphase/fake-server:latest infra/testing/fake-server/
-$ apps/api/.venv/bin/python scripts/smoke.py
+```bash
+docker build -t moonphase/fake-server:latest infra/testing/fake-server/
+apps/api/.venv/bin/python scripts/smoke.py
 ```
 
 That signs up a real GoTrue user, bootstraps a server, provisions a project, attaches a

@@ -12,8 +12,8 @@
 
 The frontend is not a separate deployment. Build it and the API serves it:
 
-```console
-$ pnpm --filter @moonphase/web build
+```bash
+pnpm --filter @moonphase/web build
 ```
 
 That is what lets a phone connect by typing one address — the client discovers Supabase's
@@ -86,10 +86,10 @@ sweep, not per session — a project with four agents in it is checked in one ca
 
 ## Upgrading
 
-```console
-$ git pull
-$ supabase db push          # or `supabase migration up` against your instance
-$ pnpm --filter @moonphase/web build
+```bash
+git pull
+supabase db push          # or `supabase migration up` against your instance
+pnpm --filter @moonphase/web build
 ```
 
 Then restart the API. Migrations are additive and forward-only; none of them destroy data

@@ -146,8 +146,11 @@ That is the whole thing. No CNAME, no AAAA unless you have IPv6, no proxy.
 
 ## Checking it worked
 
-```console
-$ dig +short moonphase.example.com
+```bash
+dig +short moonphase.example.com
+```
+
+```text
 203.0.113.10
 ```
 
@@ -158,8 +161,8 @@ No output means it has not propagated yet. That is usually under a minute and
 occasionally an hour, depending on the TTL the record replaced. Nothing needs
 restarting while you wait.
 
-```console
-$ dig +short moonphase.example.com @1.1.1.1
+```bash
+dig +short moonphase.example.com @1.1.1.1
 ```
 
 Asking a public resolver directly skips whatever your own machine has cached, which

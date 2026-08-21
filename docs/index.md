@@ -14,15 +14,15 @@ train. The session never noticed.
 Installing it onto a server, from your own machine — it asks for the address and
 a way in, and does the rest over SSH:
 
-```console
-$ curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-server.sh -o install-server.sh
-$ sh install-server.sh
+```bash
+curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-server.sh -o install-server.sh
+sh install-server.sh
 ```
 
 Or, run this **on** the machine itself:
 
-```console
-$ curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install.sh | sh
+```bash
+curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install.sh | sh
 ```
 
 Either way there is nothing to configure. Docker is installed if the machine has

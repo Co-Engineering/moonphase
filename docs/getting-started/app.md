@@ -13,8 +13,8 @@ One command on a computer, two taps on a phone.
 
 === "Linux"
 
-    ```console
-    $ curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-app.sh | sh
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-app.sh | sh
     ```
 
     Installs to `~/.local/share/moonphase` with a launcher at
@@ -41,8 +41,8 @@ One command on a computer, two taps on a phone.
 
 === "macOS"
 
-    ```console
-    $ curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-app.sh | sh
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-app.sh | sh
     ```
 
     The same command as Linux — it works out which one it is on. Moonphase lands
@@ -156,17 +156,17 @@ download, without the download.
 
 === "Linux"
 
-    ```console
-    $ rm -rf ~/.local/share/moonphase
-    $ rm ~/.local/bin/moonphase
-    $ rm ~/.local/share/applications/moonphase.desktop
-    $ rm ~/.local/share/icons/hicolor/512x512/apps/moonphase.png
+    ```bash
+    rm -rf ~/.local/share/moonphase
+    rm ~/.local/bin/moonphase
+    rm ~/.local/share/applications/moonphase.desktop
+    rm ~/.local/share/icons/hicolor/512x512/apps/moonphase.png
     ```
 
 === "macOS"
 
-    ```console
-    $ rm -rf ~/Applications/Moonphase.app
+    ```bash
+    rm -rf ~/Applications/Moonphase.app
     ```
 
 === "Windows"
@@ -205,8 +205,8 @@ what this project runs on itself.
 
 To pin a version instead, set a channel:
 
-```console
-$ curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-app.sh \
+```bash
+curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-app.sh \
     | MOONPHASE_CHANNEL=v0.1.0 sh
 ```
 

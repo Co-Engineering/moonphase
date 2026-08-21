@@ -4,8 +4,8 @@
 
 Follow [installation](getting-started/installation.md), then:
 
-```console
-$ ./scripts/dev.sh
+```bash
+./scripts/dev.sh
 ```
 
 ## The layout
@@ -25,27 +25,27 @@ Everything must pass before a change is worth reviewing.
 
 === "Backend"
 
-    ```console
-    $ cd apps/api
-    $ .venv/bin/ruff check moonphase/ tests/
-    $ .venv/bin/python -m pytest tests/ -q
+    ```bash
+    cd apps/api
+    .venv/bin/ruff check moonphase/ tests/
+    .venv/bin/python -m pytest tests/ -q
     ```
 
 === "Frontend"
 
-    ```console
-    $ cd apps/web
-    $ npx tsc --noEmit
-    $ npx eslint src --max-warnings=0
-    $ npx vitest run
-    $ npx vite build
+    ```bash
+    cd apps/web
+    npx tsc --noEmit
+    npx eslint src --max-warnings=0
+    npx vitest run
+    npx vite build
     ```
 
 === "Docs"
 
-    ```console
-    $ pip install -r docs/requirements.txt
-    $ mkdocs serve
+    ```bash
+    pip install -r docs/requirements.txt
+    mkdocs serve
     ```
 
     CI builds with `--strict`, so a broken internal link fails the build.
@@ -66,9 +66,9 @@ exactly one file. Prefer a test that would have caught those.
 
 ## Migrations
 
-```console
-$ supabase migration new some_name
-$ supabase db push --local
+```bash
+supabase migration new some_name
+supabase db push --local
 ```
 
 Additive and forward-only. A migration that destroys data nobody asked to remove is not

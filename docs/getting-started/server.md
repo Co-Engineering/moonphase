@@ -3,9 +3,9 @@
 One command on your own machine. It asks where the server is and how to reach
 it, then does the rest over SSH.
 
-```console
-$ curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-server.sh -o install-server.sh
-$ sh install-server.sh
+```bash
+curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-server.sh -o install-server.sh
+sh install-server.sh
 ```
 
 It asks for the address, a username, and a key or password. When it finishes it
@@ -21,8 +21,8 @@ domain and HTTPS are set on the same screen.
 
     Already know the answers? Then it needs no terminal at all:
 
-    ```console
-    $ MOONPHASE_HOST=203.0.113.10 MOONPHASE_SSH_USER=root \
+    ```bash
+    MOONPHASE_HOST=203.0.113.10 MOONPHASE_SSH_USER=root \
         MOONPHASE_SSH_KEY=~/.ssh/id_ed25519 sh install-server.sh
     ```
 
@@ -60,8 +60,8 @@ Safe, and it is how you upgrade. Secrets already in place are kept —
 stored SSH credential unreadable — and an install already holding ports 80 and
 443 keeps them.
 
-```console
-$ sh install-server.sh
+```bash
+sh install-server.sh
 ```
 
 ## If it cannot connect
@@ -92,8 +92,8 @@ server. The machine itself is usually not the thing blocking you.
 Nothing here is magic — it is one SSH connection and the ordinary installer. To
 run that yourself, on the server:
 
-```console
-$ curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install.sh | sh
+```bash
+curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install.sh | sh
 ```
 
 [Installing with Docker](docker.md) covers what that puts on the machine, how to

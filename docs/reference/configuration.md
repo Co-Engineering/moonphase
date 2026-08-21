@@ -12,8 +12,8 @@ generated.
 
 Fernet key encrypting SSH private keys and harness credentials at rest.
 
-```console
-$ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
 !!! danger
@@ -103,8 +103,8 @@ Loopback suits a backend on the same machine as your browser.
 
 Generate the keypair:
 
-```console
-$ apps/api/.venv/bin/python scripts/gen_vapid.py >> .env
+```bash
+apps/api/.venv/bin/python scripts/gen_vapid.py >> .env
 ```
 
 Disabling the monitor also disables activity dots and budget alerts, since all three are

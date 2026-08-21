@@ -25,6 +25,7 @@ BRANCH="${MOONPHASE_BRANCH:-main}"
 DIR="${MOONPHASE_DIR:-moonphase}"
 PORT="${MOONPHASE_PORT:-8471}"
 BIND="${MOONPHASE_BIND:-127.0.0.1}"
+REPO_RAW_HINT="https://raw.githubusercontent.com/oliversvane/moonphase/main"
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 info() { printf '\033[34m==>\033[0m %s\n' "$*"; }
@@ -59,14 +60,56 @@ fi
 # shell is not yet in the docker group, so sudo is the only way until the next
 # login — and silently failing at the first `docker compose` would look like the
 # install broke.
+#
+# Why the reason matters, and not just the failure: `sudo docker` fixes a socket
+# you are not allowed to open. It does nothing whatsoever for a daemon that is
+# not running. Trying it anyway asked for a password that could not have helped,
+# three times, before giving up — which is how someone ends up mistyping their
+# password at a script that was never going to succeed.
 if docker info >/dev/null 2>&1; then
   DOCKER="docker"
   SUDO_NOTE=""
-elif [ "$(id -u)" != "0" ] && sudo docker info >/dev/null 2>&1; then
-  DOCKER="sudo docker"
-  SUDO_NOTE=" (log out and back in to drop the sudo)"
 else
-  die "Docker is installed but not usable. Is the daemon running?"
+  docker_error=$(docker info 2>&1 || true)
+
+  case "$docker_error" in
+    *"permission denied"* | *"connect: permission denied"* | *"dial unix"*"permission denied"*)
+      # A socket we may not open. sudo is exactly the right answer.
+      if [ "$(id -u)" != "0" ] && sudo docker info >/dev/null 2>&1; then
+        DOCKER="sudo docker"
+        SUDO_NOTE=" (log out and back in to drop the sudo)"
+      else
+        die "Docker is running but this account cannot use it.
+
+  Add yourself to the docker group, then log out and back in:
+    sudo usermod -aG docker \$(id -un)"
+      fi
+      ;;
+    *)
+      # The daemon is not there. Say how to start it, on this machine.
+      case "$(uname -s)" in
+        Darwin)
+          die "Docker is installed but not running.
+
+  Start Docker Desktop, wait for the whale in the menu bar, and run this again:
+    open -a Docker
+
+  If you meant to install Moonphase onto a *server* rather than onto this Mac,
+  use the installer made for that — it does the whole thing over SSH:
+    curl -fsSL $REPO_RAW_HINT/scripts/install-server.sh -o install-server.sh
+    sh install-server.sh"
+          ;;
+        *)
+          if command -v systemctl >/dev/null 2>&1; then
+            die "Docker is installed but its daemon is not running. Start it:
+    sudo systemctl enable --now docker"
+          else
+            die "Docker is installed but its daemon is not running. Start it, then run this again."
+          fi
+          ;;
+      esac
+      ;;
+  esac
 fi
 
 $DOCKER compose version >/dev/null 2>&1 \

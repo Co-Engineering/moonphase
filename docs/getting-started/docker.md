@@ -8,8 +8,8 @@ you.
     [Install it over SSH](server.md) from your own computer instead. Same
     result, and it installs Docker for you if the machine has none.
 
-```console
-$ curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install.sh | sh
+```bash
+curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install.sh | sh
 ```
 
 Then open it in a browser and follow the setup: it asks for your account, an
@@ -31,9 +31,9 @@ itself. [Pointing a domain at it](../guides/dns.md) is one DNS record.
 
     You can do the same by hand:
 
-    ```console
-    $ git clone https://github.com/oliversvane/moonphase.git
-    $ cd moonphase && ./scripts/install.sh
+    ```bash
+    git clone https://github.com/oliversvane/moonphase.git
+    cd moonphase && ./scripts/install.sh
     ```
 
 ## What it starts
@@ -101,14 +101,14 @@ Pulling is the default because it takes a minute rather than several, and becaus
 everyone then runs identical bits. To build instead — because you are working on
 Moonphase, or want a commit that has not been released:
 
-```console
-$ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
 
 Or let the installer do it:
 
-```console
-$ MOONPHASE_BUILD=1 ./scripts/install.sh
+```bash
+MOONPHASE_BUILD=1 ./scripts/install.sh
 ```
 
 ??? question "Why two compose files instead of one with both keys?"
@@ -170,18 +170,18 @@ cannot mint one against it.
 
 ## Managing it
 
-```console
-$ docker compose logs -f api          # follow the backend
-$ docker compose ps                   # what is running
-$ docker compose down                 # stop, keeping your data
-$ docker compose down -v              # stop and delete everything
+```bash
+docker compose logs -f api          # follow the backend
+docker compose ps                   # what is running
+docker compose down                 # stop, keeping your data
+docker compose down -v              # stop and delete everything
 ```
 
 ### Upgrading
 
-```console
-$ docker compose pull
-$ docker compose up -d
+```bash
+docker compose pull
+docker compose up -d
 ```
 
 Migrations run automatically on start, and are additive and forward-only. They
@@ -190,17 +190,17 @@ cannot arrive separately — an upgrade that needs a schema change gets one.
 
 If you build from source, `git pull` first and add the override:
 
-```console
-$ git pull
-$ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```bash
+git pull
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
 
 ### Backing up
 
 Two things, and the second is the one people forget:
 
-```console
-$ docker compose exec db pg_dump -U postgres postgres > moonphase.sql
+```bash
+docker compose exec db pg_dump -U postgres postgres > moonphase.sql
 ```
 
 …and `.env`, because it holds `MOONPHASE_SECRET_KEY`.
@@ -243,9 +243,9 @@ Everything the API itself understands is in the
 
 ## If it does not come up
 
-```console
-$ docker compose ps
-$ docker compose logs migrate api
+```bash
+docker compose ps
+docker compose logs migrate api
 ```
 
 **`migrate` exited 1.** Usually the database was not ready or the auth schema had not

@@ -25,8 +25,8 @@ The tables below are a map, not a substitute.
 
 Every route except `/api/health` and `/api/config` requires a GoTrue access token:
 
-```console
-$ curl -H "Authorization: Bearer $TOKEN" https://moonphase.example/api/servers
+```bash
+curl -H "Authorization: Bearer $TOKEN" https://moonphase.example/api/servers
 ```
 
 The token's claims are pushed into Postgres for the duration of the request, and
