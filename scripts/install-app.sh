@@ -53,17 +53,22 @@ release_json="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/tags/$CH
 
 # One asset per platform and architecture. Matched on the extension and the
 # architecture in the name, which is what electron-builder puts there.
+# No leading hyphen in these patterns, and `--` on every grep that takes one.
+# `grep -E "-mac\.zip$|..."` reads the `-m` as the max-count option and dies —
+# "invalid max count" on GNU, "Invalid argument" on macOS — so the Darwin path
+# never selected anything and reported that no build existed. The Linux pattern
+# happened not to start with a hyphen, which is why only one of them worked.
 case "$os" in
   Linux) want="\\.AppImage$" ;;
-  Darwin) want="-mac\\.zip$|\\.zip$" ;;
+  Darwin) want="mac\\.zip$" ;;
 esac
 
 assets="$(printf '%s' "$release_json" \
   | grep -o '"browser_download_url": *"[^"]*"' \
   | sed 's/.*"\(https[^"]*\)"/\1/' \
-  | grep -E "$want" || true)"
+  | grep -E -- "$want" || true)"
 
-url="$(printf '%s\n' "$assets" | grep -E "$arch|$(printf '%s' "$arch" | sed 's/x64/x86_64/')" | head -1 || true)"
+url="$(printf '%s\n' "$assets" | grep -E -- "$arch|$(printf '%s' "$arch" | sed 's/x64/x86_64/')" | head -1 || true)"
 
 # electron-builder leaves the architecture out of the name when it built only
 # one for that platform, so an arch-less asset is the right answer — but only if
@@ -71,7 +76,7 @@ url="$(printf '%s\n' "$assets" | grep -E "$arch|$(printf '%s' "$arch" | sed 's/x
 # x64 machine the arm64 build whenever that one happened to be listed first,
 # which installs cleanly and then refuses to start.
 if [ -z "$url" ]; then
-  url="$(printf '%s\n' "$assets" | grep -vE 'arm64|aarch64|x64|x86_64|ia32' | head -1 || true)"
+  url="$(printf '%s\n' "$assets" | grep -vE -- 'arm64|aarch64|x64|x86_64|ia32' | head -1 || true)"
 fi
 
 [ -n "$url" ] || die "No $os build for $arch in the $CHANNEL release."

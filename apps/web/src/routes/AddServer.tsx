@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { api, type ServerBootstrap, type SshAuthMode } from '../lib/api'
+import { copyText } from '../lib/clipboard'
 
 interface Props {
   onClose: () => void
@@ -167,9 +168,11 @@ export function AddServer({ onClose, onCreated }: Props) {
             </button>
             <button
               onClick={() =>
-                navigator.clipboard.writeText(
+                void copyText(
                   `mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '${result.public_key_to_install}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys`,
-                )
+                ).then((ok) => {
+                  if (!ok) setError('Could not copy. Select the command and copy it.')
+                })
               }
             >
               Copy command

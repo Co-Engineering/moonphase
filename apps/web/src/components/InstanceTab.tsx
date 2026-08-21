@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { instance, type InstanceSettings, type Person } from '../lib/api'
 import * as api from '../lib/api'
 import { SignInMethods, draftFrom, type Draft } from './SignInMethods'
+import { copyText } from '../lib/clipboard'
 
 /**
  * The instance itself: its address, who may sign in, and who has an account.
@@ -167,7 +168,13 @@ export function InstanceTab({
             </div>
             <div className="actions" style={{ marginTop: 8 }}>
               <button
-                onClick={() => void navigator.clipboard.writeText(created.password)}
+                onClick={() =>
+                  void copyText(created.password).then((ok) => {
+                    if (!ok) {
+                      setError('Could not copy. Select the password and copy it.')
+                    }
+                  })
+                }
               >
                 Copy password
               </button>

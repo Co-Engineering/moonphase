@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { copyText } from '../lib/clipboard'
 
 /**
  * Something to look at when the app breaks.
@@ -90,7 +91,7 @@ export class ErrorBoundary extends Component<Props, State> {
             </button>
             <button
               className="ghost"
-              onClick={() => void navigator.clipboard?.writeText(report)}
+              onClick={() => void copyText(report)}
             >
               Copy details
             </button>

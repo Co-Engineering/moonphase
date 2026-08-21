@@ -18,6 +18,7 @@ import {
   type PushStatus,
   type WorkspaceProfile,
 } from '../lib/api'
+import { copyText } from '../lib/clipboard'
 
 interface Props {
   onClose: () => void
@@ -174,6 +175,7 @@ function ClaudeAccount({
   const [apiKey, setApiKey] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [working, setWorking] = useState(false)
+  const [copied, setCopied] = useState<'copied' | 'failed' | null>(null)
   const pollRef = useRef<number | undefined>(undefined)
 
   useEffect(() => () => window.clearInterval(pollRef.current), [])
@@ -337,9 +339,23 @@ function ClaudeAccount({
             </a>
           </div>
           <div className="actions" style={{ marginBottom: 12 }}>
-            <button onClick={() => void navigator.clipboard.writeText(login?.url ?? '')}>
-              Copy URL
+            <button
+              onClick={() =>
+                void copyText(login?.url ?? '').then((ok) =>
+                  // Said out loud either way. A copy button that silently does
+                  // nothing is worse than no button, and that is exactly what
+                  // this was on an instance without HTTPS.
+                  setCopied(ok ? 'copied' : 'failed'),
+                )
+              }
+            >
+              {copied === 'copied' ? 'Copied' : 'Copy URL'}
             </button>
+            {copied === 'failed' && (
+              <span className="hint">
+                Could not copy — select the link above and copy it.
+              </span>
+            )}
           </div>
           <p className="hint">
             <strong>2.</strong> Paste the code it gives you:
