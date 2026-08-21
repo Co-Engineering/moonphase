@@ -32,6 +32,7 @@ import jwt
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import text
 
+from .. import authconfig
 from ..auth import Principal, current_principal
 from ..config import get_settings
 from ..db import service_session, user_session
@@ -461,7 +462,9 @@ async def write_settings(
                 """
             ),
             {
-                "url": (payload.public_url or "").strip() or None,
+                # Same normalising as setup: a domain typed without a scheme is
+                # the common case, and stored as typed it is not a URL.
+                "url": authconfig.normalise_public_url(payload.public_url),
                 "signup_open": payload.signup_open,
             },
         )

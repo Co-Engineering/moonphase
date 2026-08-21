@@ -132,7 +132,12 @@ async def complete(
                  returning public_url, signup_open
                 """
             ),
-            {"url": payload.public_url, "signup_open": payload.signup_open},
+            {
+                # What was typed, made into an address. A bare name is what
+                # people write and is not a URL; everything downstream needs one.
+                "url": authconfig.normalise_public_url(payload.public_url),
+                "signup_open": payload.signup_open,
+            },
         )
         row = result.first()
     if row is None:

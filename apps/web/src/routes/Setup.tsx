@@ -162,14 +162,15 @@ export function Setup({ onDone }: Props) {
                   <input
                     value={domain}
                     onChange={(e) => setDomain(e.target.value)}
-                    placeholder="https://moonphase.example.com"
+                    placeholder="moonphase.example.com"
                     autoFocus
                   />
                 </label>
                 <p className="hint">
-                  Blank keeps <code>{window.location.host}</code> on plain HTTP. A
-                  domain adds HTTPS automatically, and is required for notifications
-                  and for signing in with Google or Microsoft.{' '}
+                  Just the name is enough — <code>https://</code> is assumed. Blank
+                  keeps <code>{window.location.host}</code> on plain HTTP. A domain
+                  adds HTTPS automatically, and is required for notifications and
+                  for signing in with Google or Microsoft.{' '}
                   <a
                     href="https://oliversvane.github.io/moonphase/guides/dns/"
                     target="_blank"

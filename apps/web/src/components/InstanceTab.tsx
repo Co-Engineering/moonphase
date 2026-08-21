@@ -72,14 +72,16 @@ export function InstanceTab({
           <span>Custom domain — optional</span>
           <input
             value={settings.public_url ?? ''}
-            placeholder="https://moonphase.example.com"
+            placeholder="moonphase.example.com"
             onChange={(e) =>
               setSettings({ ...settings, public_url: e.target.value })
             }
           />
         </label>
         <p className="hint" style={{ marginTop: -6 }}>
-          Leave it blank to keep using this machine&rsquo;s address.{' '}
+          Just the name is enough — <code>https://</code> is assumed, since that
+          is what a certificate gives you. Leave it blank to keep using this
+          machine&rsquo;s address.{' '}
           <a
             href="https://oliversvane.github.io/moonphase/guides/dns/"
             target="_blank"

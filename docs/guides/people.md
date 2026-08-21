@@ -83,6 +83,11 @@ derived from your domain, so it is right by construction.
 makes HTTPS possible: the certificate is obtained the first time somebody visits
 by name, and renews itself.
 
+Type the name on its own — `moonphase.example.com`. `https://` is filled in for
+you, because that is what a certificate gives you. A scheme you type yourself is
+kept, and an IP address gets `http://`, since no certificate authority will issue
+for one.
+
 [Pointing a domain at it](dns.md) has the exact DNS record, per provider.
 
 Leave it blank and the instance answers on its IP address. That works, and costs

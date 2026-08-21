@@ -51,6 +51,61 @@ class AuthMethods:
     problems: list[str] = field(default_factory=list)
 
 
+def normalise_public_url(value: str | None) -> str | None:
+    """Turn what somebody typed into an address the rest of this can use.
+
+    People type `moonphase.example.com`, because that is what the address *is*.
+    Stored as typed it is not a URL, and everything downstream needs one: it
+    becomes `GOTRUE_SITE_URL`, the OAuth redirect a provider is handed, and the
+    origin the client fetches from. A bare name silently produced
+    `moonphase.example.com/auth/v1/callback`, which Google refuses, and a client
+    that treated it as a relative path.
+
+    So a missing scheme is filled in — with `https` for a name, because that is
+    what happens the moment a certificate is issued, and `http` for an address
+    that can never have one. An IP address or `localhost` cannot be issued a
+    certificate, so guessing `https` there would hand somebody an address that
+    is guaranteed not to answer.
+
+    Whatever scheme was actually typed is kept. Someone writing `http://` in
+    front of a name has said something deliberate.
+    """
+    if value is None:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+
+    scheme = ""
+    rest = raw
+    lowered = raw.lower()
+    for candidate in ("https://", "http://"):
+        if lowered.startswith(candidate):
+            scheme = candidate
+            rest = raw[len(candidate) :]
+            break
+
+    # The host, and a port if one was given. A path is dropped: this is an
+    # origin, and `https://example.com/moonphase` as an origin is not a thing.
+    host = rest.split("/")[0].strip()
+    if not host:
+        return None
+
+    if not scheme:
+        # Bracketed IPv6, an IPv4 literal, or localhost — none of which can hold
+        # a certificate, so https would be a promise nothing can keep.
+        bare = host.split(":")[0] if not host.startswith("[") else host
+        parts = bare.split(".")
+        numeric = len(parts) == 4 and all(part.isdigit() for part in parts)
+        scheme = (
+            "http://"
+            if bare.lower() == "localhost" or numeric or host.startswith("[")
+            else "https://"
+        )
+
+    return scheme + host.lower()
+
+
 def has_domain(public_url: str) -> bool:
     """Whether the address is a name rather than a bare IP.
 

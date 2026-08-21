@@ -13,6 +13,7 @@ from pathlib import Path
 from moonphase.authconfig import (
     AuthMethods,
     incomplete,
+    normalise_public_url,
     redirect_uri,
     render,
     usable,
@@ -309,3 +310,62 @@ def test_accounts_are_made_through_gotrue_rather_than_by_hand() -> None:
 
     assert "_gotrue" in source
     assert "insert into auth.users" not in source
+
+
+# --- what people actually type ----------------------------------------------
+
+
+def test_a_bare_domain_becomes_an_https_address() -> None:
+    """The common case, and it used to be stored as typed.
+
+    `moonphase.example.com` is what the address *is*, so it is what people
+    write. It is not a URL, and everything downstream needs one — it becomes
+    GOTRUE_SITE_URL, the redirect URI a provider is handed, and the origin the
+    client fetches from. Stored bare it produced
+    `moonphase.example.com/auth/v1/callback`, which Google refuses.
+    """
+    assert normalise_public_url("moonphase.example.com") == "https://moonphase.example.com"
+    assert normalise_public_url("  moonphase.example.com/  ") == "https://moonphase.example.com"
+
+
+def test_a_scheme_that_was_typed_is_kept() -> None:
+    """Writing `http://` in front of a name is a deliberate thing to say."""
+    assert normalise_public_url("http://moonphase.example.com") == "http://moonphase.example.com"
+    assert normalise_public_url("https://moonphase.example.com") == "https://moonphase.example.com"
+    # And a scheme in capitals is still a scheme.
+    assert normalise_public_url("HTTPS://Example.COM") == "https://example.com"
+
+
+def test_an_address_that_cannot_hold_a_certificate_gets_http() -> None:
+    """Guessing https for an IP would hand somebody an address guaranteed not to
+    answer: no certificate authority will issue for one, so the name would
+    resolve and the handshake would fail."""
+    assert normalise_public_url("203.0.113.10") == "http://203.0.113.10"
+    assert normalise_public_url("203.0.113.10:8471") == "http://203.0.113.10:8471"
+    assert normalise_public_url("localhost:8471") == "http://localhost:8471"
+
+
+def test_a_path_is_not_part_of_an_origin() -> None:
+    """`https://example.com/moonphase` as an origin is not a thing, and would
+    produce a redirect URI with the path in the middle of it."""
+    assert normalise_public_url("example.com/setup") == "https://example.com"
+
+
+def test_nothing_typed_stays_nothing() -> None:
+    """Blank means "use whatever address this machine answers on", which is a
+    different thing from an empty string stored as the domain."""
+    assert normalise_public_url("") is None
+    assert normalise_public_url("   ") is None
+    assert normalise_public_url(None) is None
+
+
+def test_both_ways_of_setting_the_address_normalise_it() -> None:
+    """Setup and the settings screen are separate endpoints, and an address
+    corrected later must be treated exactly like one entered at the start."""
+    import inspect
+
+    from moonphase.routers import people
+    from moonphase.routers import setup as setup_router
+
+    assert "normalise_public_url" in inspect.getsource(setup_router.complete)
+    assert "normalise_public_url" in inspect.getsource(people.write_settings)
