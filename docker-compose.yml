@@ -83,12 +83,16 @@ services:
   # One-shot. Creates the roles and `auth.uid()` that the policies are written
   # against, then applies every migration that has not run yet.
   migrate:
+    # `latest` is the newest *release*, not the newest commit — the tag only
+    # moves when somebody cuts one. `edge` is still there for the tip, and
+    # pinning a version is one line in .env.
+    #
     # The same image as the API, because that is what carries the migrations.
     # They used to be mounted from a checkout on the server, which meant
     # `docker compose pull` upgraded the code and left the schema behind —
     # and said nothing, because a migration that is not there is not a
     # migration that failed.
-    image: ${MOONPHASE_IMAGE:-ghcr.io/oliversvane/moonphase}:${MOONPHASE_VERSION:-edge}
+    image: ${MOONPHASE_IMAGE:-ghcr.io/oliversvane/moonphase}:${MOONPHASE_VERSION:-latest}
     depends_on:
       db:
         condition: service_healthy
@@ -117,7 +121,7 @@ services:
     #
     # To run from source, add the override:
     #   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
-    image: ${MOONPHASE_IMAGE:-ghcr.io/oliversvane/moonphase}:${MOONPHASE_VERSION:-edge}
+    image: ${MOONPHASE_IMAGE:-ghcr.io/oliversvane/moonphase}:${MOONPHASE_VERSION:-latest}
     restart: unless-stopped
     depends_on:
       db:

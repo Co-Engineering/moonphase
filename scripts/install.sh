@@ -246,11 +246,11 @@ IMAGE=$(existing MOONPHASE_IMAGE)
 [ -n "${IMAGE:-}" ] || IMAGE="${MOONPHASE_IMAGE:-ghcr.io/oliversvane/moonphase}"
 
 VERSION=$(existing MOONPHASE_VERSION)
-# `edge` rather than `latest`: no version has been released yet, so `latest` is
-# a tag that does not exist. Pulling it 404s and the installer falls back to
-# building the image from source — twenty minutes instead of one, for a reason
-# nothing on screen explains.
-[ -n "${VERSION:-}" ] || VERSION="${MOONPHASE_VERSION:-edge}"
+# `latest` is the newest release. It was `edge` for a while because nothing had
+# been released and `latest` was a tag that did not exist — pulling it 404s, and
+# the installer then builds from source, which is twenty minutes instead of one
+# for a reason nothing on screen explains. There are releases now.
+[ -n "${VERSION:-}" ] || VERSION="${MOONPHASE_VERSION:-latest}"
 
 VAPID_PUBLIC=$(existing MOONPHASE_VAPID_PUBLIC_KEY)
 VAPID_PRIVATE=$(existing MOONPHASE_VAPID_PRIVATE_KEY)

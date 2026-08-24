@@ -1,5 +1,12 @@
 # Roadmap
 
+!!! info "v0.1.0 is released"
+    The first release is published, with the desktop app built for Linux, macOS
+    and Windows beside it. The milestones below are *feature* milestones and
+    predate the release numbering — several marked done shipped long before
+    there was a tag on any of it.
+
+
 Ordered so that each step is useful on its own and none of them require
 rewriting what came before.
 

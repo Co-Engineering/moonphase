@@ -82,18 +82,24 @@ MOONPHASE_IMAGE=oliversvanecoec/moonphase
 `.env` chooses the tag:
 
 ```bash
-MOONPHASE_VERSION=edge      # or a version, once one is released
+MOONPHASE_VERSION=v0.1.0    # or latest, or 0.1, or edge
 ```
 
 | Tag | What it is |
 | --- | ---------- |
-| `edge` | The tip of `main`. Builds and passes tests. **The default, and currently the only tag.** |
-| `0.2.1`, `0.2` | Once versions are released, pin as tightly or as loosely as you like |
+| `latest` | The newest release. **The default.** It moves when a release is cut, not when a commit lands |
+| `v0.1.0`, `0.1.0` | One exact release. The same image under both names |
+| `0.1` | The newest patch of that minor version |
+| `edge` | The tip of `main`. Builds and passes tests, and is not a release |
 
-There is no `latest` yet — nothing has been released, so there is nothing for it
-to point at. Once there is, pinning an exact version is the right call for
-anything you depend on: an upgrade then happens when you change that line, rather
-than whenever you happen to pull.
+Pinning an exact version is the right call for anything you depend on: an upgrade
+then happens when you change that line, rather than whenever you happen to pull.
+
+!!! note "`edge` is never offered an update"
+    [The version panel](../guides/updating.md) compares against the newest
+    *release*, and `edge` is usually ahead of one — so it is reported as a
+    development build rather than as out of date. Pin a version to get update
+    notices.
 
 ### Building it yourself
 
