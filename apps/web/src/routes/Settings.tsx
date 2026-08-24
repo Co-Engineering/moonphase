@@ -9,6 +9,7 @@ import {
 import { InstallPrompt } from '../components/InstallPrompt'
 import { McpEditor, SettingsEditor } from '../components/ClaudeConfig'
 import { InstanceTab } from '../components/InstanceTab'
+import { PeopleTab } from '../components/PeopleTab'
 import {
   api,
   instance,
@@ -25,7 +26,7 @@ interface Props {
   onSaved: () => void
 }
 
-type Tab = 'accounts' | 'harness' | 'environments' | 'workspace' | 'instance'
+type Tab = 'accounts' | 'harness' | 'environments' | 'workspace' | 'instance' | 'people'
 
 /**
  * Global settings.
@@ -99,7 +100,12 @@ export function Settings({ onClose, onSaved }: Props) {
               ['workspace', 'Workspace'],
               // Only for whoever administers the instance. Everyone else has no
               // business seeing the list of accounts, let alone the buttons.
-              ...(isAdmin ? ([['instance', 'Instance']] as [Tab, string][]) : []),
+              ...(isAdmin
+                ? ([
+                    ['instance', 'Instance'],
+                    ['people', 'People'],
+                  ] as [Tab, string][])
+                : []),
             ] as [Tab, string][]
           ).map(([key, label]) => (
             <button
@@ -125,6 +131,8 @@ export function Settings({ onClose, onSaved }: Props) {
           <EnvironmentsTab busy={busy} run={run} />
         ) : tab === 'instance' ? (
           <InstanceTab busy={busy} run={run} />
+        ) : tab === 'people' ? (
+          <PeopleTab busy={busy} run={run} />
         ) : (
           <WorkspaceTab profile={profile} busy={busy} run={run} />
         )}

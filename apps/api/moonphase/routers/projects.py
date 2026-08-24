@@ -23,6 +23,9 @@ from .. import (
     workspaces,
 )
 from .. import harness as harness_registry
+from .. import (
+    profile as profile_module,
+)
 from ..auth import Principal, current_principal
 from ..config import get_settings
 from ..db import service_session, user_session
@@ -196,6 +199,7 @@ async def create_project(
         _provision_in_background(
             principal,
             project_id=project_id,
+            org_id=owning_org,
             server_id=payload.server_id,
             container=container,
             workspace_volume=workspace_volume,
@@ -229,6 +233,7 @@ async def _provision_in_background(
     principal: Principal,
     *,
     project_id: UUID,
+    org_id: UUID,
     server_id: UUID,
     container: str,
     workspace_volume: str,
@@ -253,6 +258,7 @@ async def _provision_in_background(
     try:
         container_id = await _provision_container(
             principal,
+            org_id=org_id,
             server_id=server_id,
             container=container,
             workspace_volume=workspace_volume,
@@ -289,6 +295,7 @@ async def _provision_in_background(
 async def _provision_container(
     principal: Principal,
     *,
+    org_id: UUID,
     server_id: UUID,
     container: str,
     workspace_volume: str,
@@ -355,20 +362,105 @@ async def _provision_container(
     )
 
     if repo_url:
+        # The caller's own GitHub credential, which is what a private repository
+        # needs and what this step never had.
+        async with service_session() as conn:
+            row = await queries.get_vcs_credential_privileged(conn, org_id, "github")
+        await _clone(conn_ssh, container, repo_url, _vcs_token(row))
+
+    return container_id
+
+
+def _vcs_token(row: dict | None) -> str | None:
+    """The GitHub token from a credential row, if there is one.
+
+    Already decrypted by the query, which is where that belongs.
+    """
+    return (row or {}).get("token") or None
+
+# Where the clone's credentials live for the length of one command. Outside the
+# workspace volume on purpose: the volume outlives this and is what the agent
+# works in, and a token sitting in it would outlive the reason for it.
+_CLONE_CREDENTIALS = "/tmp/.moonphase-clone-credentials"
+
+
+async def _clone(
+    conn_ssh: Any, container: str, repo_url: str, token: str | None
+) -> None:
+    """Clone the project's repository, with the account's GitHub credential.
+
+    It had none, which is why cloning a private repository failed with "could
+    not read Username for 'https://github.com': No such device or address" —
+    git asking for a password down a pipe with no terminal on the other end.
+    Sessions have had a credential helper all along; this runs before any
+    session exists, so it needed its own.
+
+    The token goes into a file over stdin rather than into the command, so it
+    stays out of the process list on the host. `-c` rather than `git config`,
+    so none of it is written into the clone's own config — the token would
+    otherwise sit in `.git/config` in a volume that outlives this, readable by
+    anything the agent later runs.
+    """
+    settings: list[str] = [
+        # Fail rather than block. Without this git waits on a prompt that
+        # nothing can answer, and reports the confusing error above instead of
+        # saying it needed a credential.
+        "-c",
+        "core.askPass=",
+    ]
+    env = {"GIT_TERMINAL_PROMPT": "0"}
+
+    if token:
+        await profile_module.write_file(
+            conn_ssh,
+            container,
+            _CLONE_CREDENTIALS,
+            f"https://x-access-token:{token}@github.com\n",
+            mode="600",
+        )
+        settings += [
+            "-c",
+            f"credential.helper=store --file={_CLONE_CREDENTIALS}",
+            # An address the agent found written as ssh cannot work here: there
+            # is no key in the container. The same rewrite a session gets.
+            "-c",
+            "url.https://github.com/.insteadOf=git@github.com:",
+            "-c",
+            "url.https://github.com/.insteadOf=ssh://git@github.com/",
+        ]
+
+    try:
         clone = await docker_remote.exec_capture(
             conn_ssh,
             container,
-            ["git", "clone", "--depth", "50", repo_url, "."],
+            ["git", *settings, "clone", "--depth", "50", repo_url, "."],
             workdir="/workspace",
+            env=env,
             timeout=900,
         )
-        if not clone.ok:
-            raise SSHError(
-                "Container started but `git clone` failed: "
-                f"{(clone.stderr or clone.stdout).strip()[:400]}"
-            )
+    finally:
+        # Always, including when the clone raised. A token left in the container
+        # is the failure this whole arrangement exists to avoid.
+        await docker_remote.exec_capture(
+            conn_ssh, container, ["rm", "-f", _CLONE_CREDENTIALS], timeout=30
+        )
 
-    return container_id
+    if clone.ok:
+        return
+
+    reason = (clone.stderr or clone.stdout).strip()[:400]
+    if not token:
+        looks_private = any(
+            hint in reason.lower()
+            for hint in ("could not read username", "authentication", "not found", "denied")
+        )
+        if looks_private:
+            raise SSHError(
+                "Could not clone that repository, and no GitHub account is "
+                "connected — private repositories need one. Connect GitHub in "
+                f"Settings → Accounts and try again.\n\n{reason}"
+            )
+    raise SSHError(f"Container started but `git clone` failed: {reason}")
 
 
 @router.post("/{project_id}/start", response_model=ProjectOut)

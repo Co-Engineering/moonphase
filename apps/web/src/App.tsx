@@ -21,7 +21,6 @@ import { setBadge } from './lib/notifications'
 import {
   currentHost,
   fetchConfig,
-  forgetHost,
   rememberHost,
   storedHost,
   type InstanceConfig,
@@ -41,6 +40,8 @@ import { Share } from './components/Share'
 import { Attention, waiting } from './components/Attention'
 import { SessionWindow } from './routes/SessionWindow'
 import { openSessionWindow, sessionWindowUrl } from './lib/desktop'
+import { HostDialog } from './components/HostDialog'
+import { RowMenu } from './components/RowMenu'
 
 export function App() {
   const [session, setSession] = useState<AuthSession | null>(null)
@@ -150,19 +151,13 @@ export function App() {
   }
 
   return (
-    <Shell
-      email={session.user.email ?? ''}
-      onDisconnect={() => {
-        forgetHost()
-        window.location.reload()
-      }}
-    />
+    <Shell email={session.user.email ?? ''} />
   )
 }
 
 type ShareTarget = { kind: 'servers' | 'projects'; id: string; name: string }
 
-function Shell({ email, onDisconnect }: { email: string; onDisconnect: () => void }) {
+function Shell({ email }: { email: string }) {
   // A session is part of the selection rather than a tab inside a project:
   // it is the thing you are actually looking at, so it belongs in the place
   // that says what you are looking at.
@@ -173,6 +168,7 @@ function Shell({ email, onDisconnect }: { email: string; onDisconnect: () => voi
   const [showNewProject, setShowNewProject] = useState(false)
   const [showSidebar, setShowSidebar] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [showHost, setShowHost] = useState(false)
   const [showUsage, setShowUsage] = useState(false)
   const [showSearch, setShowSearch] = useState(false)
 
@@ -312,6 +308,38 @@ function Shell({ email, onDisconnect }: { email: string; onDisconnect: () => voi
                   </span>
                 )}
               </button>
+              <RowMenu
+                label={server.name}
+                actions={[
+                  ...(server.access === 'admin'
+                    ? [
+                        {
+                          label: 'Share',
+                          onSelect: () =>
+                            setShareTarget({
+                              kind: 'servers',
+                              id: server.id,
+                              name: server.name,
+                            }),
+                        },
+                      ]
+                    : []),
+                  {
+                    label: 'Remove server',
+                    danger: true,
+                    detail:
+                      'Deletes its projects from Moonphase and revokes the key. ' +
+                      'Volumes on the machine are left alone.',
+                    disabledReason:
+                      server.access === 'admin' ? undefined : 'not yours',
+                    onSelect: () =>
+                      void api
+                        .deleteServer(server.id)
+                        .then(reloadAll)
+                        .catch(() => reloadAll()),
+                  },
+                ]}
+              />
 
               {grouped
                 .filter((p) => p.server_id === server.id)
@@ -329,6 +357,21 @@ function Shell({ email, onDisconnect }: { email: string; onDisconnect: () => voi
                       (s) => s.project_id === project.id,
                     )}
                     onSelect={selectProject}
+                    onShare={(project) =>
+                      setShareTarget({
+                        kind: 'projects',
+                        id: project.id,
+                        name: project.name,
+                      })
+                    }
+                    onRemove={(project) =>
+                      void api.deleteProject(project.id).then(reloadAll)
+                    }
+                    onCloseSession={(item) =>
+                      void api
+                        .deleteSession(project.id, item.tmux_session)
+                        .then(reloadAll)
+                    }
                   />
                 ))}
             </div>
@@ -352,6 +395,19 @@ function Shell({ email, onDisconnect }: { email: string; onDisconnect: () => voi
                   sessions={(sessions.data ?? []).filter((s) => s.project_id === project.id)}
                   onSelect={selectProject}
                   subtitle={project.server_name ?? undefined}
+                  onShare={(item) =>
+                    setShareTarget({
+                      kind: 'projects',
+                      id: item.id,
+                      name: item.name,
+                    })
+                  }
+                  onRemove={(item) => void api.deleteProject(item.id).then(reloadAll)}
+                  onCloseSession={(item) =>
+                    void api
+                      .deleteSession(project.id, item.tmux_session)
+                      .then(reloadAll)
+                  }
                 />
               ))}
             </>
@@ -390,7 +446,11 @@ function Shell({ email, onDisconnect }: { email: string; onDisconnect: () => voi
           <button className="ghost" onClick={() => void client().auth.signOut()}>
             Sign out
           </button>
-          <button className="ghost" onClick={onDisconnect} title={currentHost()}>
+          <button
+            className="ghost"
+            onClick={() => setShowHost(true)}
+            title={currentHost()}
+          >
             Host
           </button>
         </div>
@@ -463,6 +523,8 @@ function Shell({ email, onDisconnect }: { email: string; onDisconnect: () => voi
         )}
       </main>
 
+      {showHost && <HostDialog onClose={() => setShowHost(false)} />}
+
       {showSettings && (
         <Settings onClose={() => setShowSettings(false)} onSaved={reloadAll} />
       )}
@@ -516,6 +578,9 @@ function ProjectRow({
   sessions,
   onSelect,
   subtitle,
+  onShare,
+  onRemove,
+  onCloseSession,
 }: {
   project: Project
   active: boolean
@@ -523,6 +588,9 @@ function ProjectRow({
   sessions: Session[]
   onSelect: (id: string, session?: string) => void
   subtitle?: string
+  onShare?: (project: Project) => void
+  onRemove?: (project: Project) => void
+  onCloseSession?: (session: Session) => void
 }) {
   return (
     <>
@@ -560,6 +628,23 @@ function ProjectRow({
           </span>
         )}
       </button>
+      <RowMenu
+        label={project.name}
+        actions={[
+          ...(project.access === 'admin' && onShare
+            ? [{ label: 'Share', onSelect: () => onShare(project) }]
+            : []),
+          {
+            label: 'Remove project',
+            danger: true,
+            detail:
+              'Stops the container and removes the project. The volumes, and ' +
+              'so the work in them, are kept.',
+            disabledReason: canControl(project.access) ? undefined : 'view only',
+            onSelect: () => onRemove?.(project),
+          },
+        ]}
+      />
 
       {/* Sessions belong here rather than in a tab strip: a session is the
           thing you are actually looking at, so it should be navigable in the
@@ -567,8 +652,8 @@ function ProjectRow({
           be visible at once. Nothing connects until one is opened. */}
       {project.status === 'running' &&
         sessions.map((session) => (
+          <div className="tree-session-row" key={session.id}>
           <button
-            key={session.id}
             className={`tree-row tree-session activity-${liveActivity(session)}${
               active && activeSession === session.tmux_session ? ' active' : ''
             }`}
@@ -594,6 +679,23 @@ function ProjectRow({
               </span>
             )}
           </button>
+          <RowMenu
+            label={session.tmux_session}
+            actions={[
+              {
+                label: 'Close session',
+                danger: true,
+                detail:
+                  'Ends the agent and removes its worktree. Its branch is kept.',
+                disabledReason:
+                  session.is_mine || project.access === 'admin'
+                    ? undefined
+                    : "someone else's",
+                onSelect: () => onCloseSession?.(session),
+              },
+            ]}
+          />
+          </div>
         ))}
     </>
   )

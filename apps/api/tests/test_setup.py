@@ -369,3 +369,65 @@ def test_both_ways_of_setting_the_address_normalise_it() -> None:
 
     assert "normalise_public_url" in inspect.getsource(setup_router.complete)
     assert "normalise_public_url" in inspect.getsource(people.write_settings)
+
+
+# --- cloning a repository at project creation --------------------------------
+
+
+def test_the_clone_carries_a_credential() -> None:
+    """It had none, and a private repository therefore failed with "could not
+    read Username for 'https://github.com': No such device or address" — git
+    asking for a password down a pipe with no terminal on the other end.
+
+    Sessions have had a credential helper all along. This runs before any
+    session exists, so it needed its own.
+    """
+    import inspect
+
+    from moonphase.routers import projects
+
+    source = inspect.getsource(projects._clone)
+
+    assert "credential.helper=store" in source
+    # Written over stdin, so the token stays out of the host's process list.
+    assert "write_file" in source
+    # And `-c`, so none of it lands in the clone's own .git/config, which lives
+    # in a volume that outlives this and is readable by whatever runs next.
+    # Asserted on the argv rather than on the phrase, which the docstring uses
+    # to explain the choice and which therefore says nothing about the code.
+    assert '"-c"' in source
+    assert '"config"' not in source
+
+
+def test_the_clone_never_waits_for_a_prompt() -> None:
+    """Blocking on a password nothing can type is how the original failure
+    reported itself as a device error rather than as a missing credential."""
+    import inspect
+
+    from moonphase.routers import projects
+
+    source = inspect.getsource(projects._clone)
+    assert "GIT_TERMINAL_PROMPT" in source
+
+
+def test_the_clone_credential_is_removed_afterwards() -> None:
+    """Including when the clone failed. A token left behind in the container is
+    the thing the arrangement exists to avoid."""
+    import inspect
+
+    from moonphase.routers import projects
+
+    source = inspect.getsource(projects._clone)
+    assert "finally:" in source
+    assert "rm" in source and "_CLONE_CREDENTIALS" in source
+
+
+def test_a_private_repo_without_github_says_so() -> None:
+    """"git clone failed" plus git's own wording explains nothing to somebody
+    who has simply not connected GitHub yet."""
+    import inspect
+
+    from moonphase.routers import projects
+
+    source = inspect.getsource(projects._clone)
+    assert "Settings → Accounts" in source
