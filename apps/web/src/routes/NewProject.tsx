@@ -3,6 +3,7 @@ import {
   api,
   type Environment,
   type HarnessInfo,
+  type HarnessKind,
   type Project,
   type Server,
 } from '../lib/api'
@@ -82,7 +83,7 @@ export function NewProject({
       const created = await api.createProject({
         server_id: serverId,
         name,
-        harness: harness as 'claude_code' | 'opencode',
+        harness: harness as HarnessKind,
         environment,
         repo_url: repoUrl.trim() || null,
       })

@@ -10,7 +10,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 SshAuthMode = Literal["password_bootstrap", "managed_key", "provided_key"]
-HarnessKindStr = Literal["claude_code", "opencode"]
+HarnessKindStr = Literal["claude_code", "opencode", "pydantic_ai"]
 HarnessAuthModeStr = Literal["oauth", "api_key"]
 
 # What you grant someone.

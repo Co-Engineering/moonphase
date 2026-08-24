@@ -299,7 +299,14 @@ async def ensure_session(
     else:
         await apply_credential(conn, container, harness, credential, space)
 
-    spec = harness.launch_spec(resume=resume)
+    # The credential can come from either branch above; the profile's is the
+    # one a session actually runs on when there is a profile.
+    launch_credential = (
+        workspace_profile.harness_credential
+        if workspace_profile is not None
+        else credential
+    )
+    spec = harness.launch_spec(resume=resume, credential=launch_credential)
     await _write_file(
         conn,
         container,

@@ -124,7 +124,12 @@ class ClaudeCode(Harness):
     # what most people actually want. API key is the fallback for teams.
     supported_auth_modes = (HarnessAuthMode.OAUTH, HarnessAuthMode.API_KEY)
 
-    def launch_spec(self, *, resume: bool = False) -> LaunchSpec:
+    def launch_spec(
+        self, *, resume: bool = False, credential: HarnessCredential | None = None
+    ) -> LaunchSpec:
+        # Tied to one provider, so the credential says nothing about how to
+        # start it.
+        del credential
         # Launched through a wrapper (see sessions.py) so the pane survives the
         # harness exiting and drops to a shell instead of killing the window.
         #

@@ -31,7 +31,9 @@ from .ssh import SSHError
 log = logging.getLogger(__name__)
 
 # Bump when the recipe below changes in a way that should rebuild every image.
-RECIPE_VERSION = "3"
+# v4 added OpenCode and the Pydantic AI coder agent: an image built before it
+# has neither binary, and a project set to one of those would launch nothing.
+RECIPE_VERSION = "4"
 
 NODE_VERSION = "22.20.0"
 
@@ -153,9 +155,34 @@ RUN mkdir -p -m 755 /etc/apt/keyrings \\
     && apt-get update && apt-get install -y --no-install-recommends gh \\
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @anthropic-ai/claude-code@latest && npm cache clean --force
+# Every harness Moonphase can run, in one image.
+#
+# One image rather than one per agent: a project can change harness without
+# rebuilding, two sessions in the same container can run different agents, and
+# the tag stays a function of the recipe rather than of what a project happens
+# to be set to today. The cost is disk on the server, which is the cheap side of
+# that trade.
+RUN npm install -g @anthropic-ai/claude-code@latest opencode-ai@latest \
+    && npm cache clean --force
 
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+
+# The Pydantic AI coder agent.
+#
+# `clai` is the executable; `pydantic-ai-harness` is the library holding the
+# agent it runs. Installing the latter as a tool gets "No executables are
+# provided by package", because it provides none — so the tool is clai, with the
+# harness beside it, which is what `uvx --with` does in the documented one-liner.
+#
+# Both uv directories are set, and both matter. UV_TOOL_BIN_DIR places the
+# shim; UV_TOOL_DIR places the virtualenv it points into. Setting only the first
+# puts `clai` on PATH and leaves its environment under /root, so the session —
+# which runs as `dev` — finds the command and cannot execute it: "Permission
+# denied", from a binary that is plainly right there.
+RUN env UV_TOOL_BIN_DIR=/usr/local/bin UV_TOOL_DIR=/opt/uv-tools \
+    uv tool install clai --with "pydantic-ai-harness[anthropic,openai]" \
+    && chmod -R a+rX /opt/uv-tools \
+    && clai --version
 {extra_step}
 # Non-root by default, at a fixed uid so the API can chown the named volumes.
 # Some bases ship their own uid 1000 user; 1001 avoids collisions either way.

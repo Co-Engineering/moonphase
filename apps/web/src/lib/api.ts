@@ -48,7 +48,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 // --- types ------------------------------------------------------------------
 
 export type SshAuthMode = 'password_bootstrap' | 'managed_key' | 'provided_key'
-export type HarnessKind = 'claude_code' | 'opencode'
+export type HarnessKind = 'claude_code' | 'opencode' | 'pydantic_ai'
 
 /** What you grant someone. */
 export type ShareRole = 'viewer' | 'collaborator'

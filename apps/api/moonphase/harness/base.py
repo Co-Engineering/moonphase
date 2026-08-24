@@ -23,6 +23,7 @@ from typing import Any
 class HarnessKind(StrEnum):
     CLAUDE_CODE = "claude_code"
     OPENCODE = "opencode"
+    PYDANTIC_AI = "pydantic_ai"
 
 
 class HarnessAuthMode(StrEnum):
@@ -97,7 +98,9 @@ class Harness(abc.ABC):
     supported_auth_modes: tuple[HarnessAuthMode, ...]
 
     @abc.abstractmethod
-    def launch_spec(self, *, resume: bool = False) -> LaunchSpec:
+    def launch_spec(
+        self, *, resume: bool = False, credential: HarnessCredential | None = None
+    ) -> LaunchSpec:
         """Argv and environment for the interactive session.
 
         `resume` asks the harness to pick up its previous conversation rather
@@ -107,6 +110,13 @@ class Harness(abc.ABC):
         in the right directory — which is not what anyone meant.
 
         Harnesses that cannot resume should ignore it and start normally.
+
+        `credential` is passed because for some harnesses the command depends on
+        it. A model-agnostic agent has to be told which model to use, and which
+        one is possible follows from the key it was given — `clai` defaults to
+        OpenAI and takes the model only as an argument, so an Anthropic key
+        without one fails asking for an OpenAI key. Harnesses tied to a single
+        provider ignore it.
         """
 
     @abc.abstractmethod
