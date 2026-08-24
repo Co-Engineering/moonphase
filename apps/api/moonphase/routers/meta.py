@@ -8,7 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import text
 
-from .. import environments, push, queries
+from .. import environments, push, queries, updates
 from .. import harness as harness_registry
 from ..auth import Principal, current_principal
 from ..config import get_settings
@@ -103,7 +103,9 @@ async def instance_config(request: Request) -> InstanceConfigOut:
         supabase_url=origin_of(request) or settings.supabase_url,
         supabase_anon_key=settings.supabase_anon_key,
         vapid_public_key=push.public_key() or None,
-        version="0.1.0",
+        # What this build actually is, rather than a constant nobody moves.
+        # `edge` for a development build, which is the honest answer for one.
+        version=updates.running_version() or "edge",
         signup_open=signup_open,
     )
 

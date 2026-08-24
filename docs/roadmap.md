@@ -1,10 +1,13 @@
 # Roadmap
 
-!!! info "v0.1.0 is released"
-    The first release is published, with the desktop app built for Linux, macOS
-    and Windows beside it. The milestones below are *feature* milestones and
-    predate the release numbering — several marked done shipped long before
-    there was a tag on any of it.
+!!! info "v0.5.0 is released"
+    The first tagged release, numbered to match the milestones below rather than
+    starting again from 0.1 — the work through v0.5 was done long before there
+    was a tag on any of it.
+
+    The map is not exact and is not worth pretending otherwise: **v0.3** is
+    still outstanding, and parts of **v0.7** shipped early. A release number
+    says what is in the box, not which boxes are ticked.
 
 
 Ordered so that each step is useful on its own and none of them require
@@ -105,9 +108,17 @@ The schema is already here; this is screens and flows.
 
 ## v0.7 — more harnesses
 
-- [ ] OpenCode as a second `Harness` subclass
+Partly done, and out of order: the seam was drawn for a second harness long
+before this milestone came up, and using it was the only way to find out whether
+it held.
+
+- [x] OpenCode as a second `Harness` subclass
+- [x] Pydantic AI as a third, running the `pydantic-ai-harness` coder agent
+- [ ] A feed for either. Neither writes the transcript format the feed reads, so
+      their sessions show the terminal and nothing else
 - [ ] Multiple harnesses in one workspace as separate tmux sessions
-- [ ] Per-harness runtime images
+- [ ] Per-harness runtime images. One image carries all three today, which costs
+      disk on the server and saves a rebuild when a project changes harness
 
 ## Not scheduled — signed desktop builds
 
