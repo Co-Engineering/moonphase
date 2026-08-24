@@ -224,26 +224,74 @@ fi
 # What the installer actually published. It takes 80 when 80 is free and stays
 # on 8471 when something else already has it, so guessing here would be wrong
 # on exactly the machines that are already doing something.
-# Asked of Compose directly. Parsing `ps --format {{.Publishers}}` looked like
-# it would work and does not: the template renders `{0.0.0.0 80 80 tcp}`, with
-# no arrow to match on, so a pattern written for the `docker ps` format finds
-# nothing and quietly reports the fallback port on every machine.
-PUBLISHED=$(remote 'cd moonphase 2>/dev/null && docker compose port proxy 80 2>/dev/null' || true)
-case "$PUBLISHED" in
-  *:80) URL="http://$HOST" ;;
-  *) URL="http://$HOST:8471" ;;
+#
+# Read out of .env, which is where install.sh records the decision it made.
+# Asking the Docker daemon instead is the obvious approach and is wrong here:
+# on a machine that had no Docker, install.sh has just added this user to the
+# `docker` group, and a group does not apply to a session that already exists.
+# Every command here shares one multiplexed connection opened before that, so
+# `docker compose` is refused, the error goes to /dev/null, and the fallback
+# prints a port nobody can reach — on a first install, which is the one run
+# that has to work.
+#
+# .env needs no daemon, no group and no sudo, so it answers the same on every
+# run.
+ENV_FILE=$(remote 'cat moonphase/.env 2>/dev/null' || true)
+
+# >>> url-derivation — everything between these markers is pure: it reads
+# $ENV_FILE and $HOST and sets $URL and $REACHABLE. The test extracts and runs
+# it against made-up .env files, so it is checked by behaviour rather than by
+# matching words in this file.
+env_value() { printf '%s\n' "$ENV_FILE" | sed -n "s/^$1=//p" | tail -n 1; }
+
+COMPOSE_USED=$(env_value COMPOSE_FILE)
+BIND_USED=$(env_value MOONPHASE_BIND)
+PORT_USED=$(env_value MOONPHASE_PORT)
+[ -n "$PORT_USED" ] || PORT_USED=8471
+
+REACHABLE=yes
+case "$COMPOSE_USED" in
+  *docker-compose.public.yml*)
+    # 80 and 443 published on every interface; the plain port stays loopback.
+    URL="http://$HOST"
+    ;;
+  *)
+    # Only the plain port, and only on whatever it was bound to. The default is
+    # loopback, so the honest answer is that there is nothing to open remotely.
+    case "$BIND_USED" in
+      ""|127.0.0.1|localhost|::1) REACHABLE=no; URL="http://127.0.0.1:$PORT_USED" ;;
+      *) URL="http://$HOST:$PORT_USED" ;;
+    esac
+    ;;
 esac
+# <<< url-derivation
 
 printf '\n'
 bold "Moonphase is running."
 printf '\n'
-printf '  Open %s and follow the setup.\n' "$URL"
-printf '  The first account is yours, and the address and HTTPS are set there.\n'
-printf '\n'
-printf '  If it does not open:\n'
-printf '    * your provider may need port 80 opened in its firewall\n'
-printf '    * on a cloud VM that is a security group, not the machine\n'
-printf '\n'
+if [ "$REACHABLE" = "yes" ]; then
+  printf '  Open %s and follow the setup.\n' "$URL"
+  printf '  The first account is yours, and the address and HTTPS are set there.\n'
+  printf '\n'
+  printf '  If it does not open:\n'
+  printf '    * your provider may need port 80 opened in its firewall\n'
+  printf '    * on a cloud VM that is a security group, not the machine\n'
+  printf '\n'
+else
+  # Something else already had 80, so the public ports were left alone and the
+  # only published port is on the server loopback. Saying "open http://HOST:8471"
+  # here would send people to an address that cannot answer.
+  printf '  It is published on the server loopback only, because port 80 was\n'
+  printf '  already taken there. Reach it through this machine:\n'
+  printf '\n'
+  printf '    ssh -N -L %s:127.0.0.1:%s %s@%s\n' "$PORT_USED" "$PORT_USED" "$SSH_USER" "$HOST"
+  printf '\n'
+  printf '  then open %s and follow the setup.\n' "$URL"
+  printf '\n'
+  printf '  To serve it directly instead, put it behind the web server that\n'
+  printf '  already has port 80, or free that port and run this again.\n'
+  printf '\n'
+fi
 printf '  Later, from this machine:\n'
 printf '    ssh %s@%s "cd moonphase && docker compose logs -f api"\n' "$SSH_USER" "$HOST"
 printf '    Run this script again to upgrade — it keeps your data.\n'

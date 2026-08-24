@@ -506,3 +506,88 @@ def test_renaming_goes_through_the_caller_own_session() -> None:
 
     assert "user_session" in inspect.getsource(projects.rename_project)
     assert "user_session" in inspect.getsource(servers.rename_server)
+
+
+def _derive_url(env_text: str, host: str = "203.0.113.10") -> tuple[str, str]:
+    """Run the installer's own URL derivation against a given .env.
+
+    The logic lives in `scripts/install-server.sh` between two markers and
+    depends on nothing but `$ENV_FILE` and `$HOST`, so it can be run here as
+    itself rather than described. Asserting on the text of a shell script only
+    proves the words are present, which is not the same as the script working.
+    """
+    import subprocess
+
+    script = (
+        Path(__file__).resolve().parents[3] / "scripts/install-server.sh"
+    ).read_text()
+
+    body = script.split("# >>> url-derivation", 1)[1].split("# <<< url-derivation", 1)[0]
+
+    program = f'ENV_FILE="$1"\nHOST="$2"\n{body}\nprintf "%s %s" "$REACHABLE" "$URL"\n'
+    out = subprocess.run(
+        ["sh", "-c", program, "sh", env_text, host],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split(" ")
+    return out[0], out[1]
+
+
+def test_the_installer_sends_you_to_a_port_that_is_published() -> None:
+    """It told people to open `http://<host>:8471` after a first install, and
+    8471 is bound to the server's loopback — so the address it printed could
+    not answer, on the one run that has to work.
+
+    It asked the Docker daemon which port was published. On a machine that had
+    no Docker, the install had just added this user to the `docker` group, and
+    a group does not reach a session that already exists — every command shares
+    one multiplexed connection opened before that. Docker refused, the error
+    went to /dev/null, and an empty answer fell through to the fallback.
+    """
+    reachable, url = _derive_url(
+        "COMPOSE_FILE=docker-compose.yml:docker-compose.public.yml\n"
+        "MOONPHASE_BIND=127.0.0.1\n"
+        "MOONPHASE_PORT=8471\n"
+    )
+
+    # 80 and 443 are published on every interface by the public overlay; the
+    # plain port stays on loopback beside them.
+    assert (reachable, url) == ("yes", "http://203.0.113.10")
+
+
+def test_a_loopback_only_install_is_not_advertised_as_a_url() -> None:
+    """Without the public overlay the only published port is on the server's
+    loopback, so there is no address to hand out at all. Printing one anyway
+    was the same bug wearing the other branch: a confident URL that times out.
+    """
+    reachable, url = _derive_url(
+        "COMPOSE_FILE=docker-compose.yml\nMOONPHASE_BIND=127.0.0.1\nMOONPHASE_PORT=8471\n"
+    )
+
+    assert reachable == "no"
+    # Pointed at the loopback it is actually on — reached through the tunnel
+    # the installer prints — rather than at the host, which cannot serve it.
+    assert url == "http://127.0.0.1:8471"
+
+
+def test_a_deliberately_exposed_plain_port_is_advertised() -> None:
+    """Someone who bound it to every interface on purpose does have a working
+    address, and refusing to print it would be wrong in the other direction."""
+    reachable, url = _derive_url(
+        "COMPOSE_FILE=docker-compose.yml\nMOONPHASE_BIND=0.0.0.0\nMOONPHASE_PORT=9000\n"
+    )
+
+    assert (reachable, url) == ("yes", "http://203.0.113.10:9000")
+
+
+def test_the_port_is_read_without_needing_docker() -> None:
+    """The whole point of reading .env: it answers the same whether or not this
+    session can reach the Docker daemon. An unreadable .env must not silently
+    become a confident wrong URL."""
+    reachable, url = _derive_url("")
+
+    # Nothing known, so nothing claimed: no overlay recorded and no bind means
+    # loopback, which is the assumption that does not strand anybody.
+    assert reachable == "no"
+    assert url == "http://127.0.0.1:8471"
