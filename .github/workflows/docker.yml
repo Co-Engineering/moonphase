@@ -95,8 +95,13 @@ jobs:
           # A tag v0.2.1 publishes 0.2.1, 0.2 and latest, so someone can pin as
           # loosely or as tightly as they like. main publishes `edge` only —
           # `latest` should mean a release, not the last commit that built.
+          # v{{version}} as well as {{version}}, so the image tag and the
+          # release are the same string. Without it a release called v0.1.0
+          # publishes an image called 0.1.0, and MOONPHASE_VERSION=v0.1.0 —
+          # which is what somebody reads off the release page — pulls nothing.
           tags: |
             type=semver,pattern={{version}}
+            type=semver,pattern=v{{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=edge,enable={{is_default_branch}}
             type=ref,event=pr
