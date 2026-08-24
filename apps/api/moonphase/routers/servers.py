@@ -8,13 +8,14 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from .. import docker_remote, provision, queries, ssh
 from ..auth import Principal, current_principal
 from ..db import service_session, user_session
 from ..runtime import CAN_ADMINISTER, Forbidden, NotFound, load_server_target
-from ..schemas import ServerBootstrapOut, ServerCreate, ServerOut
+from ..schemas import RenameIn, ServerBootstrapOut, ServerCreate, ServerOut
 from ..ssh import HostKeyMismatch, SSHError
 
 log = logging.getLogger(__name__)
@@ -337,3 +338,52 @@ async def delete_server(
         deleted = await queries.delete_server(conn, server_id)
     if not deleted:
         raise HTTPException(status_code=403, detail="Not allowed to delete this server.")
+
+
+@router.patch("/{server_id}", response_model=ServerOut)
+async def rename_server(
+    server_id: UUID,
+    payload: RenameIn,
+    principal: Principal = Depends(current_principal),
+) -> ServerOut:
+    """Change what a server is called.
+
+    The name only. Nothing else about a server is safe to edit in place — the
+    address, the login and the key are what Moonphase authenticated against, and
+    changing one without re-bootstrapping would leave a record that no longer
+    describes the machine it points at.
+    """
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="A server needs a name.")
+    if len(name) > 64:
+        # The database caps this at 64. Truncating silently would rename
+        # it to something nobody typed; the error says the number.
+        raise HTTPException(
+            status_code=400,
+            detail="That name is too long — 64 characters at most.",
+        )
+
+    try:
+        async with user_session(principal.claims) as conn:
+            result = await conn.execute(
+                text(
+                    "update servers set name = :name "
+                    "where id = :id returning id"
+                ),
+                {"name": name, "id": str(server_id)},
+            )
+            renamed = result.first()
+            row = await queries.get_server(conn, server_id) if renamed else None
+    except IntegrityError as exc:
+        if "servers_org_id_name_key" in str(exc):
+            raise HTTPException(
+                status_code=409, detail=f"You already have a server called “{name}”."
+            ) from exc
+        raise
+
+    if row is None:
+        # No row matched, which under RLS means either it does not exist or it
+        # is not yours to rename. Which of those is not disclosed.
+        raise HTTPException(status_code=404, detail="Server not found.")
+    return _to_out(row)

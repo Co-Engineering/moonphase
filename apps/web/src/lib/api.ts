@@ -402,6 +402,12 @@ export const api = {
   bootstrapServer: (id: string) =>
     request<ServerBootstrap>(`/api/servers/${id}/bootstrap`, { method: 'POST' }),
   testServer: (id: string) => request<Server>(`/api/servers/${id}/test`, { method: 'POST' }),
+  /** The display name only — see the endpoint for why nothing else. */
+  renameServer: (id: string, name: string) =>
+    request<Server>(`/api/servers/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
   deleteServer: (id: string) =>
     request<void>(`/api/servers/${id}`, { method: 'DELETE' }),
 
@@ -414,6 +420,11 @@ export const api = {
     request<Project>(`/api/projects/${id}/start`, { method: 'POST' }),
   stopProject: (id: string) =>
     request<Project>(`/api/projects/${id}/stop`, { method: 'POST' }),
+  renameProject: (id: string, name: string) =>
+    request<Project>(`/api/projects/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
   deleteProject: (id: string, deleteVolumes = false) =>
     request<void>(`/api/projects/${id}?delete_volumes=${deleteVolumes}`, {
       method: 'DELETE',

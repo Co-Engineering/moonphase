@@ -852,3 +852,14 @@ class UpdateStateOut(BaseModel):
     status: str | None = None
     status_detail: str | None = None
     command: str = ""
+
+
+class RenameIn(BaseModel):
+    """A new display name, and nothing else.
+
+    Deliberately not a general update: a project's slug, container and volumes
+    are derived from its name when it is created and are load-bearing
+    afterwards. Renaming changes what you call it, not what it is.
+    """
+
+    name: str

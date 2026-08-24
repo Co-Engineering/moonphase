@@ -10,6 +10,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import text
 
 from .. import (
     docker_remote,
@@ -40,6 +41,7 @@ from ..runtime import (
 from ..schemas import (
     ProjectCreate,
     ProjectOut,
+    RenameIn,
     SendKeysIn,
     SessionCreateIn,
     SessionOut,
@@ -1014,3 +1016,43 @@ async def container_logs(
         timeout=60,
     )
     return {"logs": result.stdout}
+
+
+@router.patch("/{project_id}", response_model=ProjectOut)
+async def rename_project(
+    project_id: UUID,
+    payload: RenameIn,
+    principal: Principal = Depends(current_principal),
+) -> ProjectOut:
+    """Change what a project is called.
+
+    The display name only. Its slug, its container and its volumes were derived
+    from the original name and are what the running container is actually
+    called — renaming those would mean recreating it, which is a great deal to
+    do to somebody who wanted to fix a typo.
+    """
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="A project needs a name.")
+    if len(name) > 64:
+        # The database caps this at 64. Truncating silently would rename
+        # it to something nobody typed; the error says the number.
+        raise HTTPException(
+            status_code=400,
+            detail="That name is too long — 64 characters at most.",
+        )
+
+    async with user_session(principal.claims) as conn:
+        result = await conn.execute(
+            text(
+                "update projects set name = :name "
+                "where id = :id returning id"
+            ),
+            {"name": name, "id": str(project_id)},
+        )
+        renamed = result.first()
+        row = await queries.get_project(conn, project_id) if renamed else None
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return _to_out(row)

@@ -48,7 +48,7 @@ own configuration at runtime rather than having it baked into the bundle.
 | Method | Path | Purpose |
 | ------ | ---- | ------- |
 | `GET`, `POST` | `/api/servers` | List, add |
-| `GET`, `DELETE` | `/api/servers/{server_id}` | Read, remove |
+| `GET`, `PATCH`, `DELETE` | `/api/servers/{server_id}` | Read, rename, remove. `PATCH` takes the name only — the address and key are what it authenticated against |
 | `POST` | `/api/servers/{server_id}/bootstrap` | Install a key, probe or install Docker |
 | `POST` | `/api/servers/{server_id}/test` | Reconnect and re-probe |
 | `GET`, `POST` | `/api/servers/{server_id}/shares` | List, grant |
@@ -59,7 +59,7 @@ own configuration at runtime rather than having it baked into the bundle.
 | Method | Path | Purpose |
 | ------ | ---- | ------- |
 | `GET`, `POST` | `/api/projects` | List, create |
-| `GET`, `DELETE` | `/api/projects/{project_id}` | Read, remove |
+| `GET`, `PATCH`, `DELETE` | `/api/projects/{project_id}` | Read, rename, remove. `PATCH` takes the display name only; the container keeps the name it was created with |
 | `POST` | `/api/projects/{project_id}/start` | Start the container |
 | `POST` | `/api/projects/{project_id}/stop` | Stop it |
 | `GET` | `/api/projects/{project_id}/logs` | Container logs |

@@ -42,6 +42,7 @@ import { SessionWindow } from './routes/SessionWindow'
 import { openSessionWindow, sessionWindowUrl } from './lib/desktop'
 import { HostDialog } from './components/HostDialog'
 import { RowMenu } from './components/RowMenu'
+import { RenameDialog } from './components/RenameDialog'
 
 export function App() {
   const [session, setSession] = useState<AuthSession | null>(null)
@@ -169,6 +170,9 @@ function Shell({ email }: { email: string }) {
   const [showSidebar, setShowSidebar] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [showHost, setShowHost] = useState(false)
+  const [renaming, setRenaming] = useState<
+    { kind: 'server' | 'project'; id: string; name: string } | null
+  >(null)
   const [showUsage, setShowUsage] = useState(false)
   const [showSearch, setShowSearch] = useState(false)
 
@@ -325,6 +329,17 @@ function Shell({ email }: { email: string }) {
                       ]
                     : []),
                   {
+                    label: 'Rename',
+                    disabledReason:
+                      server.access === 'admin' ? undefined : 'not yours',
+                    onSelect: () =>
+                      setRenaming({
+                        kind: 'server',
+                        id: server.id,
+                        name: server.name,
+                      }),
+                  },
+                  {
                     label: 'Remove server',
                     danger: true,
                     detail:
@@ -367,6 +382,13 @@ function Shell({ email }: { email: string }) {
                     onRemove={(project) =>
                       void api.deleteProject(project.id).then(reloadAll)
                     }
+                    onRename={(item) =>
+                      setRenaming({
+                        kind: 'project',
+                        id: item.id,
+                        name: item.name,
+                      })
+                    }
                     onCloseSession={(item) =>
                       void api
                         .deleteSession(project.id, item.tmux_session)
@@ -403,6 +425,9 @@ function Shell({ email }: { email: string }) {
                     })
                   }
                   onRemove={(item) => void api.deleteProject(item.id).then(reloadAll)}
+                  onRename={(item) =>
+                    setRenaming({ kind: 'project', id: item.id, name: item.name })
+                  }
                   onCloseSession={(item) =>
                     void api
                       .deleteSession(project.id, item.tmux_session)
@@ -525,6 +550,24 @@ function Shell({ email }: { email: string }) {
 
       {showHost && <HostDialog onClose={() => setShowHost(false)} />}
 
+      {renaming && (
+        <RenameDialog
+          what={renaming.kind}
+          current={renaming.name}
+          note={
+            renaming.kind === 'project'
+              ? 'The display name only. The container and its volumes keep the name they were created with.'
+              : undefined
+          }
+          onRename={async (name) => {
+            if (renaming.kind === 'server') await api.renameServer(renaming.id, name)
+            else await api.renameProject(renaming.id, name)
+            reloadAll()
+          }}
+          onClose={() => setRenaming(null)}
+        />
+      )}
+
       {showSettings && (
         <Settings onClose={() => setShowSettings(false)} onSaved={reloadAll} />
       )}
@@ -580,6 +623,7 @@ function ProjectRow({
   subtitle,
   onShare,
   onRemove,
+  onRename,
   onCloseSession,
 }: {
   project: Project
@@ -590,6 +634,7 @@ function ProjectRow({
   subtitle?: string
   onShare?: (project: Project) => void
   onRemove?: (project: Project) => void
+  onRename?: (project: Project) => void
   onCloseSession?: (session: Session) => void
 }) {
   return (
@@ -634,6 +679,11 @@ function ProjectRow({
           ...(project.access === 'admin' && onShare
             ? [{ label: 'Share', onSelect: () => onShare(project) }]
             : []),
+          {
+            label: 'Rename',
+            disabledReason: canControl(project.access) ? undefined : 'view only',
+            onSelect: () => onRename?.(project),
+          },
           {
             label: 'Remove project',
             danger: true,
@@ -682,6 +732,15 @@ function ProjectRow({
           <RowMenu
             label={session.tmux_session}
             actions={[
+              {
+                label: 'Rename',
+                // The name is not a label: it decides the session's home
+                // directory, its git worktree and its branch. Renaming would
+                // mean moving all three inside a running container, which is a
+                // great deal of risk for a nicer word.
+                disabledReason: 'a session name is its branch',
+                onSelect: () => {},
+              },
               {
                 label: 'Close session',
                 danger: true,

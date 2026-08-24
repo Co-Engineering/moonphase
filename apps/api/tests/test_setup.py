@@ -431,3 +431,78 @@ def test_a_private_repo_without_github_says_so() -> None:
 
     source = inspect.getsource(projects._clone)
     assert "Settings → Accounts" in source
+
+
+# --- renaming ------------------------------------------------------------------
+
+
+def _update_statement(source: str) -> str:
+    """The SQL an endpoint runs, pulled out of its source.
+
+    Asserting against a whole function catches its comments, and a comment
+    explaining why a column is left alone would fail a check written to catch
+    that column being touched — which is the opposite of what it is for.
+    """
+    import re
+
+    match = re.search(r'"(update [^"]+)"', source)
+    assert match, "no update statement found"
+    return " ".join(match.group(1).split())
+
+def test_renaming_changes_the_name_and_nothing_else() -> None:
+    """A project's slug, container and volumes were derived from its name when
+    it was created, and are what the running container is actually called.
+    Renaming those would mean recreating it, which is a great deal to do to
+    somebody fixing a typo."""
+    import inspect
+
+    from moonphase.routers import projects
+
+    # The statement, not the whole function: the docstring names those columns
+    # to explain why it leaves them alone, which says nothing about the code.
+    statement = _update_statement(inspect.getsource(projects.rename_project))
+
+    assert statement.startswith("update projects set name")
+    for derived in ("slug", "container_name", "workspace_volume", "home_volume"):
+        assert derived not in statement, f"renaming must not touch {derived}"
+
+
+def test_a_server_rename_leaves_how_to_reach_it_alone() -> None:
+    """The address, the login and the key are what Moonphase authenticated
+    against. Changing one without re-bootstrapping would leave a record that no
+    longer describes the machine it points at."""
+    import inspect
+
+    from moonphase.routers import servers
+
+    statement = _update_statement(inspect.getsource(servers.rename_server))
+
+    assert statement.startswith("update servers set name")
+    for derived in ("host", "ssh_user", "port", "host_key_fingerprint"):
+        assert derived not in statement
+
+
+def test_a_name_too_long_is_refused_rather_than_cut_down() -> None:
+    """The database caps it at 64. Silently truncating would rename the thing to
+    something nobody typed."""
+    import inspect
+
+    from moonphase.routers import projects, servers
+
+    for source in (
+        inspect.getsource(projects.rename_project),
+        inspect.getsource(servers.rename_server),
+    ):
+        assert "64 characters at most" in source
+        assert "[:80]" not in source and "[:120]" not in source
+
+
+def test_renaming_goes_through_the_caller_own_session() -> None:
+    """So the row-level policies decide whether it is theirs to rename, rather
+    than the route deciding and hoping it agrees."""
+    import inspect
+
+    from moonphase.routers import projects, servers
+
+    assert "user_session" in inspect.getsource(projects.rename_project)
+    assert "user_session" in inspect.getsource(servers.rename_server)
