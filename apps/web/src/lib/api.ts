@@ -920,6 +920,23 @@ export interface InstanceSettings {
   signup_open: boolean
 }
 
+export interface UpdateState {
+  running_version: string | null
+  running_commit: string | null
+  latest_version: string | null
+  release_url: string | null
+  release_notes: string | null
+  published_at: string | null
+  /** Null means the question could not be answered — not "up to date". */
+  update_available: boolean | null
+  detail: string | null
+  /** Whether an updater is running, which decides button or command. */
+  can_apply: boolean
+  status: string | null
+  status_detail: string | null
+  command: string
+}
+
 export const instance = {
   /** Whether the caller may see any of the rest of this. */
   me: () => request<{ is_instance_admin: boolean }>('/api/instance/me'),
@@ -936,6 +953,10 @@ export const instance = {
       `/api/instance/people/${id}/admin?make_admin=${makeAdmin}`,
       { method: 'PUT' },
     ),
+  update: (force = false) =>
+    request<UpdateState>(`/api/instance/update${force ? '?force=true' : ''}`),
+  applyUpdate: () =>
+    request<UpdateState>('/api/instance/update', { method: 'POST' }),
   settings: () => request<InstanceSettings>('/api/instance/settings'),
   saveSettings: (input: InstanceSettings) =>
     request<InstanceSettings>('/api/instance/settings', {

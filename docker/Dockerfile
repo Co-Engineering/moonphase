@@ -67,6 +67,23 @@ COPY docker/migrate.sh /app/migrate.sh
 # layout inside the image is what makes that hold.
 COPY --from=web /src/apps/web/dist apps/web/dist
 
+# Which build this is.
+#
+# An instance could not previously say: the version was a string in the source
+# that nobody moved, so "am I up to date" had no answer and neither did "what is
+# running on that server". Baked at build time and passed through by the
+# workflow, so the answer comes from the artefact rather than from a promise
+# somebody made in a file.
+ARG MOONPHASE_COMMIT=unknown
+ARG MOONPHASE_RELEASE=edge
+ARG MOONPHASE_BUILT_AT=unknown
+ENV MOONPHASE_COMMIT=$MOONPHASE_COMMIT \
+    MOONPHASE_RELEASE=$MOONPHASE_RELEASE \
+    MOONPHASE_BUILT_AT=$MOONPHASE_BUILT_AT
+
+LABEL org.opencontainers.image.revision=$MOONPHASE_COMMIT
+LABEL org.opencontainers.image.version=$MOONPHASE_RELEASE
+
 USER moonphase
 
 ENV PYTHONUNBUFFERED=1 \

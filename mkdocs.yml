@@ -118,6 +118,7 @@ nav:
       - getting-started/first-project.md
       - getting-started/tour.md
   - Guides:
+      - guides/updating.md
       - guides/people.md
       - guides/github.md
       - guides/from-your-phone.md

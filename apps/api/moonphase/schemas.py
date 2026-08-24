@@ -830,3 +830,25 @@ class InstanceSettingsOut(BaseModel):
 class InstanceSettingsIn(BaseModel):
     public_url: str | None = None
     signup_open: bool = False
+
+
+class UpdateStateOut(BaseModel):
+    """Whether a newer Moonphase has been released than the one running."""
+
+    running_version: str | None = None
+    running_commit: str | None = None
+    latest_version: str | None = None
+    release_url: str | None = None
+    release_notes: str | None = None
+    published_at: str | None = None
+    # Null when the question could not be answered — GitHub unreachable, no
+    # releases yet, or a development build, none of which mean "up to date".
+    update_available: bool | None = None
+    detail: str | None = None
+    # Whether an updater is running, which decides between a button and a
+    # command to copy.
+    can_apply: bool = False
+    # What the updater is doing or last did: running, ok, failed.
+    status: str | None = None
+    status_detail: str | None = None
+    command: str = ""

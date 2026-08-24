@@ -113,6 +113,16 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # So a running instance can say what it is, and compare itself with
+          # what has been published since.
+          # MOONPHASE_RELEASE is the tag when this is a tagged build and
+          # `edge` otherwise, which is what lets an instance tell whether it is
+          # running a release at all. Only a release can be compared with the
+          # latest one; a build from main is neither ahead of nor behind it.
+          build-args: |
+            MOONPHASE_COMMIT=${{ github.sha }}
+            MOONPHASE_RELEASE=${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'edge' }}
+            MOONPHASE_BUILT_AT=${{ github.event.repository.updated_at }}
           # Registry cache keeps a rebuild from redoing the pnpm install and
           # the pip install every time, which is most of the build.
           cache-from: type=gha

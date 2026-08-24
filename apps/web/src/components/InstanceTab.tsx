@@ -3,6 +3,7 @@ import { instance, type InstanceSettings, type Person } from '../lib/api'
 import * as api from '../lib/api'
 import { SignInMethods, draftFrom, type Draft } from './SignInMethods'
 import { copyText } from '../lib/clipboard'
+import { UpdatePanel } from './UpdatePanel'
 
 /**
  * The instance itself: its address, who may sign in, and who has an account.
@@ -122,6 +123,8 @@ export function InstanceTab({
           </button>
         </div>
       </div>
+
+      <UpdatePanel busy={busy} />
 
       <div className="card inner">
         <h3>Ways to sign in</h3>

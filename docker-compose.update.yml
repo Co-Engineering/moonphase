@@ -1,0 +1,44 @@
+# One-click updates, opt in.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.update.yml up -d
+#
+# Or add it to COMPOSE_FILE in .env so plain `docker compose` keeps using it:
+#
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.public.yml:docker-compose.update.yml
+#
+# Applying an update means `docker compose pull && up -d` on the host, which
+# needs the host's Docker daemon. The API does not get it: it is the
+# internet-facing component, and a container that can reach the Docker socket
+# can start a privileged one and own the machine. So a container that does
+# nothing else gets it instead, and only if you ask for it.
+#
+# It publishes no port. The only way to ask it for anything is to be a container
+# holding the volume below, and the only thing it can be asked is "update" —
+# there is no command in the request and none is read out of it.
+#
+# Without this file everything works exactly as before: the settings screen says
+# whether a newer release exists and gives you the command to run yourself.
+
+services:
+  updater:
+    image: docker:28-cli
+    restart: unless-stopped
+    entrypoint: ["sh", "/updater.sh"]
+    environment:
+      MOONPHASE_PROJECT_DIR: /project
+    volumes:
+      # The host's daemon. This is the whole reason the service is separate.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # The compose project, read-only: it needs the files to know what to
+      # bring up, and no reason at all to change them.
+      - .:/project:ro
+      - ./docker/updater.sh:/updater.sh:ro
+      - update-requests:/updates
+    # No ports, and no need for any.
+
+  api:
+    volumes:
+      - update-requests:/updates
+
+volumes:
+  update-requests:

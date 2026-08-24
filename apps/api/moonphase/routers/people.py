@@ -23,8 +23,10 @@ told to deal with the work first.
 from __future__ import annotations
 
 import logging
+import os
 import secrets
 import time
+from pathlib import Path
 from uuid import UUID
 
 import httpx
@@ -32,7 +34,7 @@ import jwt
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import text
 
-from .. import authconfig
+from .. import authconfig, updates
 from ..auth import Principal, current_principal
 from ..config import get_settings
 from ..db import service_session, user_session
@@ -42,6 +44,7 @@ from ..schemas import (
     PersonInviteIn,
     PersonInviteOut,
     PersonOut,
+    UpdateStateOut,
 )
 
 log = logging.getLogger(__name__)
@@ -484,3 +487,97 @@ async def write_settings(
         public_url=row.public_url, signup_open=bool(row.signup_open)
     )
 
+
+# Where the updater, if one is running, reads requests and writes what happened.
+# Its presence is how the API knows whether one-click updates are available:
+# the volume is mounted by the opt-in compose file and by nothing else.
+UPDATE_DIR = Path(os.environ.get("MOONPHASE_UPDATE_DIR", "/updates"))
+
+
+def _updater_present() -> bool:
+    return UPDATE_DIR.is_dir()
+
+
+def _updater_status() -> tuple[str | None, str | None]:
+    """(state, detail) from the updater's last run, if it has had one."""
+    try:
+        raw = (UPDATE_DIR / "status").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None, None
+    state, _, detail = raw.partition("|")
+    return state.strip() or None, detail.strip() or None
+
+
+def _describe(state: updates.UpdateState) -> UpdateStateOut:
+    status, status_detail = _updater_status()
+    return UpdateStateOut(
+        running_version=state.running_version,
+        running_commit=state.running_commit,
+        latest_version=state.latest_version,
+        release_url=state.release_url,
+        release_notes=state.release_notes,
+        published_at=state.published_at,
+        update_available=state.update_available,
+        detail=state.detail,
+        can_apply=_updater_present(),
+        status=status,
+        status_detail=status_detail,
+        # Given rather than described, because the alternative is somebody
+        # typing a half-remembered version of it.
+        command="cd moonphase && docker compose pull && docker compose up -d",
+    )
+
+
+@router.get("/update", response_model=UpdateStateOut)
+async def update_state(
+    force: bool = False, principal: Principal = Depends(current_principal)
+) -> UpdateStateOut:
+    """Whether a newer release exists than the one running.
+
+    Administrators only: which build is running is a small thing to know about
+    somebody's server, and no business of everyone with an account on it.
+    """
+    await _require_admin(principal)
+    return _describe(await updates.check(force=force))
+
+
+@router.post("/update", response_model=UpdateStateOut)
+async def apply_update(principal: Principal = Depends(current_principal)) -> UpdateStateOut:
+    """Ask the updater to pull and restart.
+
+    Writes a nonce into the shared volume and returns immediately. It cannot
+    wait for the result: applying an update recreates this container, so the
+    request that started it does not survive to answer. The client polls the
+    status the updater leaves behind, which outlives both of them.
+    """
+    await _require_admin(principal)
+
+    if not _updater_present():
+        raise HTTPException(
+            status_code=409,
+            detail="This instance has no updater. Add docker-compose.update.yml "
+            "to turn on one-click updates, or run the command yourself.",
+        )
+
+    state = await updates.check()
+    if state.update_available is not True:
+        raise HTTPException(
+            status_code=409,
+            detail="There is no newer release to update to.",
+        )
+
+    try:
+        # The contents are a nonce and nothing reads them: the updater's only
+        # question is whether the file changed. Nothing here can ask it to run
+        # anything of the caller's choosing, which is the point.
+        (UPDATE_DIR / "request").write_text(
+            f"{time.time()}-{secrets.token_hex(8)}\n", encoding="utf-8"
+        )
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Could not reach the updater: {exc}"
+        ) from exc
+
+    log.info("update requested by %s", principal.user_id)
+    updates.forget()
+    return _describe(state)
