@@ -1563,7 +1563,8 @@ button.linkish:hover:not(:disabled) {
 
    The trigger is only visible on hover or focus: three of these on every row of
    a full sidebar is noise, and the row's own job is navigation. */
-.tree-server,
+.tree-server-row,
+.tree-project-row,
 .tree-session-row {
   position: relative;
 }
@@ -1583,11 +1584,26 @@ button.linkish:hover:not(:disabled) {
   color: var(--text-dim);
 }
 
-.tree-server:hover .row-menu-open,
-.tree-session-row:hover .row-menu-open,
+/* The row you are actually on, and only that one. Written as direct children
+   because a descendant selector on the server block matched every menu inside
+   it — hovering one project revealed the server's menu and every sibling
+   project's at once, which is the noise this was meant to avoid. */
+.tree-server-row:hover > .row-menu > .row-menu-open,
+.tree-project-row:hover > .row-menu > .row-menu-open,
+.tree-session-row:hover > .row-menu > .row-menu-open,
 .row-menu-open:focus-visible,
 .row-menu-open[aria-expanded='true'] {
   opacity: 1;
+}
+
+/* A touch screen has no hover, so a control that appears on hover never
+   appears at all. Moonphase is meant to be usable from a phone, and on one
+   these were invisible and — being only transparent, not gone — still took
+   the tap. Show them there instead. */
+@media (hover: none) {
+  .row-menu-open {
+    opacity: 1;
+  }
 }
 
 .row-menu-open:hover:not(:disabled) {
@@ -1596,9 +1612,9 @@ button.linkish:hover:not(:disabled) {
 }
 
 .row-menu-items {
-  position: absolute;
-  right: 0;
-  top: 100%;
+  /* Against the viewport, not the row: the sidebar scrolls, and a scrolling
+     box clips what leaves it. The coordinates are set when the menu opens. */
+  position: fixed;
   z-index: 40;
   min-width: 210px;
   display: flex;

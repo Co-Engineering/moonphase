@@ -295,66 +295,70 @@ function Shell({ email }: { email: string }) {
 
           {servers.data?.map((server) => (
             <div className="tree-server" key={server.id}>
-              <button
-                className={`tree-row status-${server.status}${
-                  activeServer?.id === server.id ? ' active' : ''
-                }`}
-                onClick={() => {
-                  setSelected({ kind: 'server', id: server.id })
-                  setShowSidebar(false)
-                }}
-              >
-                <span className="dot" />
-                <span className="name">{server.name}</span>
-                {server.shared && (
-                  <span className="shared-tag" title="Shared with you">
-                    shared
-                  </span>
-                )}
-              </button>
-              <RowMenu
-                label={server.name}
-                actions={[
-                  ...(server.access === 'admin'
-                    ? [
-                        {
-                          label: 'Share',
-                          onSelect: () =>
-                            setShareTarget({
-                              kind: 'servers',
-                              id: server.id,
-                              name: server.name,
-                            }),
-                        },
-                      ]
-                    : []),
-                  {
-                    label: 'Rename',
-                    disabledReason:
-                      server.access === 'admin' ? undefined : 'not yours',
-                    onSelect: () =>
-                      setRenaming({
-                        kind: 'server',
-                        id: server.id,
-                        name: server.name,
-                      }),
-                  },
-                  {
-                    label: 'Remove server',
-                    danger: true,
-                    detail:
-                      'Deletes its projects from Moonphase and revokes the key. ' +
-                      'Volumes on the machine are left alone.',
-                    disabledReason:
-                      server.access === 'admin' ? undefined : 'not yours',
-                    onSelect: () =>
-                      void api
-                        .deleteServer(server.id)
-                        .then(reloadAll)
-                        .catch(() => reloadAll()),
-                  },
-                ]}
-              />
+              {/* The server's own row, so hovering it reveals its menu and
+                  not every menu in the block underneath it. */}
+              <div className="tree-server-row">
+                <button
+                  className={`tree-row status-${server.status}${
+                    activeServer?.id === server.id ? ' active' : ''
+                  }`}
+                  onClick={() => {
+                    setSelected({ kind: 'server', id: server.id })
+                    setShowSidebar(false)
+                  }}
+                >
+                  <span className="dot" />
+                  <span className="name">{server.name}</span>
+                  {server.shared && (
+                    <span className="shared-tag" title="Shared with you">
+                      shared
+                    </span>
+                  )}
+                </button>
+                <RowMenu
+                  label={server.name}
+                  actions={[
+                    ...(server.access === 'admin'
+                      ? [
+                          {
+                            label: 'Share',
+                            onSelect: () =>
+                              setShareTarget({
+                                kind: 'servers',
+                                id: server.id,
+                                name: server.name,
+                              }),
+                          },
+                        ]
+                      : []),
+                    {
+                      label: 'Rename',
+                      disabledReason:
+                        server.access === 'admin' ? undefined : 'not yours',
+                      onSelect: () =>
+                        setRenaming({
+                          kind: 'server',
+                          id: server.id,
+                          name: server.name,
+                        }),
+                    },
+                    {
+                      label: 'Remove server',
+                      danger: true,
+                      detail:
+                        'Deletes its projects from Moonphase and revokes the key. ' +
+                        'Volumes on the machine are left alone.',
+                      disabledReason:
+                        server.access === 'admin' ? undefined : 'not yours',
+                      onSelect: () =>
+                        void api
+                          .deleteServer(server.id)
+                          .then(reloadAll)
+                          .catch(() => reloadAll()),
+                    },
+                  ]}
+                />
+              </div>
 
               {grouped
                 .filter((p) => p.server_id === server.id)
@@ -639,62 +643,69 @@ function ProjectRow({
 }) {
   return (
     <>
-      <button
-        // One class, one meaning. It used to carry both `status-*` and
-        // `activity-*`, which style the same dot with different vocabularies —
-        // whichever rule came later in the stylesheet won, so a container
-        // mid-build showed its session's colour rather than its own.
-        className={`tree-row tree-project ${
-          project.status === 'running'
-            ? `activity-${liveActivity(project)}`
-            : `status-${project.status}`
-        }${active && !activeSession ? ' active' : ''}`}
-        onClick={() => onSelect(project.id)}
-        title={project.activity_detail ?? subtitle}
-      >
-        <span className="dot" />
-        <span className="name">
-          {project.name}
-          {subtitle && <span className="tree-sub">{subtitle}</span>}
-        </span>
-        {project.access === 'read' && (
-          <span className="shared-tag" title="View only">
-            view
+      {/* The row and its menu together, so the menu is positioned
+          against this row rather than against the server block it sits
+          in — where every project's menu landed on the same few pixels,
+          stacked on the server's own. Sessions have always been wrapped
+          like this; projects were the one kind that was not. */}
+      <div className="tree-project-row">
+        <button
+          // One class, one meaning. It used to carry both `status-*` and
+          // `activity-*`, which style the same dot with different vocabularies —
+          // whichever rule came later in the stylesheet won, so a container
+          // mid-build showed its session's colour rather than its own.
+          className={`tree-row tree-project ${
+            project.status === 'running'
+              ? `activity-${liveActivity(project)}`
+              : `status-${project.status}`
+          }${active && !activeSession ? ' active' : ''}`}
+          onClick={() => onSelect(project.id)}
+          title={project.activity_detail ?? subtitle}
+        >
+          <span className="dot" />
+          <span className="name">
+            {project.name}
+            {subtitle && <span className="tree-sub">{subtitle}</span>}
           </span>
-        )}
-        {project.access === 'host' && (
-          <span className="shared-tag" title="Runs on your server; not yours">
-            guest
-          </span>
-        )}
-        {project.status === 'running' && liveActivity(project) === 'awaiting_input' && (
-          <span className="needs-you" title="Waiting for you">
-            ●
-          </span>
-        )}
-      </button>
-      <RowMenu
-        label={project.name}
-        actions={[
-          ...(project.access === 'admin' && onShare
-            ? [{ label: 'Share', onSelect: () => onShare(project) }]
-            : []),
-          {
-            label: 'Rename',
-            disabledReason: canControl(project.access) ? undefined : 'view only',
-            onSelect: () => onRename?.(project),
-          },
-          {
-            label: 'Remove project',
-            danger: true,
-            detail:
-              'Stops the container and removes the project. The volumes, and ' +
-              'so the work in them, are kept.',
-            disabledReason: canControl(project.access) ? undefined : 'view only',
-            onSelect: () => onRemove?.(project),
-          },
-        ]}
-      />
+          {project.access === 'read' && (
+            <span className="shared-tag" title="View only">
+              view
+            </span>
+          )}
+          {project.access === 'host' && (
+            <span className="shared-tag" title="Runs on your server; not yours">
+              guest
+            </span>
+          )}
+          {project.status === 'running' && liveActivity(project) === 'awaiting_input' && (
+            <span className="needs-you" title="Waiting for you">
+              ●
+            </span>
+          )}
+        </button>
+        <RowMenu
+          label={project.name}
+          actions={[
+            ...(project.access === 'admin' && onShare
+              ? [{ label: 'Share', onSelect: () => onShare(project) }]
+              : []),
+            {
+              label: 'Rename',
+              disabledReason: canControl(project.access) ? undefined : 'view only',
+              onSelect: () => onRename?.(project),
+            },
+            {
+              label: 'Remove project',
+              danger: true,
+              detail:
+                'Stops the container and removes the project. The volumes, and ' +
+                'so the work in them, are kept.',
+              disabledReason: canControl(project.access) ? undefined : 'view only',
+              onSelect: () => onRemove?.(project),
+            },
+          ]}
+        />
+      </div>
 
       {/* Sessions belong here rather than in a tab strip: a session is the
           thing you are actually looking at, so it should be navigable in the
