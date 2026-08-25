@@ -687,8 +687,8 @@ def test_a_successful_handoff_clears_an_earlier_failure() -> None:
     which is how people learn to ignore the warnings that matter."""
     import tempfile
 
-    from moonphase.routers import setup as setup_router
     import moonphase.authconfig as authconfig
+    from moonphase.routers import setup as setup_router
 
     original = setup_router._handoff_error
     was = authconfig.CONFIG_PATH
