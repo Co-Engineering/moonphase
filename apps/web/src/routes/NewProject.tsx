@@ -48,6 +48,10 @@ export function NewProject({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState<string | null>(null)
+  // The project this form already made, when provisioning failed on it. The
+  // row exists from the moment the request returns, so a second attempt from
+  // the same open form has to replace it rather than make another.
+  const [failed, setFailed] = useState<string | null>(null)
 
   /**
    * Watch the container get built.
@@ -80,6 +84,21 @@ export function NewProject({
     setError(null)
     setProgress(null)
     try {
+      // Clear away the attempt that failed before making another. Creating a
+      // project writes the row first and provisions afterwards, so every press
+      // of this button had been leaving a dead project behind — four presses,
+      // four of them in the sidebar, none of which could ever start.
+      if (failed) {
+        setProgress('Clearing away the attempt that failed…')
+        try {
+          await api.deleteProject(failed, true)
+        } catch {
+          // Already gone, or never got far enough to exist. Either way there
+          // is nothing to clear and no reason to stop.
+        }
+        setFailed(null)
+      }
+
       const created = await api.createProject({
         server_id: serverId,
         name,
@@ -98,6 +117,8 @@ export function NewProject({
         setError(project.status_detail ?? 'Provisioning failed.')
         setProgress(null)
         setBusy(false)
+        // Remembered so the next attempt replaces it.
+        setFailed(project.id)
         return
       }
       onCreated(project.id)
@@ -230,7 +251,11 @@ export function NewProject({
 
           <div className="actions">
             <button className="primary" type="submit" disabled={busy}>
-              {busy ? 'Provisioning…' : 'Create project'}
+              {busy
+                ? 'Provisioning…'
+                : failed
+                  ? 'Try again'
+                  : 'Create project'}
             </button>
             <div className="spacer" />
             <button type="button" onClick={onClose}>
