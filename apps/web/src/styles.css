@@ -1672,11 +1672,10 @@ button.linkish:hover:not(:disabled) {
 }
 
 .repo-picker-list {
-  position: absolute;
+  /* Against the viewport, not the field: the dialog scrolls, and a scrolling
+     box clips what leaves it. Coordinates are set when the list opens. */
+  position: fixed;
   z-index: 40;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
   max-height: 240px;
   overflow-y: auto;
   display: flex;
