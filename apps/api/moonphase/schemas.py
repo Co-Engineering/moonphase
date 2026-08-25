@@ -268,7 +268,13 @@ class SessionCreateIn(BaseModel):
     # already on disk from an earlier session of the same name is resumed as
     # it is, not rebased onto this. Left out, it starts from whatever
     # `/workspace` itself is on, same as before this existed.
-    branch: str | None = Field(default=None, max_length=255)
+    # Constrained rather than merely length-capped: this value reaches a git
+    # command line, where an argument beginning with `-` is read as an option
+    # no matter how it is quoted, and `--upload-pack=` runs a command. Must
+    # begin with a letter or digit for that reason.
+    branch: str | None = Field(
+        default=None, max_length=255, pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+    )
 
 
 class TranscriptEventOut(BaseModel):

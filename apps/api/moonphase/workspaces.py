@@ -17,6 +17,7 @@ better default anyway, and it costs an empty commit.
 from __future__ import annotations
 
 import logging
+import re
 import shlex
 
 import asyncssh
@@ -38,6 +39,30 @@ SESSIONS_ROOT = "/home/dev/sessions"
 # branch the repository is already on, and so `git branch` makes it obvious
 # which branches Moonphase created.
 BRANCH_PREFIX = "moonphase/"
+
+# What a branch name is allowed to be before it reaches a `git` command line.
+#
+# Shell-quoting is not enough on its own. `git fetch origin <refspec>` parses
+# an argument beginning with `-` as an option however carefully it is quoted,
+# and `--upload-pack=<command>` runs that command — so a branch name chosen by
+# whoever starts a session was arbitrary code in the project's container. This
+# is the check that closes that, and it is deliberately narrower than git's own
+# rules: the names it rejects are ones nobody has.
+_SAFE_BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$")
+
+
+def is_safe_branch(name: str) -> bool:
+    """Whether `name` may be passed to git as a branch.
+
+    Must start with a letter or digit — which is what keeps an option out of a
+    refspec position — and git's own rules bar the rest: no `..`, no trailing
+    `/` or `.lock`, no component beginning with a dot.
+    """
+    if not _SAFE_BRANCH.match(name):
+        return False
+    if ".." in name or name.endswith("/") or name.endswith(".lock"):
+        return False
+    return not any(part.startswith(".") or part == "" for part in name.split("/"))
 
 
 def workdir_for(session: str) -> str:
@@ -174,6 +199,10 @@ async def ensure_worktree(
 
     start_clause = ""
     if start_point:
+        # Checked here as well as at the edge: this is the function that builds
+        # the command line, so this is where the guarantee has to hold.
+        if not is_safe_branch(start_point):
+            raise SSHError(f"{start_point!r} is not a usable branch name.")
         quoted_start = shlex.quote(start_point)
         start_clause = f"""
   if ! git show-ref --verify --quiet refs/heads/{quoted_start} && \\
