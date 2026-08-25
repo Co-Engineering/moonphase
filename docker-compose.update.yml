@@ -40,5 +40,13 @@ services:
     volumes:
       - update-requests:/updates
 
+  # The API asks for an update by writing a file here, and it does not run as
+  # root — so this volume needs the same ownership fix as the others. Docker
+  # creates a mount point as root, which made "Update" fail with "could not
+  # reach the updater" on an instance where everything was configured right.
+  prepare-volumes:
+    volumes:
+      - update-requests:/updates
+
 volumes:
   update-requests:

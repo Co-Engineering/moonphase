@@ -103,7 +103,13 @@ services:
       - -c
       # -R because the directory is not the only thing that can be
       # root-owned: anything already written into it needs the same fix.
-      - chown -R moonphase:moonphase /config /home/moonphase/.moonphase
+      #
+      # /updates only exists when docker-compose.update.yml is in play, and
+      # that file adds the mount here too. Guarded rather than assumed, so the
+      # same command is correct with and without it.
+      - >
+        chown -R moonphase:moonphase /config /home/moonphase/.moonphase;
+        [ -d /updates ] && chown -R moonphase:moonphase /updates || true
     volumes:
       - auth-config:/config
       - api-state:/home/moonphase/.moonphase

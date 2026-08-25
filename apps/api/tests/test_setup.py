@@ -811,3 +811,36 @@ def _statements_from_set_auth_secrets(secrets: dict[str, str | None]) -> list[st
         queries.set_auth_secrets_privileged(Recorder(), secrets=secrets)  # type: ignore[arg-type]
     )
     return recorded
+
+
+def test_the_update_volume_is_repaired_too() -> None:
+    """Turning the updater on added a third volume with the same fault.
+
+    The API asks for an update by writing a file into /updates, and it does not
+    run as root — so a mount point Docker created as root made "Update" fail
+    with "could not reach the updater" on an instance configured correctly in
+    every other way. Unlike the auth configuration this one is at least loud,
+    but it is the same bug and needs the same repair.
+
+    /updates only exists when the update overlay is in play, so the base
+    command guards on the directory rather than assuming it.
+    """
+    import yaml
+
+    root = Path(__file__).resolve().parents[3]
+    base = yaml.safe_load((root / "docker-compose.yml").read_text())
+    overlay = yaml.safe_load((root / "docker-compose.update.yml").read_text())
+
+    command = " ".join(base["services"]["prepare-volumes"]["entrypoint"])
+    assert "[ -d /updates ]" in command, "must tolerate the overlay being absent"
+    assert "chown -R moonphase:moonphase /updates" in command
+
+    # And the overlay has to hand it the volume, or there is nothing to fix.
+    mounted = {
+        entry.split(":")[0]
+        for entry in overlay["services"]["prepare-volumes"]["volumes"]
+    }
+    assert "update-requests" in mounted
+
+    # The same volume the API writes its request into.
+    assert "update-requests:/updates" in overlay["services"]["api"]["volumes"]
