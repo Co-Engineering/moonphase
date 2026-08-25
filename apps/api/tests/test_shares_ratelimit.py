@@ -102,8 +102,8 @@ async def test_a_burst_of_invitations_is_refused_past_the_limit(owner, monkeypat
 
 
 async def test_a_caller_with_no_admin_access_never_reaches_the_limiter(owner, monkeypatch) -> None:
-    """A 403 for lack of access must not consume the shared rate budget —
-    only callers who can actually resolve an email get metered."""
+    """Being refused for lack of access must not consume the shared rate
+    budget — only callers who can actually resolve an email get metered."""
     principal, server_id = owner
     limiter = RateLimiter(max_calls=1, window_seconds=60)
     monkeypatch.setattr(shares, "_CREATE_RATE_LIMITER", limiter)
@@ -121,7 +121,12 @@ async def test_a_caller_with_no_admin_access_never_reaches_the_limiter(owner, mo
         with pytest.raises(HTTPException) as caught:
             target = f"{uuid.uuid4().hex[:8]}@example.test"
             await shares._create("server", server_id, ShareIn(email=target), stranger)
-        assert caught.value.status_code == 403
+        # 404, not 403: row-level security hides a server this account cannot
+        # see, so there is nothing to be forbidden from. That is the stronger
+        # answer of the two — 403 would confirm the server exists to someone
+        # who is not allowed to know that. 403 is for a caller who can see it
+        # and is not its owner.
+        assert caught.value.status_code == 404
 
         # The budget is still untouched: the legitimate owner can still invite.
         target = f"{uuid.uuid4().hex[:8]}@example.test"
