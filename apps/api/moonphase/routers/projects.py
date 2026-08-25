@@ -528,21 +528,44 @@ async def stop_project(
 # one container neither authenticate as each other nor overwrite each other.
 
 
-def _session_name_for(principal: Principal, taken: set[str]) -> str:
+def _session_name_for(
+    principal: Principal, taken: set[str], also_avoid: set[str] = frozenset()
+) -> str:
     """A default session name derived from who is asking.
 
     Names used to be incidental ("moonphase"); now they identify a person in a
     list other people also appear in, and they end up in a branch name. The
     local part of the email is the closest thing to a handle we have without
     asking for one.
+
+    `also_avoid` is for a branch left over from a session of the same name
+    that was closed earlier: the name is deterministic, so without dodging it
+    too, every session opened without typing a name would keep resuming
+    someone's very first one instead of starting clean. `taken` alone — the
+    names in use right now — would not catch that, because closing a session
+    frees its name for reuse on purpose.
     """
     base = sessions.sanitise_name((principal.email or "session").split("@")[0])
-    if base not in taken:
+    blocked = taken | also_avoid
+    if base not in blocked:
         return base
     suffix = 2
-    while f"{base}-{suffix}" in taken:
+    while f"{base}-{suffix}" in blocked:
         suffix += 1
     return f"{base}-{suffix}"
+
+
+async def _start_container(
+    ctx: runtime.ProjectContext,
+) -> Any:
+    """Get the project's container running, and its SSH connection. Returns conn_ssh."""
+    conn_ssh = await ssh.pool.get(ctx.target)
+    container = await docker_remote.inspect(conn_ssh, ctx.container)
+    if container is None:
+        raise HTTPException(status_code=409, detail="The project container is gone.")
+    if container.state != "running":
+        await docker_remote.start(conn_ssh, ctx.container)
+    return conn_ssh
 
 
 async def _prepare_space(
@@ -550,24 +573,29 @@ async def _prepare_space(
     ctx: runtime.ProjectContext,
     name: str,
     profile: Any,
+    *,
+    branch: str | None = None,
+    conn_ssh: Any = None,
 ) -> tuple[Any, str, str]:
-    """Give a session somewhere private to live. Returns (space, workdir, branch)."""
-    conn_ssh = await ssh.pool.get(ctx.target)
+    """Give a session somewhere private to live. Returns (space, workdir, branch).
 
-    container = await docker_remote.inspect(conn_ssh, ctx.container)
-    if container is None:
-        raise HTTPException(status_code=409, detail="The project container is gone.")
-    if container.state != "running":
-        await docker_remote.start(conn_ssh, ctx.container)
+    `branch` is where a brand-new session's worktree should start from; it is
+    ignored if `name` already has a branch on disk, since resuming that is the
+    point. `conn_ssh` lets a caller that already started the container reuse
+    the connection rather than fetching it again.
+    """
+    conn_ssh = conn_ssh or await _start_container(ctx)
 
-    workdir, branch = await workspaces.ensure_worktree(
+    workdir, resolved_branch = await workspaces.ensure_worktree(
         conn_ssh,
         ctx.container,
         name,
         author_name=profile.git_user_name or (principal.email or "Moonphase"),
         author_email=profile.git_user_email or (principal.email or "moonphase@localhost"),
+        start_point=branch,
+        token=profile.vcs_credential.token if profile.vcs_credential else None,
     )
-    return sessions.space_for(name, workdir), workdir, branch
+    return sessions.space_for(name, workdir), workdir, resolved_branch
 
 
 async def _profile_or_409(
@@ -587,6 +615,31 @@ async def _profile_or_409(
             ),
         )
     return profile
+
+
+@router.get("/{project_id}/branches", response_model=list[str])
+async def list_branches(
+    project_id: UUID, principal: Principal = Depends(current_principal)
+) -> list[str]:
+    """Branches worth offering as a new session's starting point.
+
+    Same access as creating a session: picking where a session starts from is
+    part of starting it.
+    """
+    try:
+        ctx = await runtime.load_project_context(principal.claims, project_id)
+    except NotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    profile = await runtime.load_session_profile(
+        principal.claims, ctx.project, ctx.harness
+    )
+    conn_ssh = await _start_container(ctx)
+    return await workspaces.list_branches(
+        conn_ssh,
+        ctx.container,
+        token=profile.vcs_credential.token if profile.vcs_credential else None,
+    )
 
 
 @router.get("/{project_id}/sessions", response_model=list[SessionOut])
@@ -663,18 +716,28 @@ async def create_session(
         existing = await queries.get_sessions(conn, project_id)
     taken = {str(row["tmux_session"]) for row in existing}
 
-    requested = payload.name if payload and payload.name else None
-    name = sessions.sanitise_name(requested) if requested else _session_name_for(
-        principal, taken
-    )
-    if name in taken:
-        raise HTTPException(
-            status_code=409, detail=f"This project already has a session called {name!r}."
-        )
-
     profile = await _profile_or_409(principal, ctx)
-    space, workdir, branch = await _prepare_space(principal, ctx, name, profile)
-    conn_ssh = await ssh.pool.get(ctx.target)
+    conn_ssh = await _start_container(ctx)
+
+    requested = payload.name if payload and payload.name else None
+    if requested:
+        name = sessions.sanitise_name(requested)
+        if name in taken:
+            raise HTTPException(
+                status_code=409,
+                detail=f"This project already has a session called {name!r}.",
+            )
+    else:
+        # No name given: pick one that is not just unused right now but has no
+        # leftover branch either, so "New session" reliably starts clean
+        # instead of quietly resuming whoever's session this name last was.
+        also_avoid = await workspaces.existing_branch_names(conn_ssh, ctx.container)
+        name = _session_name_for(principal, taken, also_avoid)
+
+    requested_branch = payload.branch if payload and payload.branch else None
+    space, workdir, branch = await _prepare_space(
+        principal, ctx, name, profile, branch=requested_branch, conn_ssh=conn_ssh
+    )
 
     try:
         await sessions.ensure_session(
@@ -730,6 +793,8 @@ async def start_session(
     taken = {str(row["tmux_session"]) for row in rows}
     mine = [row for row in rows if row.get("is_mine")]
 
+    profile = await _profile_or_409(principal, ctx)
+
     if options.session:
         name = sessions.sanitise_name(options.session)
         owned = next((r for r in rows if str(r["tmux_session"]) == name), None)
@@ -738,12 +803,17 @@ async def start_session(
                 f"Session {name!r} belongs to someone else. You can watch it, "
                 "but starting or restarting it would run it on their account."
             )
+        conn_ssh = await _start_container(ctx)
     elif mine:
         name = str(mine[0]["tmux_session"])
+        conn_ssh = await _start_container(ctx)
     else:
-        name = _session_name_for(principal, taken)
-
-    profile = await _profile_or_409(principal, ctx)
+        # First attach, no name given: same deal as an unnamed `create_session`
+        # — dodge a branch left over from a same-named session closed earlier,
+        # so this does not silently resume someone's very first session.
+        conn_ssh = await _start_container(ctx)
+        also_avoid = await workspaces.existing_branch_names(conn_ssh, ctx.container)
+        name = _session_name_for(principal, taken, also_avoid)
 
     # A session's home and checkout are fixed when it is created. Moving a
     # running one would point it at a directory its harness has never seen and
@@ -757,10 +827,10 @@ async def start_session(
             home=str(existing["home_dir"]), workdir=str(existing["workdir"])
         )
         workdir, branch = space.workdir, existing.get("branch")
-        conn_ssh = await ssh.pool.get(ctx.target)
     else:
-        space, workdir, branch = await _prepare_space(principal, ctx, name, profile)
-        conn_ssh = await ssh.pool.get(ctx.target)
+        space, workdir, branch = await _prepare_space(
+            principal, ctx, name, profile, conn_ssh=conn_ssh
+        )
 
     try:
         await sessions.ensure_session(

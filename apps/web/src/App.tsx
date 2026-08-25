@@ -215,6 +215,30 @@ function Shell({ email }: { email: string }) {
     setShowSidebar(false)
   }, [])
 
+  // Closing a session you are currently looking at must drop you back at the
+  // project rather than leaving `selected` pointing at a session that no
+  // longer exists: the terminal view stayed up for a session that was gone,
+  // with no way back to "New session" short of picking a different project
+  // and back. Worse, reattaching in that state asked the server for a session
+  // by that name again, and since a closed session's branch is deliberately
+  // kept, the server quietly started a new one right back on it — so closing
+  // your only session never actually let you start a clean one.
+  const closeSession = useCallback(
+    (projectId: string, tmuxSession: string) => {
+      void api.deleteSession(projectId, tmuxSession).then(() => {
+        setSelected((current) =>
+          current?.kind === 'project' &&
+          current.id === projectId &&
+          current.session === tmuxSession
+            ? { kind: 'project', id: projectId }
+            : current,
+        )
+        reloadAll()
+      })
+    },
+    [reloadAll],
+  )
+
   // A notification names the thing that needs answering, and tapping it has to
   // land there. It arrives two ways: as query parameters when the app is
   // opened cold, and as a message from the service worker when a window is
@@ -393,11 +417,7 @@ function Shell({ email }: { email: string }) {
                         name: item.name,
                       })
                     }
-                    onCloseSession={(item) =>
-                      void api
-                        .deleteSession(project.id, item.tmux_session)
-                        .then(reloadAll)
-                    }
+                    onCloseSession={(item) => closeSession(project.id, item.tmux_session)}
                   />
                 ))}
             </div>
@@ -432,11 +452,7 @@ function Shell({ email }: { email: string }) {
                   onRename={(item) =>
                     setRenaming({ kind: 'project', id: item.id, name: item.name })
                   }
-                  onCloseSession={(item) =>
-                    void api
-                      .deleteSession(project.id, item.tmux_session)
-                      .then(reloadAll)
-                  }
+                  onCloseSession={(item) => closeSession(project.id, item.tmux_session)}
                 />
               ))}
             </>
@@ -796,6 +812,18 @@ export function ProjectView({
   // Optional: blank names itself after you, then -2, -3. Naming is worth
   // offering once there is more than one to tell apart.
   const [newSession, setNewSession] = useState('')
+  // Blank means "wherever /workspace already is" — the behaviour before this
+  // existed. Fetched lazily, and only while there is somewhere to show it:
+  // it costs a round trip to the server, and nobody is picking a starting
+  // branch while they are already inside a session.
+  const [newBranch, setNewBranch] = useState('')
+  const branches = useResource<string[]>(
+    () =>
+      session === null && project.status === 'running' && canControl(project.access)
+        ? api.branches(project.id)
+        : Promise.resolve([]),
+    [project.id, project.status, project.access, session === null],
+  )
   const active = sessions.find((s) => s.tmux_session === session) ?? null
   const mine = sessions.filter((s) => s.is_mine)
   // Set briefly when a keystroke is refused, so the explanation reacts to the
@@ -1111,6 +1139,22 @@ export function ProjectView({
                   disabled={busy}
                   style={{ display: mine.length ? undefined : 'none' }}
                 />
+                <select
+                  value={newBranch}
+                  onChange={(e) => setNewBranch(e.target.value)}
+                  aria-label="Starting branch"
+                  title="Which branch the session's worktree starts from"
+                  disabled={busy || branches.loading}
+                >
+                  <option value="">
+                    {branches.data?.[0] ? `${branches.data[0]} (default)` : 'Default branch'}
+                  </option>
+                  {(branches.data ?? []).slice(1).map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
                 <button
                   className="primary"
                   disabled={busy}
@@ -1119,8 +1163,10 @@ export function ProjectView({
                       const created = await api.createSession(
                         project.id,
                         newSession.trim() || undefined,
+                        newBranch.trim() || undefined,
                       )
                       setNewSession('')
+                      setNewBranch('')
                       onEnter(created.tmux_session)
                     })
                   }

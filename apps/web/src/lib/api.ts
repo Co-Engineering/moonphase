@@ -448,12 +448,17 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ restart, session: session ?? null, resume }),
     }),
-  /** Omit the name and it is derived from you, which is the useful default. */
-  createSession: (projectId: string, name?: string) =>
+  /**
+   * Omit the name and it is derived from you, which is the useful default.
+   * Omit the branch and the worktree starts from whatever `/workspace` is on.
+   */
+  createSession: (projectId: string, name?: string, branch?: string) =>
     request<Session>(`/api/projects/${projectId}/sessions`, {
       method: 'POST',
-      body: JSON.stringify({ name: name ?? null }),
+      body: JSON.stringify({ name: name ?? null, branch: branch ?? null }),
     }),
+  /** Branches worth offering as a new session's starting point. */
+  branches: (projectId: string) => request<string[]>(`/api/projects/${projectId}/branches`),
   deleteSession: (projectId: string, name: string) =>
     request<void>(`/api/projects/${projectId}/sessions/${encodeURIComponent(name)}`, {
       method: 'DELETE',

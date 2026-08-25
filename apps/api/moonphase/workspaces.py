@@ -60,6 +60,50 @@ async def _run(
     )
 
 
+# Where a fetch's credentials live for the length of one command. Outside the
+# workspace volume on purpose, same reasoning as the clone's own: the volume
+# outlives this and is what the agent works in, and a token sitting in it
+# would outlive the reason for it.
+_FETCH_CREDENTIALS = "/tmp/.moonphase-fetch-credentials"
+
+
+async def _write_fetch_credential(
+    conn: asyncssh.SSHClientConnection, container: str, token: str
+) -> None:
+    command = (
+        f"docker exec -i -u dev {shlex.quote(container)} sh -c "
+        + shlex.quote(f"cat > {_FETCH_CREDENTIALS} && chmod 600 {_FETCH_CREDENTIALS}")
+    )
+    result = await ssh.run(
+        conn,
+        command,
+        timeout=30,
+        stdin=f"https://x-access-token:{token}@github.com\n",
+    )
+    result.check("Writing a temporary git credential")
+
+
+async def _clear_fetch_credential(
+    conn: asyncssh.SSHClientConnection, container: str
+) -> None:
+    await docker_remote.exec_capture(
+        conn, container, ["rm", "-f", _FETCH_CREDENTIALS], timeout=30
+    )
+
+
+def _git_env_flags(token: str | None) -> str:
+    """`-c` flags that make a `git` invocation use the fetch credential, if any.
+
+    Mirrors the clone's own: `core.askPass=` so a private repo fails fast
+    instead of hanging on a prompt nothing can answer, and the credential
+    helper only when there is a token to offer.
+    """
+    flags = "-c core.askPass="
+    if token:
+        flags += f" -c credential.helper={shlex.quote(f'store --file={_FETCH_CREDENTIALS}')}"
+    return flags
+
+
 async def ensure_repository(
     conn: asyncssh.SSHClientConnection,
     container: str,
@@ -102,12 +146,22 @@ async def ensure_worktree(
     *,
     author_name: str = "Moonphase",
     author_email: str = "moonphase@localhost",
+    start_point: str | None = None,
+    token: str | None = None,
 ) -> tuple[str, str]:
     """Give `session` its own checkout. Returns (workdir, branch).
 
     Idempotent, and deliberately tolerant of the two states a half-finished
     previous attempt can leave behind: a directory with no branch, and a branch
     with no directory.
+
+    `start_point` only matters the first time: once `moonphase/<session>` exists
+    it is checked out as-is, on the reasoning that a name reused on purpose
+    means picking up where that branch left off, not overwriting it with a
+    fresh start silently. Because the clone is shallow and single-branch, a
+    `start_point` that is not the repository's default branch usually is not on
+    disk yet — `token` is the caller's GitHub credential, so a private repo's
+    other branches can still be fetched.
     """
     await ensure_repository(
         conn, container, author_name=author_name, author_email=author_email
@@ -117,6 +171,25 @@ async def ensure_worktree(
     branch = branch_for(session)
     quoted_dir = shlex.quote(workdir)
     quoted_branch = shlex.quote(branch)
+
+    start_clause = ""
+    if start_point:
+        quoted_start = shlex.quote(start_point)
+        start_clause = f"""
+  if ! git show-ref --verify --quiet refs/heads/{quoted_start} && \\
+     ! git show-ref --verify --quiet refs/remotes/origin/{quoted_start}; then
+    GIT_TERMINAL_PROMPT=0 git {_git_env_flags(token)} fetch --quiet --depth 50 \\
+      origin {quoted_start}:refs/remotes/origin/{quoted_start} 2>/dev/null || true
+  fi
+  if git show-ref --verify --quiet refs/heads/{quoted_start}; then
+    START_REF={quoted_start}
+  elif git show-ref --verify --quiet refs/remotes/origin/{quoted_start}; then
+    START_REF=origin/{quoted_start}
+  else
+    echo "No branch called {start_point!r} was found locally or on origin." >&2
+    exit 1
+  fi
+"""
 
     script = f"""
 set -e
@@ -135,16 +208,93 @@ fi
 if git show-ref --verify --quiet refs/heads/{quoted_branch}; then
   git worktree add {quoted_dir} {quoted_branch}
 else
-  git worktree add -b {quoted_branch} {quoted_dir}
+{start_clause}
+  git worktree add -b {quoted_branch} {quoted_dir} ${{START_REF:-}}
 fi
 """
-    result = await _run(conn, container, script, timeout=180)
+    if token:
+        await _write_fetch_credential(conn, container, token)
+    try:
+        result = await _run(conn, container, script, timeout=180)
+    finally:
+        if token:
+            await _clear_fetch_credential(conn, container)
     if not result.ok:
         raise SSHError(
             f"Could not create a working directory for session {session!r}: "
             f"{(result.stderr or result.stdout).strip()[:400]}"
         )
     return workdir, branch
+
+
+async def list_branches(
+    conn: asyncssh.SSHClientConnection,
+    container: str,
+    *,
+    token: str | None = None,
+) -> list[str]:
+    """Branch names worth offering as a session's starting point.
+
+    The current branch first, then whatever else is already local, then
+    everything on the remote. The clone is shallow and single-branch, so
+    nothing besides the default branch's own history exists on disk yet —
+    `ls-remote` asks the remote only for ref names, which costs nothing like a
+    fetch would, so the list is complete even though most of it is not fetched.
+    Internal `moonphase/*` session branches are left out; they are checkouts of
+    somebody's session, not places to start a new one from.
+    """
+    script = f"""
+cd {REPO_ROOT} 2>/dev/null || exit 1
+git rev-parse --abbrev-ref HEAD 2>/dev/null
+git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null \\
+  | grep -v '^{BRANCH_PREFIX}' || true
+GIT_TERMINAL_PROMPT=0 git {_git_env_flags(token)} ls-remote --heads origin 2>/dev/null \\
+  | sed -E 's#.*refs/heads/##'
+"""
+    if token:
+        await _write_fetch_credential(conn, container, token)
+    try:
+        result = await _run(conn, container, script, timeout=30)
+    finally:
+        if token:
+            await _clear_fetch_credential(conn, container)
+    if not result.ok:
+        return []
+
+    names: list[str] = []
+    seen: set[str] = set()
+    for line in result.stdout.splitlines():
+        name = line.strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+    return names
+
+
+async def existing_branch_names(
+    conn: asyncssh.SSHClientConnection, container: str
+) -> set[str]:
+    """Session names whose `moonphase/*` branch is still on disk, closed or not.
+
+    Used to keep an auto-generated session name from quietly reusing a branch
+    left over from a session of the same name that was closed earlier: that
+    name is deterministic (it comes from who is asking), so without this check
+    every session someone opens without typing a name would keep resuming
+    their very first one instead of starting clean.
+    """
+    script = f"""
+cd {REPO_ROOT} 2>/dev/null || exit 0
+git for-each-ref --format='%(refname:short)' refs/heads/{BRANCH_PREFIX.rstrip("/")}
+"""
+    result = await _run(conn, container, script, timeout=30)
+    if not result.ok:
+        return set()
+    return {
+        line.strip()[len(BRANCH_PREFIX) :]
+        for line in result.stdout.splitlines()
+        if line.strip().startswith(BRANCH_PREFIX)
+    }
 
 
 async def remove_worktree(
