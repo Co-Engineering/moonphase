@@ -28,9 +28,16 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from .. import queries
 from ..auth import Principal, current_principal
 from ..db import service_session, user_session
+from ..ratelimit import RateLimiter
 from ..schemas import ShareIn, ShareOut, ShareRoleIn
 
 router = APIRouter(tags=["sharing"])
+
+# Generous enough for onboarding a real team in one sitting, bounded enough
+# that batch-enumerating email addresses through this endpoint is impractical.
+# Scoped per caller: access to one project or server is enough to invoke this,
+# but not enough to have it become an oracle over the whole instance's users.
+_CREATE_RATE_LIMITER = RateLimiter(max_calls=20, window_seconds=300)
 
 
 def _to_out(row: dict[str, Any], *, viewer_id: str) -> ShareOut:
@@ -75,6 +82,19 @@ async def _create(
     kind: str, resource_id: UUID, payload: ShareIn, principal: Principal
 ) -> ShareOut:
     await _require_admin(principal.claims, kind, resource_id)
+
+    # The privileged lookup below is exactly what turns this call into an
+    # account-enumeration oracle at scale — see ratelimit.py. Checked after
+    # the admin gate so a caller with no access anywhere never even reaches
+    # the shared budget, and before the lookup so a caller who does have
+    # access cannot spend it faster than this.
+    retry_after = _CREATE_RATE_LIMITER.check(principal.user_id)
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many share invitations in a short time. Try again shortly.",
+            headers={"Retry-After": str(max(1, int(retry_after) + 1))},
+        )
 
     if principal.email and payload.email == principal.email.lower():
         raise HTTPException(
