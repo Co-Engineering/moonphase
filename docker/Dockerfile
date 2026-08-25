@@ -41,6 +41,21 @@ RUN apt-get update \
 # is nothing it needs root for.
 RUN useradd --create-home --uid 10001 moonphase
 
+# The mount points for the two named volumes, created here so they carry the
+# right owner.
+#
+# Docker creates a missing mount point itself, as root — and this process is
+# uid 10001, so a volume mounted where the image has no directory is one the
+# API cannot write to. That is silent: writing the auth configuration catches
+# OSError and logs a warning, so the settings screen saves happily and the
+# generated file never arrives. Google and Microsoft sign-in could not work on
+# any install, because the file GoTrue reads was never written.
+#
+# An empty named volume is initialised from the image, ownership included, so
+# creating them here is what makes them writable.
+RUN mkdir -p /config /home/moonphase/.moonphase \
+    && chown moonphase:moonphase /config /home/moonphase/.moonphase
+
 WORKDIR /app
 
 # Dependencies before source, for the same caching reason as above.

@@ -251,18 +251,38 @@ async def publish_auth_config() -> list[str]:
     return authconfig.usable(methods)
 
 
+# Why the last handoff to the auth container failed, or None if it did not.
+#
+# Kept because the failure is otherwise invisible: the settings are saved to
+# the database either way, so the screen said "saved" while GoTrue never
+# received the file and every OAuth sign-in answered "provider is not enabled".
+# A setting that cannot reach the thing it configures is not a saved setting,
+# and the screen has to say so.
+_handoff_error: str | None = None
+
+
 def _write_config(rendered: str) -> None:
     """Off the event loop: small, but a write to a shared volume all the same."""
+    global _handoff_error
     path = Path(authconfig.CONFIG_PATH)
     try:
         if path.exists() and path.read_text() == rendered:
+            _handoff_error = None
             return
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(rendered)
+        _handoff_error = None
         log.info("wrote auth configuration; the auth service will restart")
     except OSError as exc:
-        # Running the API outside the compose stack, which is development. The
-        # settings are still saved; they simply are not handed anywhere.
+        # Outside the compose stack this is development and nothing is wrong.
+        # Inside it, it means the volume is not writable by this user, and the
+        # sign-in methods on the screen are not the ones in force.
+        _handoff_error = (
+            "The sign-in settings were saved but could not be handed to the "
+            f"auth service ({exc.strerror or exc}), so they are not in force "
+            "yet. Bring the stack up again to repair it: "
+            "docker compose up -d"
+        )
         log.warning("could not write %s (%s)", authconfig.CONFIG_PATH, exc)
 
 
@@ -291,7 +311,10 @@ async def read_methods() -> AuthMethodsOut:
         microsoft_client_id=methods.microsoft_client_id,
         microsoft_tenant=methods.microsoft_tenant,
         redirect_uri=authconfig.redirect_uri(methods.public_url),
-        problems=authconfig.incomplete(methods),
+        # The handoff failure comes last: the configuration problems above are
+        # about what was asked for, this is about whether it arrived.
+        problems=authconfig.incomplete(methods)
+        + ([_handoff_error] if _handoff_error else []),
     )
 
 

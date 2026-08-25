@@ -82,6 +82,33 @@ services:
 
   # One-shot. Creates the roles and `auth.uid()` that the policies are written
   # against, then applies every migration that has not run yet.
+  # Makes the two named volumes writable by the API, once, before it starts.
+  #
+  # Docker creates a missing mount point as root. The API runs as uid 10001, so
+  # on every install predating the image carrying these directories, writing the
+  # generated auth configuration failed with a permission error — which is
+  # caught and logged as a warning, so the settings screen reported success and
+  # GoTrue never received the file. Google and Microsoft sign-in then answered
+  # "provider is not enabled" however correctly they had been configured.
+  #
+  # The image now ships both directories with the right owner, which is enough
+  # for a fresh install. This is what repairs one that already exists: a volume
+  # keeps the ownership it was created with, and neither the API nor the auth
+  # container runs as root, so neither can correct it itself.
+  prepare-volumes:
+    image: ${MOONPHASE_IMAGE:-ghcr.io/oliversvane/moonphase}:${MOONPHASE_VERSION:-latest}
+    user: root
+    entrypoint:
+      - sh
+      - -c
+      # -R because the directory is not the only thing that can be
+      # root-owned: anything already written into it needs the same fix.
+      - chown -R moonphase:moonphase /config /home/moonphase/.moonphase
+    volumes:
+      - auth-config:/config
+      - api-state:/home/moonphase/.moonphase
+    restart: "no"
+
   migrate:
     # `latest` is the newest *release*, not the newest commit — the tag only
     # moves when somebody cuts one. `edge` is still there for the tip, and
@@ -127,6 +154,8 @@ services:
       db:
         condition: service_healthy
       migrate:
+        condition: service_completed_successfully
+      prepare-volumes:
         condition: service_completed_successfully
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-postgres}

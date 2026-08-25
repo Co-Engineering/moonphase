@@ -591,3 +591,113 @@ def test_the_port_is_read_without_needing_docker() -> None:
     # loopback, which is the assumption that does not strand anybody.
     assert reachable == "no"
     assert url == "http://127.0.0.1:8471"
+
+
+def test_the_auth_volume_is_writable_by_the_user_that_writes_it() -> None:
+    """Google and Microsoft sign-in could not work on any install.
+
+    The API writes the generated GoTrue configuration to /config, a named
+    volume. Docker creates a missing mount point as root, the API runs as uid
+    10001, and the write is wrapped in `except OSError` — so it failed with a
+    permission error, was logged as a warning, and the settings screen reported
+    success. GoTrue never received the file and answered "provider is not
+    enabled" however correctly the credentials had been entered.
+
+    An empty named volume is initialised from the image, ownership included, so
+    the image has to carry the directories.
+    """
+    dockerfile = (
+        Path(__file__).resolve().parents[3] / "docker/Dockerfile"
+    ).read_text()
+
+    # Created and owned before the build drops to that user, so the ownership
+    # is the one a fresh volume inherits.
+    assert "mkdir -p /config /home/moonphase/.moonphase" in dockerfile
+    assert "chown moonphase:moonphase /config /home/moonphase/.moonphase" in dockerfile
+    assert dockerfile.index("chown moonphase:moonphase") < dockerfile.index(
+        "USER moonphase"
+    )
+
+
+def test_an_existing_install_has_its_volume_repaired() -> None:
+    """The image change only reaches a volume that does not exist yet: a volume
+    keeps the ownership it was created with. Neither the API (uid 10001) nor
+    the auth container (uid 1000) runs as root, so neither can correct it, and
+    the repair has to be something that does."""
+    import yaml
+
+    compose = yaml.safe_load(
+        (Path(__file__).resolve().parents[3] / "docker-compose.yml").read_text()
+    )
+
+    # Parsed rather than matched as text, so reformatting the file cannot make
+    # this pass or fail for the wrong reason.
+    repair = compose["services"]["prepare-volumes"]
+    assert repair["user"] == "root", "nothing else in the stack can chown it"
+
+    command = " ".join(repair["entrypoint"])
+    # -R, because a root-owned auth.env inside a chowned directory is still
+    # root-owned, and opening it for writing still fails.
+    assert "chown -R moonphase:moonphase" in command
+    assert "/config" in command and "/home/moonphase/.moonphase" in command
+
+    # It must hold both volumes, or it repairs nothing.
+    mounted = {entry.split(":")[0] for entry in repair["volumes"]}
+    assert {"auth-config", "api-state"} <= mounted
+
+    # And finish before the API starts, or the first write races the repair.
+    assert (
+        compose["services"]["api"]["depends_on"]["prepare-volumes"]["condition"]
+        == "service_completed_successfully"
+    )
+
+
+def test_a_failed_handoff_is_reported_rather_than_swallowed() -> None:
+    """What made this invisible for so long.
+
+    The settings are written to the database before they are handed to the auth
+    container, so a failed handoff still looked like a successful save. The
+    screen has to say that what it is showing is not what is in force.
+    """
+    from moonphase.routers import setup as setup_router
+
+    original = setup_router._handoff_error
+    try:
+        setup_router._handoff_error = None
+        # A path that cannot be created, standing in for a volume this user
+        # cannot write to.
+        import moonphase.authconfig as authconfig
+
+        was = authconfig.CONFIG_PATH
+        try:
+            authconfig.CONFIG_PATH = "/proc/moonphase-cannot-exist/auth.env"
+            setup_router._write_config("GOTRUE_EXTERNAL_AZURE_ENABLED='true'")
+        finally:
+            authconfig.CONFIG_PATH = was
+
+        assert setup_router._handoff_error is not None
+        # Says it is not in force, rather than only that something failed.
+        assert "not in force" in setup_router._handoff_error
+    finally:
+        setup_router._handoff_error = original
+
+
+def test_a_successful_handoff_clears_an_earlier_failure() -> None:
+    """Otherwise the screen keeps warning about a problem that has been fixed,
+    which is how people learn to ignore the warnings that matter."""
+    import tempfile
+
+    from moonphase.routers import setup as setup_router
+    import moonphase.authconfig as authconfig
+
+    original = setup_router._handoff_error
+    was = authconfig.CONFIG_PATH
+    try:
+        setup_router._handoff_error = "something earlier went wrong"
+        with tempfile.TemporaryDirectory() as tmp:
+            authconfig.CONFIG_PATH = str(Path(tmp) / "auth.env")
+            setup_router._write_config("GOTRUE_EXTERNAL_AZURE_ENABLED='true'")
+        assert setup_router._handoff_error is None
+    finally:
+        authconfig.CONFIG_PATH = was
+        setup_router._handoff_error = original

@@ -77,6 +77,22 @@ derived from your domain, so it is right by construction.
     its secret, magic links without SMTP. Those are the same mistake, found
     before somebody clicks a button that goes nowhere.
 
+!!! bug "\"Unsupported provider: provider is not enabled\""
+
+    That answer comes from the auth service, and it means the settings never
+    reached it. Sign-in methods are saved to the database and then written to a
+    file the auth container reads; on installs created before v0.6.0 the volume
+    holding that file was owned by root, and the API — which does not run as
+    root — could not write it. The save succeeded, so the screen said so, and
+    Google and Microsoft could never work however correctly they were set up.
+
+    [Update](updating.md). Bringing the stack up repairs the volume's ownership
+    and the settings are handed over on the next save, so open **Settings →
+    Instance → Sign-in methods** and save once afterwards.
+
+    The screen now says when a handoff has failed rather than reporting success,
+    so this cannot go unnoticed again.
+
 ## The address
 
 **Settings → Instance → Address** is the domain people use. Setting it is what
