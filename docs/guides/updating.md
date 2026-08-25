@@ -14,12 +14,26 @@ copy:
 
 ```bash
 cd moonphase
+git pull
 docker compose pull
 docker compose up -d
 ```
 
 Migrations travel inside the image alongside the code that expects them, so
-those two commands bring the schema with them. Your data, your servers and your
+those commands bring the schema with them.
+
+!!! note "Why `git pull` is in there"
+    `docker-compose.yml` is a file on your server, not something inside the
+    image, so pulling a new image cannot change it. Most releases do not touch
+    it and the two `docker compose` commands are enough — but when one adds a
+    service, an image pull alone leaves it out, and the release quietly does
+    less than it says.
+
+    v0.6.0 was such a release: the service that repairs the permissions on the
+    auth volume lives in that file, so an upgrade without this step brought the
+    new code and none of the fix.
+
+    Running the installer again does the same thing and keeps every secret. Your data, your servers and your
 credentials are untouched — the containers are replaced, the volumes are not.
 
 Sessions keep running throughout. They live in `tmux` inside project containers
