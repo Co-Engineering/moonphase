@@ -260,6 +260,14 @@ export interface HarnessLogin {
   pane: string | null
 }
 
+export interface GitHubRepo {
+  full_name: string
+  clone_url: string
+  private: boolean
+  description: string | null
+  pushed_at: string | null
+}
+
 export interface GitHubDevice {
   session_id: string
   state: 'awaiting_authorization' | 'complete' | 'error'
@@ -514,6 +522,7 @@ export const api = {
     }),
   disconnectGitHub: () =>
     request<WorkspaceProfile>('/api/profile/github', { method: 'DELETE' }),
+  githubRepos: () => request<GitHubRepo[]>('/api/profile/github/repos'),
 
   // --- notifications --------------------------------------------------------
   pushStatus: () => request<PushStatus>('/api/notifications'),

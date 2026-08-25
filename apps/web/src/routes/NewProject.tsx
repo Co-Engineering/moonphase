@@ -1,17 +1,21 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import {
   api,
   type Environment,
+  type GitHubRepo,
   type HarnessInfo,
   type HarnessKind,
   type Project,
   type Server,
+  type WorkspaceProfile,
 } from '../lib/api'
+import { RepoPicker } from '../components/RepoPicker'
 
 interface Props {
   servers: Server[]
   harnesses: HarnessInfo[]
   environments: Environment[]
+  profile?: WorkspaceProfile | null
   defaultServerId?: string
   onClose: () => void
   onCreated: (projectId: string) => void
@@ -29,6 +33,7 @@ export function NewProject({
   servers,
   harnesses,
   environments,
+  profile,
   defaultServerId,
   onClose,
   onCreated,
@@ -48,6 +53,20 @@ export function NewProject({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState<string | null>(null)
+
+  const [repos, setRepos] = useState<GitHubRepo[] | null>(null)
+  const [reposLoading, setReposLoading] = useState(false)
+  const [reposError, setReposError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!profile?.github_connected) return
+    setReposLoading(true)
+    api
+      .githubRepos()
+      .then(setRepos)
+      .catch((err) => setReposError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setReposLoading(false))
+  }, [profile?.github_connected])
 
   /**
    * Watch the container get built.
@@ -218,14 +237,18 @@ export function NewProject({
 
           <label>
             <span>Repository (optional)</span>
-            <input
+            <RepoPicker
               value={repoUrl}
-              onChange={(e) => setRepoUrl(e.target.value)}
-              placeholder="https://github.com/you/private-repo.git"
+              onChange={setRepoUrl}
+              repos={repos}
+              loading={reposLoading}
+              error={reposError}
             />
           </label>
           <p className="hint" style={{ marginTop: -6 }}>
-            Private repositories work once GitHub is connected in Settings.
+            {profile?.github_connected
+              ? "Pick a repo you're connected to, or choose \"Other\" to paste a URL for a public one you don't own."
+              : 'Private repositories work once GitHub is connected in Settings.'}
           </p>
 
           <div className="actions">

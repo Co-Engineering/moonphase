@@ -23,6 +23,7 @@ from ..runtime import CAN_CONTROL, NotFound
 from ..schemas import (
     GitHubDeviceOut,
     GitHubDeviceStart,
+    GitHubRepoOut,
     GitHubTokenIn,
     HarnessApiKeyIn,
     HarnessLoginCode,
@@ -465,6 +466,36 @@ async def disconnect_github(
 async def github_device_available() -> dict[str, bool]:
     """Whether the device flow is configured, so the UI can hide it if not."""
     return {"device_flow": bool(get_settings().moonphase_github_client_id)}
+
+
+@router.get("/github/repos", response_model=list[GitHubRepoOut])
+async def list_github_repos(
+    org_id: UUID | None = None, principal: Principal = Depends(current_principal)
+) -> list[GitHubRepoOut]:
+    resolved = await _resolve_org(principal, org_id)
+    async with service_session() as conn:
+        row = await queries.get_vcs_credential_privileged(conn, resolved, "github")
+    if row is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Connect GitHub in Settings → Accounts before picking a repository.",
+        )
+
+    try:
+        repos = await github.list_repos(row["token"])
+    except github.GitHubError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return [
+        GitHubRepoOut(
+            full_name=repo.full_name,
+            clone_url=repo.clone_url,
+            private=repo.private,
+            description=repo.description,
+            pushed_at=repo.pushed_at,
+        )
+        for repo in repos
+    ]
 
 
 # Re-exported for the app factory.
