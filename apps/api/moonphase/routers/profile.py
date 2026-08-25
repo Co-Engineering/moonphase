@@ -163,6 +163,26 @@ async def _pick_login_server(
     return online[0]
 
 
+def _get_login_session(session_id: str) -> login.LoginSession:
+    """`login.get`, translated into the 404 a caller should see.
+
+    A restart (including the one docker-compose.update.yml exists to
+    support) silently drops every sign-in in flight; without this, the user
+    just sees a generic "no such sign-in" with no hint that it was not their
+    mistake.
+    """
+    try:
+        session = login.get(session_id)
+    except login.SessionLostToRestart as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="Sign-in session lost, likely due to a server restart — please try again.",
+        ) from exc
+    if session is None:
+        raise HTTPException(status_code=404, detail="No such sign-in.")
+    return session
+
+
 def _login_out(session: login.LoginSession) -> HarnessLoginOut:
     # The pane is only useful once something is happening; sending it during
     # the URL step would just be noise.
@@ -249,9 +269,7 @@ async def poll_harness_login(
     made here rather than in a long-lived request. Each poll does one bounded
     check and returns.
     """
-    session = login.get(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="No such sign-in.")
+    session = _get_login_session(session_id)
 
     if session.state == "verifying":
         harness = get_harness(session.harness_kind)
@@ -276,9 +294,7 @@ async def submit_harness_code(
     payload: HarnessLoginCode, principal: Principal = Depends(current_principal)
 ) -> HarnessLoginOut:
     """Hand the pasted code to the waiting flow, then store what it produced."""
-    session = login.get(payload.session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="No such sign-in.")
+    session = _get_login_session(payload.session_id)
 
     try:
         target = await runtime.load_server_target(

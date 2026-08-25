@@ -176,6 +176,8 @@ def parse_prompt(pane: str, signals: ActivitySignals) -> Prompt | None:
     options: list[dict[str, str]] = []
     seen: set[str] = set()
     first_option_index = len(lines)
+    label_indent: int | None = None
+    continuation: list[str] = []
 
     for index in range(len(lines) - 1, -1, -1):
         line = lines[index]
@@ -187,11 +189,25 @@ def parse_prompt(pane: str, signals: ActivitySignals) -> Prompt | None:
                 # two questions into one set of buttons.
                 break
             seen.add(key)
-            options.append({"key": key, "label": " ".join(label.split())[:80]})
+            label_text = " ".join(label.split())
+            if continuation:
+                # Continuation lines were collected bottom-up; restore reading order.
+                continuation.reverse()
+                label_text = " ".join([label_text, *continuation])
+                continuation = []
+            options.append({"key": key, "label": label_text[:80]})
             first_option_index = index
+            label_indent = found.start(2)
         elif options and line.strip():
-            # A non-option line directly above the block ends it.
-            break
+            # A long label wraps onto an indented continuation line rather than
+            # ending the block; tell the two apart by indentation. A wrapped
+            # line lines up at or past the column where the label text started,
+            # while real chrome (question, separators) sits flush/base indent.
+            indent = len(line) - len(line.lstrip())
+            if label_indent is not None and indent >= label_indent:
+                continuation.append(" ".join(line.split()))
+            else:
+                break
 
     options.reverse()
 

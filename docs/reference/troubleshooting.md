@@ -9,7 +9,9 @@ fetches `/auth/v1/.well-known/jwks.json` from it.
 
 **CORS errors in the browser.** `MOONPHASE_CORS_ORIGINS` must list the exact
 origin the frontend is served from, and the API must be restarted after
-changing it.
+changing it. It cannot be set to `*`: credentialed requests are always on, so
+a wildcard origin would be silently reflected back for every caller instead
+of enforcing anything — the API refuses to start rather than allow that.
 
 **Electron shows a blank window / connection refused.** Vite must bind IPv4;
 `server.host` is pinned to `127.0.0.1` for this reason, since `localhost`

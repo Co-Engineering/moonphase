@@ -7,6 +7,12 @@ import { terminalUrl } from '../lib/api'
 
 type Status = 'connecting' | 'attached' | 'disconnected' | 'error'
 
+// A silent network drop (Wi-Fi association lost, a VPN blip, laptop sleep)
+// often never fires `onclose`/`onerror` at all — the socket just sits
+// half-open until some lengthy OS-level TCP timeout, if that ever comes. A
+// heartbeat forces detection well before that.
+const HEARTBEAT_INTERVAL_MS = 10_000
+
 interface Props {
   projectId: string
   /** Which tmux session to attach to. Changing it reattaches. */
@@ -114,6 +120,33 @@ export function ProjectTerminal({
     fitRef.current = fit
 
     let reconnectTimer: number | undefined
+    let heartbeatTimer: number | undefined
+    // Set when a ping has gone unanswered — the socket looks OPEN but the
+    // peer has stopped responding, which is exactly the silent-drop case a
+    // plain onclose/onerror listener misses.
+    let awaitingPong = false
+
+    const stopHeartbeat = () => {
+      window.clearInterval(heartbeatTimer)
+      heartbeatTimer = undefined
+      awaitingPong = false
+    }
+
+    const startHeartbeat = (socket: WebSocket) => {
+      stopHeartbeat()
+      heartbeatTimer = window.setInterval(() => {
+        if (socket.readyState !== WebSocket.OPEN) return
+        if (awaitingPong) {
+          // No pong since the last ping: force the close/reconnect path now
+          // rather than waiting on an OS-level TCP timeout that may never
+          // fire on its own.
+          socket.close()
+          return
+        }
+        awaitingPong = true
+        socket.send(JSON.stringify({ type: 'ping' }))
+      }, HEARTBEAT_INTERVAL_MS)
+    }
 
     const connect = async () => {
       if (disposedRef.current) return
@@ -132,6 +165,7 @@ export function ProjectTerminal({
         // Send the true geometry immediately: the query params were a guess
         // made before the first fit().
         socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+        startHeartbeat(socket)
       }
 
       socket.onmessage = (event) => {
@@ -142,6 +176,7 @@ export function ProjectTerminal({
         try {
           const message = JSON.parse(event.data as string)
           if (message.type === 'attached') setStatus('attached')
+          if (message.type === 'pong') awaitingPong = false
           if (message.type === 'error') {
             setStatus('error')
             term.writeln(`\r\n\x1b[31m[moonphase] ${message.message}\x1b[0m`)
@@ -152,6 +187,7 @@ export function ProjectTerminal({
       }
 
       socket.onclose = (event) => {
+        stopHeartbeat()
         if (disposedRef.current) return
         setStatus('disconnected')
         // 4xxx codes are our own deliberate refusals; retrying them would just
@@ -170,6 +206,41 @@ export function ProjectTerminal({
 
       socket.onerror = () => setStatus('error')
     }
+
+    // The browser doesn't reliably fire onclose/onerror on a silent drop —
+    // Wi-Fi association lost, a VPN blip, a laptop resuming from sleep — so
+    // the socket can sit half-open indefinitely. When the OS tells us
+    // connectivity is back (or the tab becomes visible again, which covers
+    // the sleep/wake case even when 'online' doesn't fire), probe the
+    // existing socket immediately instead of waiting for the next heartbeat
+    // tick or a backed-off reconnect that was scheduled before the outage.
+    const checkLiveness = () => {
+      if (disposedRef.current) return
+      const socket = socketRef.current
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        if (awaitingPong) {
+          socket.close()
+        } else {
+          awaitingPong = true
+          socket.send(JSON.stringify({ type: 'ping' }))
+        }
+        return
+      }
+      if (
+        reconnectTimer !== undefined &&
+        (!socket || socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING)
+      ) {
+        window.clearTimeout(reconnectTimer)
+        reconnectTimer = undefined
+        retryRef.current = 0
+        void connect()
+      }
+    }
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') checkLiveness()
+    }
+    window.addEventListener('online', checkLiveness)
+    document.addEventListener('visibilitychange', onVisible)
 
     const onData = term.onData((data) => {
       if (readOnlyRef.current) {
@@ -204,6 +275,9 @@ export function ProjectTerminal({
     return () => {
       disposedRef.current = true
       window.clearTimeout(reconnectTimer)
+      stopHeartbeat()
+      window.removeEventListener('online', checkLiveness)
+      document.removeEventListener('visibilitychange', onVisible)
       cancelAnimationFrame(fitFrame)
       observer.disconnect()
       onData.dispose()

@@ -77,11 +77,22 @@ own configuration at runtime rather than having it baked into the bundle.
 | `POST` | `/api/projects/{project_id}/sessions/keys` | Type into a session |
 | `GET` | `/api/projects/{project_id}/sessions/snapshot` | Plain-text pane capture |
 | `POST` | `/api/projects/{project_id}/sessions/{name}/detach-clients` | Drop stale tmux clients |
+| `POST` | `/api/projects/{project_id}/sessions/ticket` | Mint a WebSocket ticket (below) |
 
-The live terminal is a WebSocket, not one of these:
+The live terminal is a WebSocket, not one of these. A browser cannot set
+headers on the handshake, so proof of identity travels in the query string —
+as a short-lived, single-use ticket rather than the bearer token itself,
+since query parameters land in proxy access logs. Mint one first with
+`POST …/sessions/ticket`, scoped to the project it names:
 
 ```text
-ws(s)://<host>/ws/projects/{project_id}/terminal?session=<name>&token=<jwt>
+ws(s)://<host>/ws/projects/{project_id}/terminal?session=<name>&ticket=<ticket>
+```
+
+`token=<jwt>` still works as a fallback for a client that has not switched to
+tickets, and is what the feed and preview sockets below still use:
+
+```text
 ws(s)://<host>/ws/projects/{project_id}/feed?session=<name>&token=<jwt>
 ```
 

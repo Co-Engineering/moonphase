@@ -69,6 +69,31 @@ def test_a_valid_key_produces_no_finding(monkeypatch) -> None:
     assert preflight.check_secret_key() is None
 
 
+# --- cors -----------------------------------------------------------------------
+
+
+def test_a_wildcard_cors_origin_is_refused(monkeypatch) -> None:
+    """Credentials are always on, so `*` would be silently reflected back for
+    every caller rather than rejected — a footgun, not a valid config."""
+    _set(monkeypatch, MOONPHASE_CORS_ORIGINS="*")
+    finding = preflight.check_cors()
+
+    assert finding is not None
+    assert finding.fatal is True
+    assert "MOONPHASE_CORS_ORIGINS" in finding.summary
+    assert "*" in finding.summary
+
+
+def test_a_wildcard_among_other_origins_is_still_refused(monkeypatch) -> None:
+    _set(monkeypatch, MOONPHASE_CORS_ORIGINS="https://example.com,*")
+    assert preflight.check_cors() is not None
+
+
+def test_explicit_origins_produce_no_finding(monkeypatch) -> None:
+    _set(monkeypatch, MOONPHASE_CORS_ORIGINS="https://example.com,https://app.example.com")
+    assert preflight.check_cors() is None
+
+
 # --- things that degrade rather than break ------------------------------------
 
 

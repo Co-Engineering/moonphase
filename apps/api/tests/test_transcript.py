@@ -328,6 +328,27 @@ def test_a_prompt_not_phrased_as_a_question_still_gets_a_label() -> None:
     assert prompt.question == "Select a theme"
 
 
+def test_a_wrapped_option_label_does_not_swallow_earlier_options() -> None:
+    """A narrow phone pane wraps long labels onto an indented continuation line.
+
+    That continuation line must not be mistaken for chrome ending the block —
+    doing so previously discarded every option above it.
+    """
+    pane = (
+        " Do you want to make this edit to auth.py?\n"
+        " ❯ 1. Yes\n"
+        "   2. Yes, and re-run the whole test suite again before\n"
+        "      continuing to the next step\n"
+        "   3. No, tell Claude what to do differently\n"
+    )
+    prompt = parse_prompt(pane, CLAUDE.activity_signals())
+    assert prompt is not None
+    assert [o["key"] for o in prompt.options] == ["1", "2", "3"]
+    assert prompt.options[1]["label"] == (
+        "Yes, and re-run the whole test suite again before continuing to the next step"
+    )
+
+
 def test_no_prompt_when_the_agent_is_working() -> None:
     assert parse_prompt("⏺ Read(x.py)\n  240 lines\n", CLAUDE.activity_signals()) is None
 

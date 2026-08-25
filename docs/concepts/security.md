@@ -97,4 +97,10 @@ Three consequences worth stating:
 - **A project share discloses the server's name and nothing else.** The
   listing query calls `public.server_label()` instead of joining `servers`,
   so the address, the login and the host key stay with the people who own it.
+- **Creating a share discloses whether the target email has an account.** A
+  single invite doing that is an accepted, bounded trade-off; being able to
+  call it at any rate is not, since it turns that lookup into a way to
+  batch-enumerate the instance's users. `routers/shares.py` rate limits share
+  creation per caller (`ratelimit.py`) so this stays a per-invite disclosure
+  rather than a bulk one.
 

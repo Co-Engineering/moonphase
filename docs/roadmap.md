@@ -50,7 +50,7 @@ running.
 - [ ] **Session health reconciliation.** The monitor already detects a stopped
       container; it should write that back to `projects.status` so a rebooted
       server does not leave the UI lying.
-- [ ] **WebSocket auth tickets.** Replace the token query parameter with a
+- [x] **WebSocket auth tickets.** Replaced the token query parameter with a
       short-lived single-use ticket, so access tokens stop landing in logs.
 
 ## v0.3 — zrok previews

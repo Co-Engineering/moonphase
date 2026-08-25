@@ -605,10 +605,16 @@ export async function terminalUrl(
   rows: number,
   session?: string,
 ) {
-  const token = await accessToken()
+  // A short-lived, single-use ticket rather than the real access token:
+  // query parameters land in proxy/load-balancer access logs, and a ticket
+  // minted just for this connection is worthless there. See tickets.py.
+  const { ticket } = await request<{ ticket: string }>(
+    `/api/projects/${projectId}/sessions/ticket`,
+    { method: 'POST' },
+  )
   const base = currentHost().replace(/^http/, 'ws')
   const params = new URLSearchParams({
-    token: token ?? '',
+    ticket,
     cols: String(cols),
     rows: String(rows),
     ...(session ? { session } : {}),
