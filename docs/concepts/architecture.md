@@ -188,8 +188,13 @@ answering it is the user's decision, not Moonphase's.
 5. `sessions.ensure_session` is idempotent: if tmux is already running, it does
    nothing at all. Recreating it would throw away the conversation the user
    came back for.
-6. The client opens `WS /ws/projects/{id}/terminal`, which allocates a PTY on a
-   new channel of that same SSH connection and pumps bytes both ways.
+6. The client mints a short-lived, single-use ticket from
+   `POST /api/projects/{id}/sessions/ticket` (`tickets.py`) — a browser cannot
+   set headers on a WebSocket handshake, and a ticket in the URL is worthless
+   in a proxy's access log, unlike the bearer token it replaces there.
+7. The client opens `WS /ws/projects/{id}/terminal?ticket=...`, which
+   allocates a PTY on a new channel of that same SSH connection and pumps
+   bytes both ways.
 
 ## Still missing
 
@@ -198,7 +203,5 @@ answering it is the user's decision, not Moonphase's.
   webhook, an OAuth callback, or sending a link to someone — still wants zrok.
 * **Invites and role management UI.** Orgs, roles and policies exist in the
   database and are enforced; only the screens are missing.
-* **WebSocket auth tickets.** The terminal socket takes its token as a query
-  parameter, so access tokens land in proxy logs.
 * **OpenCode.** A second `Harness` subclass, and an enum value that is already
   in the schema.

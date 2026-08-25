@@ -24,8 +24,8 @@ from uuid import UUID
 import asyncssh
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 
-from .. import docker_remote, queries, runtime, sessions, ssh, workspaces
-from ..auth import Principal, websocket_principal
+from .. import docker_remote, queries, runtime, sessions, ssh, tickets, workspaces
+from ..auth import Principal, current_principal, ticket_scope, websocket_principal
 from ..db import user_session
 from ..runtime import CAN_CONTROL, CAN_OBSERVE, Forbidden, NotFound
 from ..ssh import SSHError
@@ -143,6 +143,19 @@ async def _pump_input(
                 process.stdin.write(str(control.get("data", "")).encode())
         elif kind == "ping":
             await websocket.send_text(json.dumps({"type": "pong"}))
+
+
+@router.post("/api/projects/{project_id}/sessions/ticket")
+async def issue_terminal_ticket(
+    project_id: UUID,
+    principal: Principal = Depends(current_principal),
+) -> dict[str, str]:
+    """A ticket to open this project's terminal socket with, instead of the
+    real bearer token — see tickets.py for why. Minting one does not itself
+    check project access: the socket runs that same check it always has,
+    against the identity the ticket carries.
+    """
+    return {"ticket": tickets.issue(principal.claims, scope=ticket_scope(project_id))}
 
 
 @router.websocket("/ws/projects/{project_id}/terminal")

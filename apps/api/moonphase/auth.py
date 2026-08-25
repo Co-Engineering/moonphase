@@ -21,12 +21,14 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 import httpx
 import jwt
 from fastapi import Depends, HTTPException, Query, Request, WebSocket, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from . import tickets
 from .config import get_settings
 
 _bearer = HTTPBearer(auto_error=False)
@@ -159,14 +161,18 @@ async def decode_token(token: str) -> dict[str, Any]:
         ) from exc
 
 
-async def _principal_from_token(token: str) -> Principal:
-    claims = await decode_token(token)
+def _principal_from_claims(claims: dict[str, Any]) -> Principal:
     sub = claims.get("sub")
     if not sub:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has no subject."
         )
     return Principal(user_id=str(sub), email=claims.get("email"), claims=claims)
+
+
+async def _principal_from_token(token: str) -> Principal:
+    claims = await decode_token(token)
+    return _principal_from_claims(claims)
 
 
 async def current_principal(
@@ -183,17 +189,43 @@ async def current_principal(
     return await _principal_from_token(credentials.credentials)
 
 
+def ticket_scope(project_id: UUID | None) -> str:
+    """The scope a project's sockets mint and redeem tickets under.
+
+    One scope per project rather than per socket kind (terminal, feed,
+    preview): all three take the same `{project_id}` path parameter, and a
+    ticket is only ever proof of identity — the socket still runs its own
+    access check against that identity afterward, same as it always did with
+    a bearer token. Narrowing further would not remove a check, only add
+    ticket-minting endpoints nothing yet asks for.
+    """
+    return f"ws:{project_id}"
+
+
 async def websocket_principal(
     websocket: WebSocket,
+    project_id: UUID | None = None,
     token: str | None = Query(default=None),
+    ticket: str | None = Query(default=None),
 ) -> Principal:
     """Authenticate a WebSocket.
 
-    Browsers cannot set headers on a WebSocket handshake, so the token arrives
-    as a query parameter. That puts it in server access logs, which is the
-    accepted trade-off for now; the planned fix is a short-lived single-use
-    ticket minted over HTTP and redeemed here.
+    Browsers cannot set headers on a WebSocket handshake, so proof of
+    identity has to arrive as a query parameter either way. A raw bearer
+    token there lands in every reverse proxy's access log for as long as it
+    is valid, so `ticket` — short-lived, single-use, minted over an
+    authenticated HTTP request — is preferred. `token` remains as a fallback
+    for a client that has not switched over.
     """
+    if ticket:
+        claims = tickets.redeem(ticket, scope=ticket_scope(project_id))
+        if claims is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="This ticket is invalid, expired, or already used.",
+            )
+        return _principal_from_claims(claims)
+
     if not token:
         header = websocket.headers.get("authorization", "")
         if header.lower().startswith("bearer "):
