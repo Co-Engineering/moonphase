@@ -761,3 +761,53 @@ def test_a_failure_to_publish_does_not_stop_the_api_starting() -> None:
             await started.__aenter__()
 
     asyncio.run(enter_startup())
+
+
+def test_saving_the_screen_does_not_erase_a_secret_you_did_not_retype() -> None:
+    """The settings form loads every secret as an empty string — it has to, the
+    API never sends a secret to a client — so a save that treated blank as
+    "clear this" erased whichever secrets were not retyped.
+
+    Someone who set up Microsoft sign-in and later touched anything else on
+    that screen was left with a client id, no secret, and "Unsupported
+    provider: missing OAuth secret" from the auth service.
+    """
+    statements = _statements_from_set_auth_secrets(
+        {"microsoft_client_secret": "", "google_client_secret": None}
+    )
+
+    # Nothing to write: both were blank, so both are left alone.
+    assert statements == []
+
+
+def test_a_secret_that_was_typed_is_written() -> None:
+    """The other half — leaving blanks alone must not mean ignoring input."""
+    statements = _statements_from_set_auth_secrets(
+        {"microsoft_client_secret": "s3cret", "google_client_secret": ""}
+    )
+
+    assert len(statements) == 1
+    sql = statements[0]
+    assert "microsoft_client_secret" in sql
+    # And only that one.
+    assert "google_client_secret" not in sql
+
+
+def _statements_from_set_auth_secrets(secrets: dict[str, str | None]) -> list[str]:
+    """Run the real function against a connection that records, rather than
+    asserting on its source."""
+    import asyncio
+
+    from moonphase import queries
+
+    recorded: list[str] = []
+
+    class Recorder:
+        async def execute(self, statement, params=None):  # noqa: ANN001
+            recorded.append(str(statement))
+            return None
+
+    asyncio.run(
+        queries.set_auth_secrets_privileged(Recorder(), secrets=secrets)  # type: ignore[arg-type]
+    )
+    return recorded

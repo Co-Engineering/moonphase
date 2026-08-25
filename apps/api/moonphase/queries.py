@@ -1672,13 +1672,24 @@ async def set_auth_secrets_privileged(
     conn: AsyncConnection, *, secrets: dict[str, str | None]
 ) -> None:
     """Only what was supplied. A blank field means "leave it alone", because a
-    write form cannot show a secret back and would otherwise erase it."""
+    write form cannot show a secret back and would otherwise erase it.
+
+    That is what this said and not what it did: only `None` was skipped, and an
+    empty string wrote NULL. The settings form loads every secret as `""` —
+    it cannot do otherwise, since the API never sends a secret to a client — so
+    saving the screen erased whichever secrets had not been retyped. Someone
+    who set up Microsoft sign-in and later changed anything else on that screen
+    was left with a client id, no secret, and "Unsupported provider: missing
+    OAuth secret" from the auth service.
+
+    To remove a secret, turn its provider off.
+    """
     sets, params = [], {}
     for key, value in secrets.items():
-        if value is None:
+        if not value:
             continue
         sets.append(f"{key} = :{key}")
-        params[key] = encrypt(value) if value else None
+        params[key] = encrypt(value)
     if not sets:
         return
     await conn.execute(
