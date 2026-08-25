@@ -602,6 +602,7 @@ function Shell({ email }: { email: string }) {
           servers={(servers.data ?? []).filter((s) => canControl(s.access))}
           harnesses={harnesses.data ?? []}
           environments={environments.data ?? []}
+          profile={profile.data}
           defaultServerId={activeServer?.id ?? activeProject?.server_id}
           onOpenSettings={() => {
             setShowNewProject(false)
