@@ -92,8 +92,23 @@ class LoginSession:
 
 _sessions: dict[str, LoginSession] = {}
 
+# Regenerated every time the process starts. `_sessions` is a plain in-memory
+# dict (see module docstring) — an API restart, including the one
+# docker-compose.update.yml exists specifically to support, silently drops
+# every sign-in in flight. Stamping ids with this epoch lets a lookup miss
+# tell "this id is from a process that no longer exists" apart from "this id
+# is simply wrong", which otherwise look identical to the caller.
+_PROCESS_EPOCH = secrets.token_urlsafe(8)
+
+
+class SessionLostToRestart(Exception):
+    """A session id in our format, but stamped with an earlier process's epoch."""
+
 
 def get(session_id: str) -> LoginSession | None:
+    epoch, sep, _ = session_id.partition(".")
+    if sep and epoch != _PROCESS_EPOCH:
+        raise SessionLostToRestart(session_id)
     session = _sessions.get(session_id)
     if session is None:
         return None
@@ -141,8 +156,9 @@ async def start(
     if command is None:
         raise SSHError(f"{harness.display_name} does not support interactive sign-in.")
 
-    session_id = secrets.token_urlsafe(16)
-    container = f"{CONTAINER_PREFIX}{session_id[:12].lower()}"
+    token = secrets.token_urlsafe(16)
+    session_id = f"{_PROCESS_EPOCH}.{token}"
+    container = f"{CONTAINER_PREFIX}{token[:12].lower()}"
     session = LoginSession(
         id=session_id,
         org_id=org_id,

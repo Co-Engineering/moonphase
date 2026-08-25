@@ -87,7 +87,7 @@ describe('starting sessions', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Start my session' }))
 
-    await waitFor(() => expect(create).toHaveBeenCalledWith('p1', undefined))
+    await waitFor(() => expect(create).toHaveBeenCalledWith('p1', undefined, undefined))
   })
 
   it('passes the name you typed', async () => {
@@ -101,7 +101,25 @@ describe('starting sessions', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'New session' }))
 
-    await waitFor(() => expect(create).toHaveBeenCalledWith('p1', 'refactor'))
+    await waitFor(() => expect(create).toHaveBeenCalledWith('p1', 'refactor', undefined))
+  })
+
+  it('lets you pick a starting branch', async () => {
+    vi.spyOn(api, 'branches').mockResolvedValue(['main', 'staging'])
+    const create = vi.spyOn(api, 'createSession').mockResolvedValue(
+      session({ tmux_session: 'refactor' }),
+    )
+    view([session({})])
+
+    const select = await screen.findByLabelText<HTMLSelectElement>('Starting branch')
+    await waitFor(() => expect(select.options.length).toBe(2))
+
+    fireEvent.change(select, { target: { value: 'staging' } })
+    fireEvent.click(screen.getByRole('button', { name: 'New session' }))
+
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith('p1', undefined, 'staging'),
+    )
   })
 })
 

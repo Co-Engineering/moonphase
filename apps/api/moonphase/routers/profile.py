@@ -23,6 +23,7 @@ from ..runtime import CAN_CONTROL, NotFound
 from ..schemas import (
     GitHubDeviceOut,
     GitHubDeviceStart,
+    GitHubRepoOut,
     GitHubTokenIn,
     HarnessApiKeyIn,
     HarnessLoginCode,
@@ -162,6 +163,26 @@ async def _pick_login_server(
     return online[0]
 
 
+def _get_login_session(session_id: str) -> login.LoginSession:
+    """`login.get`, translated into the 404 a caller should see.
+
+    A restart (including the one docker-compose.update.yml exists to
+    support) silently drops every sign-in in flight; without this, the user
+    just sees a generic "no such sign-in" with no hint that it was not their
+    mistake.
+    """
+    try:
+        session = login.get(session_id)
+    except login.SessionLostToRestart as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="Sign-in session lost, likely due to a server restart — please try again.",
+        ) from exc
+    if session is None:
+        raise HTTPException(status_code=404, detail="No such sign-in.")
+    return session
+
+
 def _login_out(session: login.LoginSession) -> HarnessLoginOut:
     # The pane is only useful once something is happening; sending it during
     # the URL step would just be noise.
@@ -248,9 +269,7 @@ async def poll_harness_login(
     made here rather than in a long-lived request. Each poll does one bounded
     check and returns.
     """
-    session = login.get(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="No such sign-in.")
+    session = _get_login_session(session_id)
 
     if session.state == "verifying":
         harness = get_harness(session.harness_kind)
@@ -275,9 +294,7 @@ async def submit_harness_code(
     payload: HarnessLoginCode, principal: Principal = Depends(current_principal)
 ) -> HarnessLoginOut:
     """Hand the pasted code to the waiting flow, then store what it produced."""
-    session = login.get(payload.session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="No such sign-in.")
+    session = _get_login_session(payload.session_id)
 
     try:
         target = await runtime.load_server_target(
@@ -465,6 +482,36 @@ async def disconnect_github(
 async def github_device_available() -> dict[str, bool]:
     """Whether the device flow is configured, so the UI can hide it if not."""
     return {"device_flow": bool(get_settings().moonphase_github_client_id)}
+
+
+@router.get("/github/repos", response_model=list[GitHubRepoOut])
+async def list_github_repos(
+    org_id: UUID | None = None, principal: Principal = Depends(current_principal)
+) -> list[GitHubRepoOut]:
+    resolved = await _resolve_org(principal, org_id)
+    async with service_session() as conn:
+        row = await queries.get_vcs_credential_privileged(conn, resolved, "github")
+    if row is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Connect GitHub in Settings → Accounts before picking a repository.",
+        )
+
+    try:
+        repos = await github.list_repos(row["token"])
+    except github.GitHubError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return [
+        GitHubRepoOut(
+            full_name=repo.full_name,
+            clone_url=repo.clone_url,
+            private=repo.private,
+            description=repo.description,
+            pushed_at=repo.pushed_at,
+        )
+        for repo in repos
+    ]
 
 
 # Re-exported for the app factory.

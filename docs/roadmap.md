@@ -1,6 +1,6 @@
 # Roadmap
 
-!!! info "v0.6.1 is released"
+!!! info "v0.7.0 is released"
     The first tagged release, numbered to match the milestones below rather than
     starting again from 0.1 — the work through v0.5 was done long before there
     was a tag on any of it.
@@ -50,7 +50,7 @@ running.
 - [ ] **Session health reconciliation.** The monitor already detects a stopped
       container; it should write that back to `projects.status` so a rebooted
       server does not leave the UI lying.
-- [ ] **WebSocket auth tickets.** Replace the token query parameter with a
+- [x] **WebSocket auth tickets.** Replaced the token query parameter with a
       short-lived single-use ticket, so access tokens stop landing in logs.
 
 ## v0.3 — zrok previews

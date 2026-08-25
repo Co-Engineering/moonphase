@@ -84,6 +84,26 @@ def check_secret_key() -> Finding | None:
     return None
 
 
+def check_cors() -> Finding | None:
+    """A wildcard origin plus credentialed requests is not what it looks like.
+
+    The CORS spec forbids `Access-Control-Allow-Origin: *` alongside
+    `Access-Control-Allow-Credentials: true`, so when asked for both,
+    Starlette reflects whatever `Origin` header the request sent instead of
+    rejecting it or erroring. Credentials are always on here (main.py), so a
+    literal `*` silently grants every origin credentialed access to the API.
+    """
+    if "*" in get_settings().cors_origins:
+        return Finding(
+            fatal=True,
+            summary='MOONPHASE_CORS_ORIGINS includes "*", which is not a valid value.',
+            fix="Credentialed requests are always enabled, so a wildcard origin is "
+            "silently reflected back for every caller instead of being rejected. "
+            "List the exact origin(s) that should be allowed, comma-separated.",
+        )
+    return None
+
+
 async def check_database() -> Finding | None:
     """Reachable, and carrying the schema this version expects."""
     last: Exception | None = None
@@ -201,7 +221,7 @@ async def run() -> list[Finding]:
     """
     findings: list[Finding] = []
 
-    for finding in (check_secret_key(), check_monitor(), check_push()):
+    for finding in (check_secret_key(), check_cors(), check_monitor(), check_push()):
         if finding is not None:
             findings.append(finding)
 

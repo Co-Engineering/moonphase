@@ -27,6 +27,11 @@ log = logging.getLogger(__name__)
 DEVICE_CODE_URL = "https://github.com/login/device/code"
 ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
 USER_URL = "https://api.github.com/user"
+REPOS_URL = "https://api.github.com/user/repos"
+
+# Enough for almost anyone; a hard stop so a token on an org with thousands of
+# repos can't turn one request into an unbounded fetch loop.
+_REPOS_MAX_PAGES = 5
 
 # repo: clone and push private repositories. read:org: resolve org-owned repos.
 # workflow: let the agent edit .github/workflows, which it otherwise cannot.
@@ -52,6 +57,15 @@ class GitHubIdentity:
     token: str
     account: str | None
     scopes: str
+
+
+@dataclass
+class GitHubRepo:
+    full_name: str
+    clone_url: str
+    private: bool
+    description: str | None
+    pushed_at: str | None
 
 
 @dataclass
@@ -162,6 +176,54 @@ async def account_for(token: str) -> str | None:
         return response.json().get("login")
     except httpx.HTTPError:
         return None
+
+
+def _next_page_url(response: httpx.Response) -> str | None:
+    """The `rel="next"` target from a paginated response's `Link` header."""
+    for part in response.headers.get("link", "").split(","):
+        segment = part.strip()
+        if segment.endswith('rel="next"'):
+            return segment.split(";", 1)[0].strip("<> ")
+    return None
+
+
+async def list_repos(token: str) -> list[GitHubRepo]:
+    """Every repo the token can see, most-recently-pushed first.
+
+    Includes the account's own repos plus anything it collaborates on or has
+    through an organization — the same reach the account already has when a
+    URL is pasted by hand, just enumerated instead of typed.
+    """
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+    }
+    url: str | None = (
+        f"{REPOS_URL}?sort=pushed&direction=desc&per_page=100"
+        "&affiliation=owner,collaborator,organization_member"
+    )
+    repos: list[GitHubRepo] = []
+    async with httpx.AsyncClient(timeout=20) as client:
+        for _ in range(_REPOS_MAX_PAGES):
+            if url is None:
+                break
+            response = await client.get(url, headers=headers)
+            if response.status_code >= 300:
+                raise GitHubError(f"Could not list repositories: {response.text[:200]}")
+            for repo in response.json():
+                repos.append(
+                    GitHubRepo(
+                        full_name=repo["full_name"],
+                        clone_url=repo["clone_url"],
+                        private=repo["private"],
+                        description=repo.get("description"),
+                        pushed_at=repo.get("pushed_at"),
+                    )
+                )
+            url = _next_page_url(response)
+        if url is not None:
+            log.warning("GitHub repo list truncated at %d pages", _REPOS_MAX_PAGES)
+    return repos
 
 
 async def verify_token(token: str) -> GitHubIdentity:
