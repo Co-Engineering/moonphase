@@ -22,7 +22,8 @@ Implemented:
 - Add a server with three SSH trust modes (password bootstrap, Moonphase-managed key,
   bring-your-own key), Docker probe and optional install
 - Create a project → dedicated container + named volumes, optional `git clone`
-- Claude Code launched in `tmux`, attached over a WebSocket PTY bridge into xterm.js
+- Claude Code, OpenCode or Pydantic AI launched in `tmux`, attached over a WebSocket
+  PTY bridge into xterm.js
 - Global sign-in and settings: connect Claude Code and GitHub once, every project uses it
 - User-definable environments — base image plus setup commands, built on the server
 - Automatic port detection and preview tunnels; nothing is ever declared
@@ -33,8 +34,10 @@ Implemented:
 - Share a server or a project with one person, by email, as a viewer or a collaborator
 - Desktop app for Linux, macOS and Windows, installed with one command
 
-Not yet: zrok tunnels (previews are reachable from the backend host today), OpenCode,
-organization invites and role management UI.
+Not yet: zrok tunnels (previews are reachable from the backend host today), a
+transcript feed for OpenCode or Pydantic AI (neither writes the format it reads, so
+those sessions show the terminal and nothing else), organization invites and role
+management UI.
 
 ## Installing it on a server
 
