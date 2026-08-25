@@ -52,6 +52,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # process, because a container that exits with a reason in its logs is far
     # easier to diagnose than one that serves 500s.
     await preflight.run()
+    # Hand the stored sign-in methods to the auth container on the way up.
+    #
+    # This used to happen only when somebody saved the settings screen, so the
+    # generated file existed solely as a side effect of a visit to it. An
+    # instance whose volume was repaired, or restored from a backup that did
+    # not include it, kept serving whatever the auth container started with
+    # until someone thought to open that screen and press Save.
+    #
+    # Failures are logged and recorded rather than fatal: not being able to
+    # write it is a reason to say so on the settings screen, not a reason to
+    # refuse to start.
+    try:
+        await setup.publish_auth_config()
+    except Exception:  # noqa: BLE001 - starting matters more than this
+        log.warning("could not publish the auth configuration on startup", exc_info=True)
     # Notifications only mean anything if something is watching while no
     # client is open, which is exactly when they matter.
     monitor.start()

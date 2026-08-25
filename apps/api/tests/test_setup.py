@@ -701,3 +701,63 @@ def test_a_successful_handoff_clears_an_earlier_failure() -> None:
     finally:
         authconfig.CONFIG_PATH = was
         setup_router._handoff_error = original
+
+
+def test_the_auth_configuration_is_published_on_startup() -> None:
+    """Otherwise the generated file exists only as a side effect of somebody
+    visiting the settings screen.
+
+    That is what made the volume repair incomplete: fixing the ownership let
+    the API write the file, but nothing asked it to until the next save. An
+    instance restored from a backup that did not include the volume had the
+    same gap, silently serving whatever the auth container started with.
+
+    The lifespan is actually run here, with what it starts stubbed out. An
+    earlier version of this test looked for the call in the function's source,
+    which passes just as happily when the name appears in a comment.
+    """
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from moonphase import main
+
+    published = AsyncMock(return_value=["password"])
+
+    async def enter_startup() -> None:
+        with (
+            patch.object(main.preflight, "run", AsyncMock()),
+            patch.object(main.monitor, "start", MagicMock()),
+            patch.object(main.setup, "publish_auth_config", published),
+        ):
+            started = main.lifespan(MagicMock())
+            await started.__aenter__()
+
+    asyncio.run(enter_startup())
+
+    published.assert_awaited_once()
+
+
+def test_a_failure_to_publish_does_not_stop_the_api_starting() -> None:
+    """Being unable to hand the configuration over is a reason to say so on the
+    settings screen, not a reason to refuse to serve. An instance that will not
+    start cannot be used to fix the reason it will not start."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from moonphase import main
+
+    async def enter_startup() -> None:
+        with (
+            patch.object(main.preflight, "run", AsyncMock()),
+            patch.object(main.monitor, "start", MagicMock()),
+            patch.object(
+                main.setup,
+                "publish_auth_config",
+                AsyncMock(side_effect=OSError("read-only file system")),
+            ),
+        ):
+            started = main.lifespan(MagicMock())
+            # Getting through this at all is the assertion.
+            await started.__aenter__()
+
+    asyncio.run(enter_startup())
