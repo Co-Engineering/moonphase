@@ -58,6 +58,15 @@ the fields it needs:
 There are one-click templates for the common ones, because nobody should have to remember
 `@modelcontextprotocol/server-filesystem` from memory.
 
+!!! tip "Verifying UI changes in a real browser"
+    The **Browser** template adds `@playwright/mcp` in headless mode — no `DISPLAY`
+    needed, and no e2e setup to write. It only works in a project created on the
+    **Debian 12 + browser tools** [environment](environments.md), which is the one
+    that actually has Chromium installed; the default environments don't carry a
+    browser, so the template alone gets you a command that fails to launch on
+    everything else. An existing project can switch by recreating its container on
+    that environment, same as any other environment change.
+
 !!! tip "Secrets belong in Workspace"
     Values you put in an MCP server's environment are written into the container as
     written. Anything secret belongs in **Settings → Workspace → Environment variables**,

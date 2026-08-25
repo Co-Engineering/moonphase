@@ -38,6 +38,20 @@ class Environment:
         return imagebuild.image_tag(self.key, self.base_image, self.setup_script)
 
 
+# Headless Chromium needs no Xvfb/DISPLAY — just the browser binary and its
+# shared libraries, which `playwright install --with-deps` handles for a
+# supported base rather than this hand-maintaining an apt package list. The
+# browser goes to a fixed, world-readable path (rather than the default
+# ~/.cache/ms-playwright) because this script runs as root before the `dev`
+# user in imagebuild.py's recipe even exists — the Browser MCP template
+# points PLAYWRIGHT_BROWSERS_PATH at the same path.
+_BROWSER_SETUP_SCRIPT = """
+set -eux
+mkdir -p /opt/playwright-browsers
+PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers npx -y playwright install --with-deps chromium
+chmod -R a+rX /opt/playwright-browsers
+""".strip()
+
 BUILTINS: tuple[Environment, ...] = (
     Environment(
         key="debian",
@@ -62,6 +76,17 @@ BUILTINS: tuple[Environment, ...] = (
         display_name="Node 22",
         description="Debian with Node and npm already installed.",
         base_image="node:22-bookworm",
+    ),
+    Environment(
+        key="browser",
+        display_name="Debian 12 + browser tools",
+        description=(
+            "Debian with headless Chromium pre-installed, for an agent that needs "
+            "to render or screenshot a page rather than just curl it. Add the "
+            "Browser template under Settings → Claude → MCP servers to use it."
+        ),
+        base_image="debian:bookworm-slim",
+        setup_script=_BROWSER_SETUP_SCRIPT,
     ),
 )
 
