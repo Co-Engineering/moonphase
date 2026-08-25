@@ -263,6 +263,12 @@ class SessionCreateIn(BaseModel):
     # Optional: left out, the name is derived from who is asking, which is now
     # the useful default because names identify people in a shared project.
     name: str | None = Field(default=None, max_length=48)
+    # Optional: which branch the session's worktree should start from. Only
+    # matters the first time a session by this name is created — a branch
+    # already on disk from an earlier session of the same name is resumed as
+    # it is, not rebased onto this. Left out, it starts from whatever
+    # `/workspace` itself is on, same as before this existed.
+    branch: str | None = Field(default=None, max_length=255)
 
 
 class TranscriptEventOut(BaseModel):
