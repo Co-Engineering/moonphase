@@ -592,9 +592,16 @@ export const api = {
 
 /** Live feed socket. Falls back to `api.feed` polling if this cannot open. */
 export async function feedUrl(projectId: string, session?: string) {
-  const token = await accessToken()
+  // A ticket rather than the access token, for the same reason the terminal
+  // uses one: a query parameter lands in every proxy's access log, and this
+  // socket opens on every project you look at — so it was the token that
+  // leaked most often, not the terminal's. See tickets.py.
+  const { ticket } = await request<{ ticket: string }>(
+    `/api/projects/${projectId}/sessions/ticket`,
+    { method: 'POST' },
+  )
   const base = currentHost().replace(/^http/, 'ws')
-  const params = new URLSearchParams({ token: token ?? '' })
+  const params = new URLSearchParams({ ticket })
   if (session) params.set('session', session)
   return `${base}/ws/projects/${projectId}/feed?${params}`
 }
