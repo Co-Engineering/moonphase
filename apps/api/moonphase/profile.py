@@ -140,6 +140,16 @@ async def apply(
     for path, contents in harness.profile_files(profile, space).items():
         await write_file(conn, container, path, contents, mode="600")
 
+    # Some profile-owned settings (e.g. Claude Code's MCP servers) live inside
+    # a file the harness also mutates on its own, so it is read first and only
+    # the profile's keys are merged in rather than overwritten wholesale.
+    merge_target = harness.profile_file_target(space)
+    if merge_target is not None:
+        existing = await read_file(conn, container, merge_target)
+        merged = harness.merge_into_profile_file(existing, profile)
+        if merged is not None:
+            await write_file(conn, container, merge_target, merged, mode="600")
+
     # --- harness credentials ------------------------------------------------
     if profile.harness_credential is not None:
         for path, contents in harness.credential_files(

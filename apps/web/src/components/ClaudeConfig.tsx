@@ -492,7 +492,8 @@ export function McpEditor({ value, onChange }: SettingsProps) {
     <div className="config-editor">
       <div className="config-head">
         <span>
-          Written to <code>~/.claude/.mcp.json</code> in every session
+          Written to the <code>mcpServers</code> key of <code>~/.claude.json</code> in
+          every session
         </span>
         <button className="ghost small" onClick={() => setRaw(true)}>
           Edit as JSON
