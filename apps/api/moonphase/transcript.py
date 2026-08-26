@@ -68,6 +68,10 @@ class TranscriptEvent:
     added: int = 0
     removed: int = 0
     truncated: bool = False
+    # A tool result carrying an image — a screenshot from a browser MCP
+    # server, most often — as base64, ready for an <img data:> src.
+    image_media_type: str | None = None
+    image_data: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

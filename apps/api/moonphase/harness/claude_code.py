@@ -78,6 +78,29 @@ def _result_excerpt(content: Any) -> str:
     return " ".join(" ".join(lines[:3]).split())[:200]
 
 
+def _result_image(content: Any) -> tuple[str, str] | None:
+    """The first base64 image in a tool result, as (media_type, data).
+
+    A browser MCP server's screenshot tool comes back this way — the same
+    shape the model itself is shown, which is why recording it verbatim in
+    the transcript is enough to let a person watch along with no separate
+    capture path of our own.
+    """
+    if not isinstance(content, list):
+        return None
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "image":
+            continue
+        source = block.get("source")
+        if not isinstance(source, dict) or source.get("type") != "base64":
+            continue
+        data = source.get("data")
+        media_type = source.get("media_type")
+        if isinstance(data, str) and data and isinstance(media_type, str):
+            return media_type, data
+    return None
+
+
 def _attach_diff(event: Any, name: str, tool_input: Any) -> None:
     """Give an edit its change, so it can be judged without opening the file.
 
@@ -290,19 +313,24 @@ class ClaudeCode(Harness):
                 events.append(event)
             elif block_type == "tool_result":
                 is_error = bool(block.get("is_error"))
-                excerpt = _result_excerpt(block.get("content"))
-                # A successful result is usually noise; an error never is.
-                if is_error or excerpt:
-                    events.append(
-                        TranscriptEvent(
-                            id=block_id,
-                            kind="result",
-                            text=excerpt,
-                            ok=not is_error,
-                            at=at,
-                            sidechain=sidechain,
-                        )
+                result_content = block.get("content")
+                excerpt = _result_excerpt(result_content)
+                image = _result_image(result_content)
+                # A successful result is usually noise; an error never is,
+                # and an image is the point even when the call itself
+                # "succeeded" with nothing to say.
+                if is_error or excerpt or image:
+                    event = TranscriptEvent(
+                        id=block_id,
+                        kind="result",
+                        text=excerpt,
+                        ok=not is_error,
+                        at=at,
+                        sidechain=sidechain,
                     )
+                    if image:
+                        event.image_media_type, event.image_data = image
+                    events.append(event)
 
         return events
 

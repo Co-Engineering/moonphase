@@ -121,6 +121,63 @@ def test_failed_tool_results_are_kept_and_marked() -> None:
     assert "No such file" in events[0].text
 
 
+def test_a_screenshot_tool_result_carries_its_image() -> None:
+    """A browser MCP server's screenshot comes back as a base64 image block —
+    the same thing the model itself is shown — and that is reason enough on
+    its own to keep the result, even though nothing failed and there is no
+    text to excerpt."""
+    events = CLAUDE.parse_transcript_record(
+        record(
+            type="user",
+            message={
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "is_error": False,
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": "aGVsbG8=",
+                                },
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+    )
+    assert len(events) == 1
+    assert events[0].kind == "result"
+    assert events[0].ok is True
+    assert events[0].image_media_type == "image/png"
+    assert events[0].image_data == "aGVsbG8="
+
+
+def test_a_successful_result_with_no_image_and_no_text_is_dropped() -> None:
+    events = CLAUDE.parse_transcript_record(
+        record(
+            type="user",
+            message={
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "is_error": False,
+                        "content": "",
+                    }
+                ],
+            },
+        )
+    )
+    assert events == []
+
+
 def test_bookkeeping_records_are_ignored() -> None:
     """Transcripts carry a lot that nobody wants to read."""
     for kind in (
