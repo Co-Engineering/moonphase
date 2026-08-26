@@ -33,7 +33,10 @@ log = logging.getLogger(__name__)
 # Bump when the recipe below changes in a way that should rebuild every image.
 # v4 added OpenCode and the Pydantic AI coder agent: an image built before it
 # has neither binary, and a project set to one of those would launch nothing.
-RECIPE_VERSION = "4"
+# v5 added the xclip shim: an image built before it has no bridge for the
+# browser's clipboard, so pasting an image into the harness silently does
+# nothing instead of attaching it.
+RECIPE_VERSION = "5"
 
 NODE_VERSION = "22.20.0"
 
@@ -68,6 +71,41 @@ set  -g  status-right " #{session_name} \\u00b7 %H:%M "
 set  -g  status-left-length 30
 """
 
+# Stands in for xclip so the harness's own clipboard-image paste works in a
+# container with no X server and no real OS clipboard. Kept in sync by hand
+# with infra/images/claude/xclip-shim.sh — see the comment there for how it
+# fits together with sessions.stage_clipboard_image and Terminal.tsx.
+XCLIP_SHIM = """#!/bin/sh
+set -eu
+
+stage="$HOME/.moonphase-clipboard/image.png"
+want_targets=0
+want_png=0
+prev=""
+for arg in "$@"; do
+  case "$prev $arg" in
+    "-t TARGETS") want_targets=1 ;;
+    "-t image/png") want_png=1 ;;
+  esac
+  prev=$arg
+done
+
+[ -f "$stage" ] || exit 1
+
+if [ "$want_targets" = 1 ]; then
+  echo "image/png"
+  exit 0
+fi
+
+if [ "$want_png" = 1 ]; then
+  cat "$stage"
+  rm -f "$stage"
+  exit 0
+fi
+
+exit 1
+"""
+
 
 def _recipe(base_image: str, setup_script: str | None) -> str:
     """The full Dockerfile for an environment.
@@ -79,6 +117,7 @@ def _recipe(base_image: str, setup_script: str | None) -> str:
     packages = " ".join(BASE_PACKAGES)
     extra = (setup_script or "").strip()
     tmux_conf_b64 = base64.b64encode(TMUX_CONF.encode()).decode()
+    xclip_shim_b64 = base64.b64encode(XCLIP_SHIM.encode()).decode()
 
     extra_step = ""
     if extra:
@@ -197,6 +236,12 @@ RUN (userdel -r ubuntu 2>/dev/null || true); \\
 RUN set -eux; \\
     echo {tmux_conf_b64} | base64 -d > /home/dev/.tmux.conf; \\
     chown dev:dev /home/dev/.tmux.conf
+
+# Lets the harness's own clipboard-image paste work with no X server and no
+# real OS clipboard in the container.
+RUN set -eux; \\
+    echo {xclip_shim_b64} | base64 -d > /usr/local/bin/xclip; \\
+    chmod +x /usr/local/bin/xclip
 
 USER dev
 WORKDIR /workspace

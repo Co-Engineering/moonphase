@@ -164,6 +164,32 @@ async def write_upload(
     result.check(f"Writing {path} into {container}")
 
 
+CLIPBOARD_STAGE_DIR = ".moonphase-clipboard"
+
+
+async def stage_clipboard_image(
+    conn: asyncssh.SSHClientConnection,
+    container: str,
+    space: SessionSpace,
+    image_base64: str,
+) -> None:
+    """Drop a browser-pasted image where the in-container xclip shim can find it.
+
+    The harness shells out to `xclip` to read an image off "the" clipboard
+    (see infra/images/claude/xclip-shim.sh); this is what makes that call find
+    something. Staged under the session's own HOME so two sessions sharing a
+    container never see each other's pastes, and over base64 stdin so the
+    image never touches the host's disk, same as `_write_file`.
+    """
+    directory = shlex.quote(f"{space.home}/{CLIPBOARD_STAGE_DIR}")
+    command = (
+        f"docker exec -i -u dev {shlex.quote(container)} sh -c "
+        + shlex.quote(f"mkdir -p {directory} && base64 -d > {directory}/image.png")
+    )
+    result = await ssh.run(conn, command, timeout=30, stdin=image_base64)
+    result.check(f"Staging a pasted image into {container}")
+
+
 async def ensure_home(
     conn: asyncssh.SSHClientConnection, container: str, space: SessionSpace
 ) -> None:

@@ -40,6 +40,12 @@ READ_CHUNK = 65536
 # but never let a missing marker stall the terminal.
 MARKER_TIMEOUT_SECONDS = 5.0
 
+# Generous for a screenshot, absurd for anything this pty bridge should ever
+# be asked to carry. A cap here is cheap insurance against a client shipping
+# something enormous through a channel that was never meant to be a file
+# upload.
+MAX_CLIPBOARD_IMAGE_BASE64 = 15_000_000
+
 
 async def _consume_tty_marker(
     process: asyncssh.SSHClientProcess,
@@ -97,6 +103,9 @@ async def _pump_input(
     websocket: WebSocket,
     *,
     writable: bool = True,
+    conn_ssh: asyncssh.SSHClientConnection | None = None,
+    container: str | None = None,
+    space: sessions.SessionSpace | None = None,
 ) -> None:
     """Client → remote stdin, plus out-of-band control messages.
 
@@ -141,6 +150,17 @@ async def _pump_input(
         elif kind == "input":
             if writable:
                 process.stdin.write(str(control.get("data", "")).encode())
+        elif kind == "clipboard-image":
+            # Staged *before* returning, so the paste keystroke this message
+            # is always sent just ahead of (see Terminal.tsx) cannot reach the
+            # harness's own clipboard read before the file it is looking for
+            # exists. The single-threaded receive loop is what makes that
+            # ordering a guarantee rather than a race.
+            if writable and conn_ssh is not None and container is not None and space is not None:
+                data = control.get("data")
+                if isinstance(data, str) and data and len(data) <= MAX_CLIPBOARD_IMAGE_BASE64:
+                    with contextlib.suppress(SSHError):
+                        await sessions.stage_clipboard_image(conn_ssh, container, space, data)
         elif kind == "ping":
             await websocket.send_text(json.dumps({"type": "pong"}))
 
@@ -324,7 +344,14 @@ async def project_terminal(
 
     output_task = asyncio.create_task(_pump_output(process, websocket))
     input_task = asyncio.create_task(
-        _pump_input(process, websocket, writable=writable)
+        _pump_input(
+            process,
+            websocket,
+            writable=writable,
+            conn_ssh=conn_ssh,
+            container=ctx.container,
+            space=space,
+        )
     )
 
     try:

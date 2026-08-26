@@ -95,6 +95,12 @@ RUN userdel -r ubuntu 2>/dev/null || true; \
 
 COPY --chown=dev:dev tmux.conf /home/dev/.tmux.conf
 
+# Lets the harness's own clipboard-image paste (it shells out to xclip; see
+# xclip-shim.sh) work in a container that has neither an X server nor a real
+# OS clipboard.
+COPY xclip-shim.sh /usr/local/bin/xclip
+RUN chmod +x /usr/local/bin/xclip
+
 USER dev
 WORKDIR /workspace
 

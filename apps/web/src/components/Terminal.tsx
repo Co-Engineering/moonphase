@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { terminalUrl } from '../lib/api'
+import { copyText } from '../lib/clipboard'
 
 type Status = 'connecting' | 'attached' | 'disconnected' | 'error'
 
@@ -12,6 +13,21 @@ type Status = 'connecting' | 'attached' | 'disconnected' | 'error'
 // half-open until some lengthy OS-level TCP timeout, if that ever comes. A
 // heartbeat forces detection well before that.
 const HEARTBEAT_INTERVAL_MS = 10_000
+
+/** Re-encodes any pasted image as PNG — the one format the in-container xclip
+ * shim (see infra/images/claude/xclip-shim.sh) knows how to hand back. */
+async function imageBlobToPngBase64(blob: Blob): Promise<string> {
+  const bitmap = await createImageBitmap(blob)
+  const canvas = document.createElement('canvas')
+  canvas.width = bitmap.width
+  canvas.height = bitmap.height
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('2D canvas unavailable')
+  ctx.drawImage(bitmap, 0, 0)
+  bitmap.close()
+  const dataUrl = canvas.toDataURL('image/png')
+  return dataUrl.slice(dataUrl.indexOf(',') + 1)
+}
 
 interface Props {
   projectId: string
@@ -66,6 +82,9 @@ export function ProjectTerminal({
 
   useEffect(() => {
     if (!hostRef.current) return
+    // Captured once: React can null the ref before this effect's cleanup
+    // runs, but the DOM node it pointed to is still the one to unhook from.
+    const host = hostRef.current
     disposedRef.current = false
 
     const term = new Terminal({
@@ -95,7 +114,37 @@ export function ProjectTerminal({
     const fit = new FitAddon()
     term.loadAddon(fit)
     term.loadAddon(new WebLinksAddon())
-    term.open(hostRef.current)
+
+    /**
+     * tmux's mouse mode (tmux.conf: `set -g mouse on`) is what makes a
+     * click-drag highlight text at all: it owns the mouse, runs its own
+     * copy-mode selection, and on release copies the highlight into its
+     * buffer — which is why the highlight vanishes the moment you let go,
+     * with or without this handler. By default tmux also reports that copy
+     * back out via an OSC 52 escape sequence, so the browser is the only
+     * side missing a handler for it. Without one, xterm.js just drops the
+     * sequence and the text never reaches the system clipboard.
+     */
+    const clipboardHandler = term.parser.registerOscHandler(52, (data) => {
+      const separator = data.indexOf(';')
+      if (separator === -1) return true
+      const targets = data.slice(0, separator)
+      const payload = data.slice(separator + 1)
+      // "?" is a request to read the clipboard back into the pane. Silently
+      // declined: browsers gate reads behind a user gesture we don't have
+      // here, and honouring reads at all would let anything running in the
+      // session sniff the clipboard on a whim.
+      if (payload === '?' || !targets.includes('c')) return true
+      try {
+        const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0))
+        void copyText(new TextDecoder().decode(bytes))
+      } catch {
+        // Malformed payload — nothing sane to copy.
+      }
+      return true
+    })
+
+    term.open(host)
 
     /**
      * FitAddon reads the renderer's `dimensions`, which do not exist until the
@@ -260,6 +309,53 @@ export function ProjectTerminal({
       }
     })
 
+    /**
+     * The harness's own image paste shells out to the OS clipboard, which
+     * this container does not have — see xclip-shim.sh for the other half of
+     * this. Only image data changes anything here: a plain text paste is
+     * left alone and reaches xterm's own paste handling exactly as before.
+     *
+     * Ordering matters. The staged image must land in the container before
+     * the paste that makes the harness go looking for it, so the default
+     * (synchronous) paste is suppressed and replayed manually through
+     * `term.paste()` once staging is confirmed sent — both then go out over
+     * the one WebSocket in that order, and the server's single-threaded
+     * receive loop (see terminal.py) preserves it the rest of the way.
+     */
+    const onPaste = (event: ClipboardEvent) => {
+      if (readOnlyRef.current) {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        refusedRef.current?.()
+        return
+      }
+      const items = event.clipboardData?.items
+      const imageItem = items && Array.from(items).find((item) => item.type.startsWith('image/'))
+      if (!imageItem) return
+
+      const file = imageItem.getAsFile()
+      const fallbackText = event.clipboardData?.getData('text/plain') ?? ''
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      if (!file) return
+
+      void (async () => {
+        try {
+          const base64 = await imageBlobToPngBase64(file)
+          const socket = socketRef.current
+          if (socket?.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'clipboard-image', data: base64 }))
+          }
+        } catch {
+          // Nothing sane to stage — the harness still gets whatever paste
+          // would otherwise have happened, below.
+        } finally {
+          term.paste(fallbackText)
+        }
+      })()
+    }
+    host.addEventListener('paste', onPaste, { capture: true })
+
     // Fitting inside the observer callback resizes the element the observer
     // watches, which the browser reports as "loop completed with undelivered
     // notifications". Deferring a frame breaks that cycle.
@@ -268,7 +364,7 @@ export function ProjectTerminal({
       cancelAnimationFrame(fitFrame)
       fitFrame = requestAnimationFrame(safeFit)
     })
-    observer.observe(hostRef.current)
+    observer.observe(host)
 
     void connect()
 
@@ -280,8 +376,10 @@ export function ProjectTerminal({
       document.removeEventListener('visibilitychange', onVisible)
       cancelAnimationFrame(fitFrame)
       observer.disconnect()
+      host.removeEventListener('paste', onPaste, { capture: true })
       onData.dispose()
       onResize.dispose()
+      clipboardHandler.dispose()
       socketRef.current?.close()
 
       // Dispose on the next macrotask rather than inline. xterm's Viewport
