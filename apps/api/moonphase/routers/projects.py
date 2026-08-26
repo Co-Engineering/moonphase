@@ -599,10 +599,10 @@ async def _prepare_space(
 
 
 async def _profile_or_409(
-    principal: Principal, ctx: runtime.ProjectContext
+    principal: Principal, ctx: runtime.ProjectContext, session: str | None = None
 ) -> Any:
     profile = await runtime.load_session_profile(
-        principal.claims, ctx.project, ctx.harness
+        principal.claims, ctx.project, ctx.harness, session
     )
     if not profile.has_harness_auth:
         harness_name = harness_registry.get(ctx.harness).display_name
@@ -716,7 +716,6 @@ async def create_session(
         existing = await queries.get_sessions(conn, project_id)
     taken = {str(row["tmux_session"]) for row in existing}
 
-    profile = await _profile_or_409(principal, ctx)
     conn_ssh = await _start_container(ctx)
 
     requested = payload.name if payload and payload.name else None
@@ -733,6 +732,12 @@ async def create_session(
         # instead of quietly resuming whoever's session this name last was.
         also_avoid = await workspaces.existing_branch_names(conn_ssh, ctx.container)
         name = _session_name_for(principal, taken, also_avoid)
+
+    # After the name is settled, because the profile now carries this
+    # session's own configuration layer and there is no session without a
+    # name to ask about. No row exists yet, so only the org and project
+    # layers can contribute here.
+    profile = await _profile_or_409(principal, ctx, name)
 
     requested_branch = payload.branch if payload and payload.branch else None
     space, workdir, branch = await _prepare_space(
@@ -814,6 +819,8 @@ async def start_session(
         conn_ssh = await _start_container(ctx)
         also_avoid = await workspaces.existing_branch_names(conn_ssh, ctx.container)
         name = _session_name_for(principal, taken, also_avoid)
+
+    profile = await _profile_or_409(principal, ctx, name)
 
     # A session's home and checkout are fixed when it is created. Moving a
     # running one would point it at a directory its harness has never seen and

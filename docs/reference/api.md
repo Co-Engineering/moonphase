@@ -65,6 +65,7 @@ own configuration at runtime rather than having it baked into the bundle.
 | `GET` | `/api/projects/{project_id}/logs` | Container logs |
 | `GET`, `POST` | `/api/projects/{project_id}/shares` | List, grant |
 | `PATCH`, `DELETE` | `/api/projects/{project_id}/shares/{share_id}` | Change role, revoke |
+| `GET`, `PUT` | `/api/projects/{project_id}/config` | Claude settings, MCP, CLAUDE.md, skills — applies to every session in this project |
 
 ## Sessions
 
@@ -79,6 +80,7 @@ own configuration at runtime rather than having it baked into the bundle.
 | `GET` | `/api/projects/{project_id}/sessions/snapshot` | Plain-text pane capture |
 | `POST` | `/api/projects/{project_id}/sessions/{name}/detach-clients` | Drop stale tmux clients |
 | `POST` | `/api/projects/{project_id}/sessions/ticket` | Mint a WebSocket ticket (below) |
+| `GET`, `PUT` | `/api/projects/{project_id}/sessions/{name}/config` | Same, scoped to one session — its owner, or a project admin, only |
 
 The live terminal is a WebSocket, not one of these. A browser cannot set
 headers on the handshake, so proof of identity travels in the query string —
@@ -151,7 +153,7 @@ preview work against an instance running somewhere else — see
 
 | Method | Path | Purpose |
 | ------ | ---- | ------- |
-| `GET`, `PUT` | `/api/profile` | Claude settings, MCP, CLAUDE.md, env vars, git identity |
+| `GET`, `PUT` | `/api/profile` | Claude settings, MCP, CLAUDE.md, skills, env vars, git identity |
 | `POST` | `/api/profile/harness/api-key` | Store an API key |
 | `POST` | `/api/profile/harness/login/start` | Begin subscription sign-in |
 | `GET` | `/api/profile/harness/login/{session_id}` | Poll it |

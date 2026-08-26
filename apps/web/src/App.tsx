@@ -43,6 +43,7 @@ import { openSessionWindow, sessionWindowUrl } from './lib/desktop'
 import { HostDialog } from './components/HostDialog'
 import { RowMenu } from './components/RowMenu'
 import { RenameDialog } from './components/RenameDialog'
+import { ClaudeConfigDialog } from './components/ClaudeConfigDialog'
 
 export function App() {
   const [session, setSession] = useState<AuthSession | null>(null)
@@ -196,6 +197,7 @@ export function App() {
 }
 
 type ShareTarget = { kind: 'servers' | 'projects'; id: string; name: string }
+type ConfigureTarget = { projectId: string; projectName: string; session?: string }
 
 function Shell({ email }: { email: string }) {
   // A session is part of the selection rather than a tab inside a project:
@@ -232,6 +234,7 @@ function Shell({ email }: { email: string }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
   const [shareTarget, setShareTarget] = useState<ShareTarget | null>(null)
+  const [configureTarget, setConfigureTarget] = useState<ConfigureTarget | null>(null)
 
   // Servers are polled: bootstrap and Docker installs finish out of band, and
   // a stale "bootstrapping" chip is the most confusing thing the UI can show.
@@ -469,6 +472,16 @@ function Shell({ email }: { email: string }) {
                       })
                     }
                     onCloseSession={(item) => closeSession(project.id, item.tmux_session)}
+                    onConfigure={(item) =>
+                      setConfigureTarget({ projectId: item.id, projectName: item.name })
+                    }
+                    onConfigureSession={(item) =>
+                      setConfigureTarget({
+                        projectId: project.id,
+                        projectName: project.name,
+                        session: item.tmux_session,
+                      })
+                    }
                   />
                 ))}
             </div>
@@ -512,6 +525,16 @@ function Shell({ email }: { email: string }) {
                     })
                   }
                   onCloseSession={(item) => closeSession(project.id, item.tmux_session)}
+                  onConfigure={(item) =>
+                    setConfigureTarget({ projectId: item.id, projectName: item.name })
+                  }
+                  onConfigureSession={(item) =>
+                    setConfigureTarget({
+                      projectId: project.id,
+                      projectName: project.name,
+                      session: item.tmux_session,
+                    })
+                  }
                 />
               ))}
             </>
@@ -676,6 +699,35 @@ function Shell({ email }: { email: string }) {
           onChanged={reloadAll}
         />
       )}
+      {configureTarget && (
+        <ClaudeConfigDialog
+          title={
+            configureTarget.session
+              ? `Configure ${configureTarget.session} — ${configureTarget.projectName}`
+              : `Configure ${configureTarget.projectName}`
+          }
+          note={
+            configureTarget.session
+              ? 'Applies to this session only, on top of the project and your global settings.'
+              : 'Applies to every session in this project, for everyone who can drive one.'
+          }
+          load={() =>
+            configureTarget.session
+              ? api.sessionConfig(configureTarget.projectId, configureTarget.session)
+              : api.projectConfig(configureTarget.projectId)
+          }
+          save={(input) =>
+            configureTarget.session
+              ? api.saveSessionConfig(
+                  configureTarget.projectId,
+                  configureTarget.session,
+                  input,
+                )
+              : api.saveProjectConfig(configureTarget.projectId, input)
+          }
+          onClose={() => setConfigureTarget(null)}
+        />
+      )}
       {showNewProject && (
         <NewProject
           servers={(servers.data ?? []).filter((s) => canControl(s.access))}
@@ -710,6 +762,8 @@ function ProjectRow({
   onRename,
   onRenameSession,
   onCloseSession,
+  onConfigure,
+  onConfigureSession,
 }: {
   project: Project
   active: boolean
@@ -722,6 +776,8 @@ function ProjectRow({
   onRename?: (project: Project) => void
   onRenameSession?: (session: Session) => void
   onCloseSession?: (session: Session) => void
+  onConfigure?: (project: Project) => void
+  onConfigureSession?: (session: Session) => void
 }) {
   return (
     <>
@@ -775,6 +831,12 @@ function ProjectRow({
               label: 'Rename',
               disabledReason: canControl(project.access) ? undefined : 'view only',
               onSelect: () => onRename?.(project),
+            },
+            {
+              label: 'Configure',
+              detail: 'MCP servers, skills, permissions and CLAUDE.md for this project.',
+              disabledReason: canControl(project.access) ? undefined : 'view only',
+              onSelect: () => onConfigure?.(project),
             },
             {
               label: 'Remove project',
@@ -831,6 +893,16 @@ function ProjectRow({
                 // worktree and branch it derives — stays exactly as created.
                 disabledReason: session.is_mine ? undefined : 'not yours',
                 onSelect: () => onRenameSession?.(session),
+              },
+              {
+                label: 'Configure',
+                detail:
+                  'MCP servers, skills, permissions and CLAUDE.md for this session only.',
+                disabledReason:
+                  session.is_mine || project.access === 'admin'
+                    ? undefined
+                    : "someone else's",
+                onSelect: () => onConfigureSession?.(session),
               },
               {
                 label: 'Close session',

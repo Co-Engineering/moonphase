@@ -7,7 +7,7 @@ import {
   pushSupport,
 } from '../lib/notifications'
 import { InstallPrompt } from '../components/InstallPrompt'
-import { McpEditor, SettingsEditor } from '../components/ClaudeConfig'
+import { ClaudeConfigFields, type ClaudeConfigValue } from '../components/ClaudeConfig'
 import { InstanceTab } from '../components/InstanceTab'
 import { PeopleTab } from '../components/PeopleTab'
 import {
@@ -594,18 +594,21 @@ function HarnessSettingsTab({
   busy: boolean
   run: Runner
 }) {
-  const [settings, setSettings] = useState<string | null>(profile.claude_settings_json)
-  const [claudeMd, setClaudeMd] = useState(profile.claude_md ?? '')
-  const [mcp, setMcp] = useState<string | null>(profile.mcp_json)
-  const [section, setSection] = useState<'settings' | 'mcp' | 'md'>('settings')
+  const [config, setConfig] = useState<ClaudeConfigValue>({
+    claude_settings_json: profile.claude_settings_json,
+    claude_md: profile.claude_md,
+    mcp_json: profile.mcp_json,
+    skills: profile.skills,
+  })
 
   const save = () =>
     run(
       () =>
         api.saveProfile({
-          claude_settings_json: settings,
-          claude_md: claudeMd.trim() || null,
-          mcp_json: mcp,
+          claude_settings_json: config.claude_settings_json,
+          claude_md: config.claude_md?.trim() || null,
+          mcp_json: config.mcp_json,
+          skills: config.skills,
           env_vars: profile.env_vars,
           git_user_name: profile.git_user_name,
           git_user_email: profile.git_user_email,
@@ -615,50 +618,11 @@ function HarnessSettingsTab({
 
   return (
     <>
-      <div className="subtabs" role="tablist">
-        <button
-          role="tab"
-          aria-selected={section === 'settings'}
-          className={section === 'settings' ? 'active' : ''}
-          onClick={() => setSection('settings')}
-        >
-          Permissions &amp; behaviour
-        </button>
-        <button
-          role="tab"
-          aria-selected={section === 'mcp'}
-          className={section === 'mcp' ? 'active' : ''}
-          onClick={() => setSection('mcp')}
-        >
-          MCP servers
-        </button>
-        <button
-          role="tab"
-          aria-selected={section === 'md'}
-          className={section === 'md' ? 'active' : ''}
-          onClick={() => setSection('md')}
-        >
-          CLAUDE.md
-        </button>
-      </div>
-
-      {section === 'settings' && (
-        <SettingsEditor value={settings} onChange={setSettings} />
-      )}
-      {section === 'mcp' && <McpEditor value={mcp} onChange={setMcp} />}
-      {section === 'md' && (
-        <label>
-          <span>
-            Written to <code>~/.claude/CLAUDE.md</code>, so it applies to every project
-          </span>
-          <textarea
-            value={claudeMd}
-            onChange={(e) => setClaudeMd(e.target.value)}
-            placeholder={'# My preferences\n\n- Prefer small, focused commits\n- Never add comments that restate the code'}
-            rows={14}
-          />
-        </label>
-      )}
+      <ClaudeConfigFields
+        value={config}
+        onChange={setConfig}
+        claudeMdHint="Written to ~/.claude/CLAUDE.md, so it applies to every project"
+      />
 
       <div className="actions">
         <button className="primary" disabled={busy} onClick={() => void save()}>
@@ -697,6 +661,7 @@ function WorkspaceTab({
           claude_settings_json: profile.claude_settings_json,
           claude_md: profile.claude_md,
           mcp_json: profile.mcp_json,
+          skills: profile.skills,
           env_vars: env,
           git_user_name: gitName.trim() || null,
           git_user_email: gitEmail.trim() || null,

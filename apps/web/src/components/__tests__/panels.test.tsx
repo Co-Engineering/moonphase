@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Usage, UsageStrip, compact, money, resetLabel, untilLabel } from '../Usage'
-import { McpEditor, SettingsEditor } from '../ClaudeConfig'
+import { ClaudeConfigFields, McpEditor, SettingsEditor, SkillsEditor } from '../ClaudeConfig'
 
 // The API layer refuses to call out without a token, which is correct and
 // nothing to do with what these tests are checking.
@@ -198,5 +198,70 @@ describe('McpEditor', () => {
 
     const written = String(onChange.mock.calls[0][0])
     expect(JSON.parse(written).mcpServers.filesystem.command).toBe('npx')
+  })
+})
+
+describe('SkillsEditor', () => {
+  it('shows a skill by name with its body', () => {
+    const { container } = render(
+      <SkillsEditor value={{ reviewer: '# Reviewer\nBe terse.' }} onChange={vi.fn()} />,
+    )
+
+    expect((screen.getByDisplayValue('reviewer') as HTMLInputElement).value).toBe(
+      'reviewer',
+    )
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    expect(textarea.value).toBe('# Reviewer\nBe terse.')
+  })
+
+  it('adds a new skill without clobbering an existing default name', () => {
+    const onChange = vi.fn()
+    render(<SkillsEditor value={{ 'new-skill': 'first' }} onChange={onChange} />)
+
+    fireEvent.click(screen.getByText('+ Add skill'))
+
+    expect(onChange).toHaveBeenCalledWith({
+      'new-skill': 'first',
+      'new-skill-1': '',
+    })
+  })
+
+  it('removes a skill by name', () => {
+    const onChange = vi.fn()
+    render(
+      <SkillsEditor value={{ a: '1', b: '2' }} onChange={onChange} />,
+    )
+
+    fireEvent.click(screen.getAllByLabelText('Remove skill')[0])
+
+    expect(onChange).toHaveBeenCalledWith({ b: '2' })
+  })
+})
+
+describe('ClaudeConfigFields', () => {
+  it('switches between the four scopes and edits each independently', () => {
+    const onChange = vi.fn()
+    render(
+      <ClaudeConfigFields
+        value={{
+          claude_settings_json: null,
+          claude_md: 'Some instructions',
+          mcp_json: null,
+          skills: {},
+        }}
+        onChange={onChange}
+        claudeMdHint="applies here"
+      />,
+    )
+
+    // Defaults to the permissions tab.
+    expect(screen.getByText('+ Add rule')).toBeTruthy()
+
+    fireEvent.click(screen.getByText('CLAUDE.md'))
+    expect(screen.getByText('applies here')).toBeTruthy()
+    expect(screen.getByDisplayValue('Some instructions')).toBeTruthy()
+
+    fireEvent.click(screen.getByText('Skills'))
+    expect(screen.getByText('+ Add skill')).toBeTruthy()
   })
 })
