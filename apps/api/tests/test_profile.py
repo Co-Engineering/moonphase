@@ -9,6 +9,7 @@ what was written.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import time
 import uuid
@@ -126,6 +127,13 @@ async def test_profile_reaches_the_container(fake_server: str) -> None:
             ),
         )
 
+        # What a real session start does first: the harness seeds its own
+        # state file, and `apply` merges into it rather than replacing it.
+        # The assertion below is about that state surviving — which needs
+        # it to exist, and nothing here had created it.
+        for path, contents in harness.seed_config_files(SPACE).items():
+            await profile_mod.write_file(conn, container, path, contents, mode="600")
+
         await profile_mod.apply(conn, container, harness, wp)
 
         # --- harness configuration -----------------------------------------
@@ -139,6 +147,15 @@ async def test_profile_reaches_the_container(fake_server: str) -> None:
         )
         assert settings and "Bash(npm test)" in settings
         print("\n  global CLAUDE.md and settings.json written")
+
+        # --- MCP servers merge into ~/.claude.json, not a file under .claude/ --
+        claude_json = await profile_mod.read_file(conn, container, "/home/dev/.claude.json")
+        assert claude_json is not None
+        claude_state = json.loads(claude_json)
+        assert claude_state.get("mcpServers") == {}
+        # The seed file's own keys must survive the merge.
+        assert claude_state.get("hasCompletedOnboarding") is True
+        print("  MCP servers merged into ~/.claude.json without clobbering it")
 
         # --- environment ----------------------------------------------------
         env = await profile_mod.read_file(conn, container, SPACE.env_file)
@@ -221,6 +238,37 @@ async def test_profile_reaches_the_container(fake_server: str) -> None:
         assert "Prefer small commits" not in updated
         print("  re-applying the profile overwrites owned files")
 
+        # --- MCP servers merge without clobbering Claude Code's own state ------
+        # Simulate Claude Code itself having written a trust decision into
+        # ~/.claude.json between session starts.
+        await docker_remote.exec_capture(
+            conn, container,
+            ["sh", "-c",
+             "printf '%s' "
+             '\'{"hasCompletedOnboarding":true,"projects":{"/workspace":{"trusted":true}}}\' '
+             "> /home/dev/.claude.json"],
+        )
+        wp.mcp_json = '{"mcpServers":{"fs":{"command":"npx","args":["srv"]}}}'
+        await profile_mod.apply(conn, container, harness, wp)
+        after_merge = json.loads(
+            await profile_mod.read_file(conn, container, "/home/dev/.claude.json")
+        )
+        assert after_merge["mcpServers"] == {"fs": {"command": "npx", "args": ["srv"]}}
+        assert after_merge["projects"]["/workspace"]["trusted"] is True, (
+            "merging MCP servers must not discard Claude Code's own state"
+        )
+        print("  MCP servers merge without discarding trust decisions/history")
+
+        # Clearing the org's MCP config removes the key rather than leaving it.
+        wp.mcp_json = None
+        await profile_mod.apply(conn, container, harness, wp)
+        after_clear = json.loads(
+            await profile_mod.read_file(conn, container, "/home/dev/.claude.json")
+        )
+        assert "mcpServers" not in after_clear
+        assert after_clear["projects"]["/workspace"]["trusted"] is True
+        print("  clearing MCP servers removes the key and nothing else")
+
         # --- disconnecting GitHub cleans up ------------------------------------
         wp.vcs_credential = None
         await profile_mod.apply(conn, container, harness, wp)
@@ -255,3 +303,50 @@ async def test_profile_reaches_the_container(fake_server: str) -> None:
         except Exception as exc:  # noqa: BLE001 — cleanup must not mask failures
             print(f"  cleanup warning: {exc}")
         await ssh.pool.close_all()
+
+
+def test_an_unreadable_claude_json_is_left_alone() -> None:
+    """Claude Code keeps its trust decisions and project history in the same
+    file it reads MCP servers from, so the merge reads before it writes.
+
+    If what is there cannot be parsed, starting from an empty document would
+    hand back a file with the MCP servers in it and everything else gone.
+    Losing the MCP configuration is much the smaller of those, so nothing is
+    written at all.
+    """
+    from moonphase.harness.claude_code import ClaudeCode
+
+    class Profile:
+        mcp_json = '{"mcpServers": {"browser": {"command": "npx"}}}'
+
+    assert ClaudeCode().merge_into_profile_file("{not json at all", Profile()) is None
+    # A JSON document that is not an object is equally not something to merge
+    # a key into.
+    assert ClaudeCode().merge_into_profile_file("[1, 2, 3]", Profile()) is None
+
+
+def test_state_beside_the_mcp_servers_survives() -> None:
+    """The ordinary path: only the one key this owns is replaced."""
+    import json
+
+    from moonphase.harness.claude_code import ClaudeCode
+
+    class Profile:
+        mcp_json = '{"mcpServers": {"browser": {"command": "npx"}}}'
+
+    existing = json.dumps(
+        {
+            "hasTrustDialogAccepted": True,
+            "projects": {"/workspace": {"lastUsed": "yesterday"}},
+            "mcpServers": {"stale": {"command": "gone"}},
+        }
+    )
+
+    merged = ClaudeCode().merge_into_profile_file(existing, Profile())
+    assert merged is not None
+    doc = json.loads(merged)
+
+    assert doc["hasTrustDialogAccepted"] is True
+    assert doc["projects"] == {"/workspace": {"lastUsed": "yesterday"}}
+    # Replaced, not merged into: the profile is the whole truth for this key.
+    assert doc["mcpServers"] == {"browser": {"command": "npx"}}

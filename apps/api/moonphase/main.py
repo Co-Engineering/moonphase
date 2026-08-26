@@ -17,6 +17,7 @@ from .config import get_settings
 from .db import dispose_engine
 from .monitor import monitor
 from .routers import (
+    claude_config,
     feed,
     feedsocket,
     meta,
@@ -123,6 +124,7 @@ def create_app() -> FastAPI:
     app.include_router(servers.router)
     app.include_router(setup.router)
     app.include_router(projects.router)
+    app.include_router(claude_config.router)
     app.include_router(profile_router.router)
     app.include_router(preview_router.router)
     app.include_router(previewsocket.router)

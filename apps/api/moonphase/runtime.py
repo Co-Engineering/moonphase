@@ -19,6 +19,7 @@ import asyncssh
 from . import queries, ssh
 from .db import service_session, user_session
 from .harness import SessionSpace
+from .harness import get as get_harness
 from .profile import (
     VcsCredential,
     WorkspaceProfile,
@@ -194,7 +195,10 @@ class NoCredential(Exception):
 
 
 async def load_session_profile(
-    claims: dict[str, Any], project: dict[str, Any], harness_kind: str
+    claims: dict[str, Any],
+    project: dict[str, Any],
+    harness_kind: str,
+    session: str | None = None,
 ) -> WorkspaceProfile:
     """Everything one person brings to a session they are about to start.
 
@@ -213,12 +217,24 @@ async def load_session_profile(
     only when the project is the caller's own. Otherwise a project override set
     by its owner would quietly pull their account back into someone else's
     session, which is the thing this exists to prevent.
+
+    Project- and session-level Claude config (settings, CLAUDE.md, MCP
+    servers, skills) layer on top of the org profile via the harness itself —
+    see `Harness.compose_project_layers` — so a harness with no such concept
+    is unaffected. `session` is the tmux session name; omitted for a session
+    that does not exist yet, which simply means no session-level layer.
     """
     async with user_session(claims) as conn:
         org_id = await queries.personal_org_id(conn)
         if org_id is None:
             raise NotFound("You have no personal organization.")
         row = await queries.get_profile(conn, org_id)
+        project_row = await queries.get_project_config(conn, project["id"])
+        session_row = (
+            await queries.get_session_config(conn, project["id"], session)
+            if session
+            else None
+        )
 
     project_id = project["id"] if project.get("org_id") == org_id else None
 
@@ -244,8 +260,11 @@ async def load_session_profile(
             account=vcs_row.get("account"),
         )
 
-    return profile_from_row(
+    base = profile_from_row(
         row,
         harness_credential=credential_from_row(credential_row),
         vcs_credential=vcs,
+    )
+    return get_harness(harness_kind).compose_project_layers(
+        base, project_row, session_row
     )

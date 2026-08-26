@@ -487,6 +487,7 @@ async def test_a_collaborator_brings_their_own_account_not_the_owners(
                 claude_settings_json=None,
                 claude_md=claude_md,
                 mcp_json=None,
+                skills={},
                 env_vars={},
                 git_user_name=person.email.split("@")[0],
                 git_user_email=person.email,

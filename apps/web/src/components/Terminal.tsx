@@ -8,6 +8,23 @@ import { copyText } from '../lib/clipboard'
 
 type Status = 'connecting' | 'attached' | 'disconnected' | 'error'
 
+/**
+ * xterm hands Enter and Shift+Enter to the terminal identically unless we
+ * intervene, so `attachCustomKeyEventHandler` checks for this before letting
+ * either through to the default handling.
+ */
+export function isShiftEnter(event: Pick<KeyboardEvent, 'key' | 'shiftKey'>): boolean {
+  return event.key === 'Enter' && event.shiftKey
+}
+
+/**
+ * Real terminals distinguish Shift+Enter from Enter by sending ESC before
+ * the carriage return rather than a bare `\r` — VS Code's, iTerm2's, Zed's
+ * and Alacritty's own Shift+Enter bindings all send exactly this, and it is
+ * what the harness's keypress parser reads as "newline, don't submit".
+ */
+export const SHIFT_ENTER_SEQUENCE = '\x1b\r'
+
 // A silent network drop (Wi-Fi association lost, a VPN blip, laptop sleep)
 // often never fires `onclose`/`onerror` at all — the socket just sits
 // half-open until some lengthy OS-level TCP timeout, if that ever comes. A
@@ -308,6 +325,24 @@ export function ProjectTerminal({
         socket.send(JSON.stringify({ type: 'resize', cols, rows }))
       }
     })
+
+    // xterm treats Enter and Shift+Enter identically — both would otherwise
+    // submit the line below. Intercepting here, ahead of that default
+    // handling, is what lets Shift+Enter send a distinguishable sequence
+    // instead (see SHIFT_ENTER_SEQUENCE for what the harness expects).
+    const onKeyEvent = (event: KeyboardEvent) => {
+      if (event.type !== 'keydown' || !isShiftEnter(event)) return true
+      if (readOnlyRef.current) {
+        refusedRef.current?.()
+        return false
+      }
+      const socket = socketRef.current
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(new TextEncoder().encode(SHIFT_ENTER_SEQUENCE))
+      }
+      return false
+    }
+    term.attachCustomKeyEventHandler(onKeyEvent)
 
     /**
      * The harness's own image paste shells out to the OS clipboard, which

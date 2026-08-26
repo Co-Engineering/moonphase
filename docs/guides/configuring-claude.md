@@ -1,9 +1,22 @@
 # Configuring Claude Code
 
-Everything here is set once, per organization, and materialised into every session's
-`HOME` when it starts.
+Three scopes, same four things to configure at each: permissions & behaviour, MCP
+servers, CLAUDE.md, and skills.
 
-**Settings → Claude.**
+- **Organization** — **Settings → Claude.** Set once, applies to every project.
+- **Project** — a project's **⋯ menu → Configure.** Applies to every session in that
+  project, for everyone who can drive one.
+- **Session** — a session's **⋯ menu → Configure.** Applies to that one session only,
+  and only its owner (or a project admin) can see or change it.
+
+A session's effective config is all three layers combined — org, then project, then
+session — materialised into that session's own `HOME` when it starts, not into the
+project's git checkout. That keeps it out of `git status` and out of the way of a
+team's own committed `.claude/` files. CLAUDE.md instructions from every layer that
+sets one are concatenated together; MCP servers and skills merge by name, with the
+more specific scope winning a collision; permission rules union, with the strictest
+decision winning regardless of which layer set it — a project-wide `deny` cannot be
+quietly reopened by someone's own session settings.
 
 ## Permissions and behaviour
 
@@ -35,8 +48,8 @@ is a dropdown:
 
 ## MCP servers
 
-`~/.claude/.mcp.json`, as a card per server. Pick the transport and you are shown only
-the fields it needs:
+The `mcpServers` key of `~/.claude.json`, as a card per server. Pick the transport and
+you are shown only the fields it needs:
 
 === "Local process"
 
@@ -90,11 +103,23 @@ An editor that silently drops what it does not understand is worse than a textar
 **The JSON is still there.** Every editor has an **Edit as JSON** tab showing the exact
 file, and it will not save until it parses. Structure is a convenience, not a cage.
 
-## Global CLAUDE.md
+## Skills
 
-Written to `~/.claude/CLAUDE.md`, so it applies to every project rather than needing a
-copy in each repository. Preferences that are about *you* rather than about a codebase
-belong here.
+A name and a body of instructions — written to `~/.claude/skills/<name>/SKILL.md`.
+Unlike CLAUDE.md, a skill is not loaded every time: Claude discovers it on its own and
+only pulls it into context when the task at hand looks like a match. Single-file
+skills only for now — no supporting scripts or reference docs alongside `SKILL.md`.
+
+A name collision between scopes is not an error: the more specific one wins, the same
+as an MCP server would.
+
+## CLAUDE.md
+
+At the org level, written to `~/.claude/CLAUDE.md`, so it applies to every project
+rather than needing a copy in each repository. Preferences that are about *you* rather
+than about a codebase belong here — project- and session-specific instructions belong
+one level down, where they can say something specific without every other project
+inheriting it.
 
 ## When it takes effect
 

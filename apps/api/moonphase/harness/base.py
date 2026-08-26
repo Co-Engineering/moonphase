@@ -152,6 +152,53 @@ class Harness(abc.ABC):
         """
         return {}
 
+    def profile_file_target(self, space: SessionSpace) -> str | None:
+        """Path of a config file the harness also mutates on its own, if any.
+
+        Some profile-owned settings live inside a file the harness treats as
+        its own state (trust decisions, history, project list) rather than a
+        file Moonphase fully owns — `profile_files()`'s blind overwrite would
+        destroy that state. Returning a path here routes that file through
+        `merge_into_profile_file` instead, which reads it first. None means
+        the harness has no such file.
+        """
+        return None
+
+    def merge_into_profile_file(self, existing: str | None, profile: Any) -> str | None:
+        """New contents for `profile_file_target`, given what is there now.
+
+        `existing` is None when the file does not exist yet. Return None to
+        leave the file untouched this session.
+        """
+        del existing, profile
+        return None
+
+    def skills_directory(self, space: SessionSpace) -> str | None:
+        """Directory of Skill folders this harness owns, if it has Skills.
+
+        Wiped and rewritten from `profile.skills` on every session start, the
+        same way `profile_files()` fully owns the files it returns. None means
+        the harness has no such concept.
+        """
+        del space
+        return None
+
+    def compose_project_layers(
+        self,
+        profile: Any,
+        project_row: dict[str, Any] | None,
+        session_row: dict[str, Any] | None,
+    ) -> Any:
+        """Layer project- and session-level config over the org profile.
+
+        `project_row` and `session_row` carry the same fields as the profile
+        (settings/CLAUDE.md/MCP servers/skills, for a harness that has them),
+        scoped to one project or one session rather than the whole org. A
+        harness with no such concept returns `profile` unchanged.
+        """
+        del project_row, session_row
+        return profile
+
     def activity_signals(self) -> Any:
         """Hints for reading a still terminal, as an `ActivitySignals`.
 
