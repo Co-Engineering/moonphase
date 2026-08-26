@@ -14,9 +14,9 @@ the desktop down to phone width. A reader that never attaches cannot.
 from __future__ import annotations
 
 import logging
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
 from .. import activity, queries, runtime, sessions, ssh
 from .. import harness as harness_registry
@@ -24,12 +24,29 @@ from .. import transcript as transcript_reader
 from ..auth import Principal, current_principal
 from ..db import user_session
 from ..runtime import CAN_OBSERVE, NotFound
-from ..schemas import AnswerIn, FeedOut, PromptOut, TranscriptEventOut
+from ..schemas import AnswerIn, FeedOut, PromptOut, TranscriptEventOut, UploadOut
 from ..ssh import SSHError
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/projects", tags=["feed"])
+
+# Extensions rather than a content-type allowlist: browsers and phone camera
+# apps disagree on the MIME type for the same file (a HEIC photo often shows
+# up as application/octet-stream), and the extension is what ends up in the
+# path the agent is told to read anyway.
+_IMAGE_EXTENSIONS = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/webp": "webp",
+    "image/gif": "gif",
+    "image/heic": "heic",
+    "image/heif": "heif",
+}
+
+# Comfortably above a compressed phone photo, well below anything that would
+# make an SSH round trip or the container's disk a problem.
+_MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 
 
 @router.get("/{project_id}/feed", response_model=FeedOut)
@@ -125,3 +142,54 @@ async def answer(
         )
     except SSHError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{project_id}/feed/upload", response_model=UploadOut)
+async def upload(
+    project_id: UUID,
+    session: str | None = None,
+    file: UploadFile = File(...),
+    principal: Principal = Depends(current_principal),
+) -> UploadOut:
+    """Save an image into the session's home, for a message to point at.
+
+    This does not send anything itself — the caller gets back a path and
+    folds it into the next `feed/answer` call, exactly as if it had been typed
+    in by hand. That keeps this one concern (getting bytes from a phone into
+    the container) separate from composing the message around them.
+
+    The file lands under the session's home rather than its working directory,
+    which is a git worktree: a photo sent from a phone has no business showing
+    up as an untracked file in `git status`.
+    """
+    extension = _IMAGE_EXTENSIONS.get((file.content_type or "").lower())
+    if extension is None:
+        raise HTTPException(
+            status_code=415, detail="Only PNG, JPEG, WebP, GIF or HEIC images are accepted."
+        )
+
+    data = await file.read(_MAX_UPLOAD_BYTES + 1)
+    if len(data) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Images are limited to 15 MB.")
+    if not data:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty.")
+
+    session_name = sessions.sanitise_name(session or sessions.DEFAULT_SESSION)
+
+    try:
+        ctx = await runtime.load_project_context(principal.claims, project_id)
+        space, _row = await runtime.load_session_space(
+            principal.claims, project_id, session_name
+        )
+    except NotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    path = f"{space.home}/uploads/{uuid4().hex}.{extension}"
+
+    conn_ssh = await ssh.pool.get(ctx.target)
+    try:
+        await sessions.write_upload(conn_ssh, ctx.container, path, data)
+    except SSHError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return UploadOut(path=path)

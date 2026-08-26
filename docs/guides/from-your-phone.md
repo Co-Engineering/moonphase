@@ -58,3 +58,12 @@ to phone width, and your desktop would find its session had shrunk.
 
 The feed writes back into the same session, so you lose nothing but the ability to do
 something unusual.
+
+## Send a photo
+
+The **+** button next to the message box opens your photo library or camera. Pick or take
+a picture and it uploads straight into the session — a screenshot of an error, a photo of
+a whiteboard, a screen you cannot easily copy text from.
+
+The image lands with your next message, so Claude sees it exactly as if you had dropped
+the file into the terminal yourself and typed a note alongside it.
