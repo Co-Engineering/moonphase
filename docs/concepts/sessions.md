@@ -114,6 +114,11 @@ never seen and orphan its real state, so only a restart — which recreates it
 anyway — adopts a new layout. That is also the upgrade path for sessions made
 before sessions had owners.
 
+That `<name>` is not the same thing as what shows up in the sidebar. Renaming
+it there only changes `display_name`, a separate column that starts unset and
+falls back to `<name>` until someone sets it — the home directory, worktree
+and branch stay exactly as created, for the reason above.
+
 A viewer attached to a terminal gets `tmux attach -r -f ignore-size`. The
 `-r` is the read-only part; `ignore-size` is there because a viewer who cannot
 type could otherwise still squeeze the window for whoever is driving. The

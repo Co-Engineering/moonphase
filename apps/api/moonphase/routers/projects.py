@@ -908,6 +908,48 @@ async def delete_session(
         raise HTTPException(status_code=404, detail="No such session.")
 
 
+@router.patch("/{project_id}/sessions/{name}/rename", response_model=SessionOut)
+async def rename_session(
+    project_id: UUID,
+    name: str,
+    payload: RenameIn,
+    principal: Principal = Depends(current_principal),
+) -> SessionOut:
+    """Change what a session is called.
+
+    The display name only. `tmux_session` — and the home directory, worktree
+    and branch derived from it — stays exactly as it was when the session was
+    created; renaming those would mean moving all three inside a running
+    container, which is a great deal of risk for a nicer word.
+    """
+    session_name = sessions.sanitise_name(name)
+    display_name = payload.name.strip()
+    if not display_name:
+        raise HTTPException(status_code=400, detail="A session needs a name.")
+    if len(display_name) > 64:
+        # The database caps this at 64. Truncating silently would rename it
+        # to something nobody typed; the error says the number.
+        raise HTTPException(
+            status_code=400,
+            detail="That name is too long — 64 characters at most.",
+        )
+
+    async with user_session(principal.claims) as conn:
+        row = await queries.get_session(conn, project_id, session_name)
+        if row is None:
+            raise HTTPException(status_code=404, detail="No such session.")
+        if not row.get("is_mine"):
+            raise Forbidden(
+                f"Session {session_name!r} belongs to someone else. Only they "
+                "can rename it."
+            )
+        row = await queries.rename_session(conn, project_id, session_name, display_name)
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="No such session.")
+    return SessionOut.model_validate(row)
+
+
 @router.post(
     "/{project_id}/sessions/{name}/detach-clients",
     status_code=status.HTTP_200_OK,

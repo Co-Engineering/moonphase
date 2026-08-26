@@ -439,6 +439,22 @@ const TEMPLATES: { label: string; server: Omit<McpServer, 'name'> & { name: stri
     },
   },
   {
+    label: 'Browser',
+    server: {
+      name: 'browser',
+      transport: 'stdio',
+      command: 'npx',
+      args: '-y @playwright/mcp@latest --headless --isolated',
+      url: '',
+      // Matches where the "Browser tools" built-in environment installs
+      // Chromium (see environments.py) — headless needs no DISPLAY, but it
+      // does need to find the browser binary, and that path is not npx's
+      // default.
+      env: { PLAYWRIGHT_BROWSERS_PATH: '/opt/playwright-browsers' },
+      headers: {},
+    },
+  },
+  {
     label: 'Remote (HTTP)',
     server: {
       name: 'remote',

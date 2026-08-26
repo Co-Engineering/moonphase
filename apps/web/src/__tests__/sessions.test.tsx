@@ -124,6 +124,27 @@ describe('starting sessions', () => {
 })
 
 /**
+ * `tmux_session` names the actual tmux session and can never safely change —
+ * it derives the worktree and branch — so `display_name` is the editable
+ * label wherever a session's name is shown, falling back to tmux_session
+ * until someone sets one.
+ */
+describe('a session with a display name', () => {
+  it('shows the display name instead of the tmux session name', async () => {
+    view([session({ tmux_session: 'olol', display_name: 'My cool session' })])
+
+    expect(await screen.findByText('My cool session')).toBeTruthy()
+    expect(screen.queryByText('olol')).toBeNull()
+  })
+
+  it('falls back to the tmux session name until one is set', async () => {
+    view([session({ tmux_session: 'olol', display_name: null })])
+
+    expect(await screen.findByText('olol')).toBeTruthy()
+  })
+})
+
+/**
  * The other half of being able to start several. The endpoint has always
  * existed and nothing in the app called it, so a list that only grew was the
  * only list you could have.

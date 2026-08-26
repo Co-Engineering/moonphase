@@ -29,7 +29,10 @@ from .harness import Harness, SessionSpace
 log = logging.getLogger(__name__)
 
 # One poll should never drag megabytes over SSH.
-MAX_BYTES_PER_READ = 256 * 1024
+# One poll's worth. Large enough that a browser screenshot — which arrives as
+# one base64 line and is routinely a few hundred kilobytes — fits in a single
+# read, and bounded so a poll cannot become unbounded work.
+MAX_BYTES_PER_READ = 1024 * 1024
 # On a cold open, enough history to see what happened without loading a
 # whole day's session.
 INITIAL_LINES = 300
@@ -68,6 +71,10 @@ class TranscriptEvent:
     added: int = 0
     removed: int = 0
     truncated: bool = False
+    # A tool result carrying an image — a screenshot from a browser MCP
+    # server, most often — as base64, ready for an <img data:> src.
+    image_media_type: str | None = None
+    image_data: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -155,6 +162,36 @@ async def _newest_file(
     return path or None
 
 
+async def _skip_one_line(
+    conn: asyncssh.SSHClientConnection,
+    container: str,
+    path: str,
+    offset: int,
+) -> int:
+    """The offset just past the line starting at `offset`.
+
+    Asked of the file rather than guessed, because the point is to get past a
+    line too long to have been read. `head -n 1` reads one line however long
+    it is; only its length comes back.
+    """
+    command = (
+        f"tail -c +{offset + 1} {shlex.quote(path)} 2>/dev/null | head -n 1 | wc -c"
+    )
+    result = await docker_remote.exec_capture(
+        conn, container, ["sh", "-c", command], timeout=60
+    )
+    try:
+        length = int(result.stdout.strip() or 0)
+    except ValueError:
+        length = 0
+    if length <= 0:
+        # Nothing readable there. Leave the cursor alone rather than skipping
+        # blind, and let the next poll try again.
+        return offset
+    log.info("skipping a transcript line of %d bytes: too large to read", length)
+    return offset + length
+
+
 async def read(
     conn: asyncssh.SSHClientConnection,
     container: str,
@@ -212,6 +249,7 @@ async def read(
         conn, container, ["sh", "-c", command], timeout=60
     )
     raw = result.stdout if result.ok else ""
+    filled = len(raw.encode()) >= MAX_BYTES_PER_READ
 
     events: list[TranscriptEvent] = []
     consumed = 0
@@ -232,6 +270,16 @@ async def read(
 
     if not fresh:
         new_offset = position.offset + consumed
+        if consumed == 0 and filled:
+            # One line longer than a whole read. Only complete lines advance
+            # the cursor, so this would be re-read forever: every poll fetches
+            # the same bytes, finds no newline, and reports nothing. The feed
+            # stops there permanently — which is what a screenshot bigger than
+            # the window did to it.
+            #
+            # A short read with no complete line is different and must still
+            # wait: that is the harness mid-write, and the rest is coming.
+            new_offset = await _skip_one_line(conn, container, path, position.offset)
 
     return TranscriptPage(
         events=events, cursor=Cursor(filename=filename, offset=new_offset).encode()

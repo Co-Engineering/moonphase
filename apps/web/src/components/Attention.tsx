@@ -108,7 +108,7 @@ function Row({
     <div className="attention-row">
       <button className="attention-where" onClick={onOpen}>
         {session.project_name ?? 'project'}
-        <span className="attention-session">{session.tmux_session}</span>
+        <span className="attention-session">{session.display_name ?? session.tmux_session}</span>
       </button>
 
       {/* The question itself, because "something is waiting" is not

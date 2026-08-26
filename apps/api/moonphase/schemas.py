@@ -218,6 +218,11 @@ class SessionOut(ORMModel):
     id: UUID
     project_id: UUID
     tmux_session: str
+    # What to call it. `tmux_session` names the actual tmux session and
+    # derives the worktree and branch it can never safely be renamed to match
+    # (see the rename endpoint); this is the editable label shown instead.
+    # Falls back to tmux_session until someone sets one.
+    display_name: str | None = None
     harness: HarnessKindStr
     state: str
     started_at: datetime | None
