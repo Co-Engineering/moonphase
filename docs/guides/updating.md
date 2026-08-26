@@ -94,8 +94,19 @@ The button disappears and the command comes back in its place.
 
 ## What you will see while it runs
 
+The panel says an update is under way as soon as you press the button, before
+the updater has even noticed the request — it looks for one every few seconds,
+and a screen that showed nothing until then looked like the button had done
+nothing.
+
 The update replaces the API container, so the page loses contact for a few
-seconds. That is expected, and the panel says so rather than showing an error.
+seconds. That is expected: the panel says so, and a reload during that window
+waits for the instance to come back rather than asking you where it lives.
+
+The updater is the one service an update leaves alone. It runs the restart, so
+recreating it would stop the command part way through — which is exactly what
+happened once, leaving an instance with no database. It picks up its own new
+image at the next `docker compose up -d` you run by hand.
 
 The updater writes what it did into the shared volume before it restarts
 anything, so the new API can report the outcome — including a failure, with the

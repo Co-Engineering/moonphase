@@ -53,13 +53,18 @@ say "watching for update requests"
 seen=""
 [ -f "$REQUEST" ] && seen="$(cat "$REQUEST" 2>/dev/null || true)"
 
-# A status left saying "running" means the API restarted us mid-update, which is
-# what a successful update looks like from in here: `up -d` recreates this
-# container too. Nothing else could have interrupted it, so say so rather than
-# leaving a spinner up forever.
+# A status left saying "running" means we were stopped mid-update. That used to
+# be the expected ending — `up -d` recreated this container along with the
+# rest — and the assumption behind it was wrong: Compose was killed partway
+# through its own run, so the services it had not reached yet were left
+# created and never started. An instance came back with no database.
+#
+# Services are now brought up without this one (see below), so being restarted
+# mid-update is no longer normal. If it happens anyway, the update is of
+# unknown outcome rather than done.
 if [ -f "$STATUS" ] && [ "${STATUS_KEEP:-}" != "1" ]; then
   case "$(cat "$STATUS" 2>/dev/null || true)" in
-    running*) status "ok|updated, and this updater was restarted with the rest" ;;
+    running*) status "failed|the updater stopped part way through; run docker compose up -d" ;;
   esac
 fi
 
@@ -84,14 +89,35 @@ while true; do
   fi
 
   status "running|restarting services"
-  # This recreates the API, and this container with it. Anything after the line
-  # that succeeds may never run, which is why the status was written first.
-  if ! output=$(cd "$PROJECT" && docker compose up -d 2>&1); then
+
+  # Everything except this container.
+  #
+  # A plain `docker compose up -d` includes the updater, so Compose stopped the
+  # container running the very command it was executing. The process died with
+  # it, part way down the list: the API was replaced, the database was recreated
+  # and never started, and the instance came back answering 500 with no `db` to
+  # resolve. The status file said "running" forever.
+  #
+  # Asking Compose for the service list keeps this correct whichever overlay
+  # files are in play, rather than naming services here and going stale.
+  services=$(cd "$PROJECT" && docker compose config --services 2>/dev/null \
+    | grep -vx updater | tr '\n' ' ')
+  if [ -z "$(printf '%s' "$services" | tr -d ' ')" ]; then
+    say "could not list services"
+    status "failed|could not read the compose project's service list"
+    continue
+  fi
+
+  # shellcheck disable=SC2086 - a deliberate word list.
+  if ! output=$(cd "$PROJECT" && docker compose up -d $services 2>&1); then
     say "up failed"
     status "failed|$(printf '%s' "$output" | tail -3 | tr '\n' ' ')"
     continue
   fi
 
   say "update applied"
+  # This container is deliberately left on its old image: updating it would
+  # mean stopping it mid-command, which is the fault this avoids. It picks the
+  # new one up at the next `docker compose up -d` run by hand.
   status "ok|updated"
 done

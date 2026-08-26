@@ -19,11 +19,20 @@ export function UpdatePanel({ busy }: { busy: boolean }) {
   const [error, setError] = useState<string | null>(null)
   const [working, setWorking] = useState(false)
   const [copied, setCopied] = useState(false)
+  // Set the moment the request is accepted, and never cleared by a failed
+  // poll. Asking for an update returns before the updater has noticed it —
+  // it looks for the request every few seconds — so `status` is still
+  // whatever it was, and waiting for it to say "running" before showing
+  // anything left the screen looking like the button had done nothing.
+  const [requested, setRequested] = useState(false)
 
   const load = useCallback(async (force = false) => {
     setError(null)
     try {
-      setState(await instance.update(force))
+      const next = await instance.update(force)
+      setState(next)
+      // The updater has reported an outcome, so this is over either way.
+      if (next.status === 'ok' || next.status === 'failed') setRequested(false)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -37,13 +46,28 @@ export function UpdatePanel({ busy }: { busy: boolean }) {
   // page, so requests fail for a few seconds. Polling through that is the only
   // way to see how it ended: the request that started it does not survive.
   useEffect(() => {
-    if (state?.status !== 'running') return
+    if (!requested && state?.status !== 'running') return
     const id = window.setInterval(() => void load(), 3000)
     return () => window.clearInterval(id)
-  }, [state?.status, load])
+  }, [requested, state?.status, load])
 
-  if (error) return <div className="banner error">{error}</div>
-  if (!state) return <p className="hint">Checking for updates…</p>
+  if (error && !requested) return <div className="banner error">{error}</div>
+  if (!state) {
+    // Mid-update the API is being replaced, so there is nothing to report and
+    // saying so beats an error the person is meant to ignore.
+    if (requested) {
+      return (
+        <div className="card inner">
+          <h3>Version</h3>
+          <div className="banner">
+            <strong>Updating</strong> — the services are restarting, so this
+            page has lost contact for a moment. It reconnects on its own.
+          </div>
+        </div>
+      )
+    }
+    return <p className="hint">Checking for updates…</p>
+  }
 
   const running = state.running_version ?? 'development build'
   const outdated = state.update_available === true
@@ -77,10 +101,11 @@ export function UpdatePanel({ busy }: { busy: boolean }) {
         )}
       </dl>
 
-      {state.status === 'running' && (
+      {(requested || state.status === 'running') && state.status !== 'failed' && (
         <div className="banner">
-          Updating — {state.status_detail ?? 'this takes a minute'}. This page
-          will lose contact while the services restart, which is expected.
+          <strong>Updating</strong> — {state.status_detail ?? 'asking the updater'}.
+          {' '}This page will lose contact while the services restart, which is
+          expected; it reconnects on its own.
         </div>
       )}
       {state.status === 'failed' && (
@@ -111,7 +136,12 @@ export function UpdatePanel({ busy }: { busy: boolean }) {
                     setWorking(true)
                     setError(null)
                     try {
-                      setState(await instance.applyUpdate())
+                      const next = await instance.applyUpdate()
+                      // Before setting state, so the panel is already showing
+                      // that something is happening whatever the updater has
+                      // had time to write.
+                      setRequested(true)
+                      setState(next)
                     } catch (err) {
                       setError(err instanceof Error ? err.message : String(err))
                     } finally {

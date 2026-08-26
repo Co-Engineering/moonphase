@@ -51,6 +51,9 @@ export function App() {
   // because the auth client cannot be built without it.
   const [config, setConfig] = useState<InstanceConfig | null>(null)
   const [hostProblem, setHostProblem] = useState<string | null>(null)
+  // Served by the instance, and the instance is not answering — during an
+  // update, most likely. Waiting, rather than asking where it lives.
+  const [reconnecting, setReconnecting] = useState(false)
   // Null until asked. An instance with no accounts shows setup rather than a
   // sign-in form nobody could satisfy.
   const [needsSetup, setNeedsSetup] = useState<boolean | null>(null)
@@ -70,15 +73,40 @@ export function App() {
     // The host we were served from is right whenever the API serves the app,
     // so a fresh install usually needs no setup at all. Asking is the fallback.
     let cancelled = false
-    void fetchConfig(currentHost())
-      .then((found) => {
-        if (!cancelled) attach(found)
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return
-        setHostProblem(storedHost() ? String(err instanceof Error ? err.message : err) : null)
-        setReady(true)
-      })
+    let attempt = 0
+
+    // Being served by the instance means its address is not in question: the
+    // page came from it. So a failed config fetch there is "it is unwell",
+    // not "where is it?", and asking again is the only sensible answer.
+    //
+    // Presenting the host picker instead is what an update looked like from
+    // the outside — the API is replaced, one request fails, and the app threw
+    // away a working instance to show an empty box asking for an address the
+    // person never typed and has no reason to know.
+    const servedFromHost = !storedHost()
+
+    const load = () => {
+      void fetchConfig(currentHost())
+        .then((found) => {
+          if (!cancelled) attach(found)
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return
+          if (servedFromHost) {
+            attempt += 1
+            setHostProblem(null)
+            setReconnecting(true)
+            // Backing off to five seconds: a restart is over in about that,
+            // and hammering an instance that is coming up does not help it.
+            window.setTimeout(load, Math.min(1000 * attempt, 5000))
+            return
+          }
+          setHostProblem(String(err instanceof Error ? err.message : err))
+          setReady(true)
+        })
+    }
+    load()
+
     return () => {
       cancelled = true
     }
@@ -118,6 +146,17 @@ export function App() {
   }, [session])
 
   if (!config) {
+    if (reconnecting) {
+      return (
+        <div className="auth-shell">
+          <p>Waiting for Moonphase to come back…</p>
+          <p className="hint">
+            The services are restarting, which is what an update looks like from
+            here. This reconnects on its own.
+          </p>
+        </div>
+      )
+    }
     if (!ready) return <div className="auth-shell">Connecting…</div>
     return (
       <Connect
