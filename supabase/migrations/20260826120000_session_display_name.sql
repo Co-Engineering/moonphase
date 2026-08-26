@@ -12,5 +12,9 @@
 -- name, decoupled from the identifier the resource was created with.
 -- ===========================================================================
 
+-- Bounded like every other name in this schema. The API refuses anything
+-- longer with the number in the message, and the constraint is what makes
+-- that refusal a fact rather than a convention some future caller can skip.
 alter table public.project_sessions
-  add column display_name text;
+  add column display_name text
+  check (display_name is null or length(trim(display_name)) between 1 and 64);
