@@ -9,6 +9,7 @@ agent keeps working.
 
 from __future__ import annotations
 
+import base64
 import logging
 import re
 import shlex
@@ -138,6 +139,28 @@ async def _write_file(
         )
     )
     result = await ssh.run(conn, command, timeout=60, stdin=contents)
+    result.check(f"Writing {path} into {container}")
+
+
+async def write_upload(
+    conn: asyncssh.SSHClientConnection,
+    container: str,
+    path: str,
+    data: bytes,
+) -> None:
+    """Write an uploaded file (an image from the feed) into the container.
+
+    The SSH channel that carries `stdin` here is text, not bytes, so raw image
+    data would corrupt in transit; base64 survives it, and `base64 -d` on the
+    other end restores the original bytes.
+    """
+    directory = shlex.quote(path.rsplit("/", 1)[0])
+    quoted = shlex.quote(path)
+    command = (
+        f"docker exec -i -u dev {shlex.quote(container)} sh -c "
+        + shlex.quote(f"mkdir -p {directory} && base64 -d > {quoted} && chmod 644 {quoted}")
+    )
+    result = await ssh.run(conn, command, timeout=60, stdin=base64.b64encode(data).decode())
     result.check(f"Writing {path} into {container}")
 
 

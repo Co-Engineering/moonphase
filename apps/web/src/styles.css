@@ -1113,12 +1113,19 @@ button.linkish:hover:not(:disabled) {
 
 .feed-compose {
   display: flex;
-  gap: 6px;
+  flex-direction: column;
+  gap: 8px;
   padding: 10px 12px;
   border-top: 1px solid var(--border);
   background: var(--bg-panel);
   /* Clears the home indicator on iOS. */
   padding-bottom: max(10px, env(safe-area-inset-bottom));
+}
+
+.feed-compose-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .feed-compose input {
@@ -1130,6 +1137,95 @@ button.linkish:hover:not(:disabled) {
 .feed-compose button {
   flex-shrink: 0;
   min-height: 44px;
+}
+
+.feed-file-input {
+  /* Never shown — the paperclip button opens the platform picker for it. */
+  display: none;
+}
+
+.feed-attach {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1;
+  min-width: 44px;
+}
+
+/* Thumbnails waiting to go out with the next message. Horizontal, because a
+   phone's compose bar has height to spare and width to lose. */
+.feed-attachments {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.feed-attachment {
+  position: relative;
+  flex-shrink: 0;
+  width: 52px;
+  height: 52px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+
+.feed-attachment.error {
+  border-color: var(--red);
+}
+
+.feed-attachment img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.feed-attachment-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.feed-attachment-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: feed-attachment-spin 0.7s linear infinite;
+}
+
+@keyframes feed-attachment-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.feed-attachment-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 @media (max-width: 720px) {

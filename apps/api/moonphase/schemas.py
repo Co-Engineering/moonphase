@@ -298,9 +298,25 @@ class FeedOut(BaseModel):
 
 
 class AnswerIn(BaseModel):
-    """A tapped option, or typed text, for a waiting prompt."""
+    """A tapped option, or typed text, for a waiting prompt.
 
-    key: str = Field(min_length=1, max_length=64)
+    `max_length` matches `SendKeysIn` rather than an option key's usual
+    length: this same field carries a typed chat message, and now an attached
+    image's path within it, either of which can run well past a couple of
+    characters.
+    """
+
+    key: str = Field(min_length=1, max_length=8192)
+
+
+class UploadOut(BaseModel):
+    """Where an uploaded image landed inside the session's container.
+
+    The path is what the caller sends back through `feed/answer`, so the
+    agent sees it exactly as it would a path typed by hand.
+    """
+
+    path: str
 
 
 class SendKeysIn(BaseModel):

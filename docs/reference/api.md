@@ -91,6 +91,7 @@ ws(s)://<host>/ws/projects/{project_id}/feed?session=<name>&token=<jwt>
 | ------ | ---- | ------- |
 | `GET` | `/api/projects/{project_id}/feed` | Paged transcript |
 | `POST` | `/api/projects/{project_id}/feed/answer` | Answer the current prompt |
+| `POST` | `/api/projects/{project_id}/feed/upload` | Upload an image, get back a path to send |
 | `GET` | `/api/projects/{project_id}/sessions/{name}/summary` | Counted plain-English digest |
 | `GET` | `/api/projects/{project_id}/sessions/{name}/changes` | Branch diff, committed or not |
 | `GET` | `/api/attention` | Every question waiting on you, options parsed |

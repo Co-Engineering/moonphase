@@ -15,10 +15,15 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = await accessToken()
   if (!token) throw new ApiError(401, 'Not signed in.')
 
+  // FormData bodies (image uploads) set their own multipart boundary; a fixed
+  // 'application/json' header would silently drop the boundary and break the
+  // parse on the way in.
+  const isForm = init.body instanceof FormData
+
   const response = await fetch(`${currentHost()}${path}`, {
     ...init,
     headers: {
-      'Content-Type': 'application/json',
+      ...(isForm ? {} : { 'Content-Type': 'application/json' }),
       Authorization: `Bearer ${token}`,
       ...(init.headers ?? {}),
     },
@@ -353,6 +358,11 @@ export interface FeedPage {
   prompt: Prompt | null
 }
 
+export interface FeedUpload {
+  /** Where the image landed inside the session — fold it into the next message. */
+  path: string
+}
+
 export interface PreviewService {
   port: number
   /** 'page' serves HTML and is what "open the app" means; 'api' answers JSON. */
@@ -545,6 +555,15 @@ export const api = {
       `/api/projects/${projectId}/feed/answer${session ? `?session=${encodeURIComponent(session)}` : ''}`,
       { method: 'POST', body: JSON.stringify({ key }) },
     ),
+  /** Drops an image into the session so a message can point at it by path. */
+  uploadFeedImage: (projectId: string, file: File, session?: string) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request<FeedUpload>(
+      `/api/projects/${projectId}/feed/upload${session ? `?session=${encodeURIComponent(session)}` : ''}`,
+      { method: 'POST', body: form },
+    )
+  },
 
   // --- sharing --------------------------------------------------------------
   shares: (kind: 'servers' | 'projects', id: string) =>
