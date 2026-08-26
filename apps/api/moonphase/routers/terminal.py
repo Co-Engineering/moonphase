@@ -232,7 +232,7 @@ async def project_terminal(
                 await docker_remote.start(conn_ssh, ctx.container)
 
             workspace_profile = await runtime.load_session_profile(
-                principal.claims, ctx.project, ctx.harness
+                principal.claims, ctx.project, ctx.harness, session_name
             )
             if not session_row:
                 # First attach for this person: give them a worktree before

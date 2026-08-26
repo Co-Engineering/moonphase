@@ -571,10 +571,10 @@ async def _prepare_space(
 
 
 async def _profile_or_409(
-    principal: Principal, ctx: runtime.ProjectContext
+    principal: Principal, ctx: runtime.ProjectContext, session: str | None = None
 ) -> Any:
     profile = await runtime.load_session_profile(
-        principal.claims, ctx.project, ctx.harness
+        principal.claims, ctx.project, ctx.harness, session
     )
     if not profile.has_harness_auth:
         harness_name = harness_registry.get(ctx.harness).display_name
@@ -672,7 +672,9 @@ async def create_session(
             status_code=409, detail=f"This project already has a session called {name!r}."
         )
 
-    profile = await _profile_or_409(principal, ctx)
+    # No existing row to carry session-level config from — this session does
+    # not exist yet.
+    profile = await _profile_or_409(principal, ctx, name)
     space, workdir, branch = await _prepare_space(principal, ctx, name, profile)
     conn_ssh = await ssh.pool.get(ctx.target)
 
@@ -743,7 +745,7 @@ async def start_session(
     else:
         name = _session_name_for(principal, taken)
 
-    profile = await _profile_or_409(principal, ctx)
+    profile = await _profile_or_409(principal, ctx, name)
 
     # A session's home and checkout are fixed when it is created. Moving a
     # running one would point it at a directory its harness has never seen and

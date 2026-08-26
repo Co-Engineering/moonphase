@@ -934,7 +934,7 @@ async def get_profile(conn: AsyncConnection, org_id: UUID) -> dict[str, Any] | N
     result = await conn.execute(
         text(
             """
-            select id, org_id, claude_settings_json, claude_md, mcp_json,
+            select id, org_id, claude_settings_json, claude_md, mcp_json, skills_json,
                    env_vars, git_user_name, git_user_email, created_at, updated_at
             from workspace_profiles
             where org_id = :org_id
@@ -953,6 +953,7 @@ async def upsert_profile(
     claude_settings_json: str | None,
     claude_md: str | None,
     mcp_json: str | None,
+    skills: dict[str, str],
     env_vars: dict[str, str],
     git_user_name: str | None,
     git_user_email: str | None,
@@ -961,19 +962,20 @@ async def upsert_profile(
         text(
             """
             insert into workspace_profiles
-              (org_id, claude_settings_json, claude_md, mcp_json, env_vars,
-               git_user_name, git_user_email)
+              (org_id, claude_settings_json, claude_md, mcp_json, skills_json,
+               env_vars, git_user_name, git_user_email)
             values
-              (:org_id, :settings, :claude_md, :mcp, cast(:env as jsonb),
-               :git_name, :git_email)
+              (:org_id, :settings, :claude_md, :mcp, cast(:skills as jsonb),
+               cast(:env as jsonb), :git_name, :git_email)
             on conflict (org_id) do update set
               claude_settings_json = excluded.claude_settings_json,
               claude_md            = excluded.claude_md,
               mcp_json             = excluded.mcp_json,
+              skills_json          = excluded.skills_json,
               env_vars             = excluded.env_vars,
               git_user_name        = excluded.git_user_name,
               git_user_email       = excluded.git_user_email
-            returning id, org_id, claude_settings_json, claude_md, mcp_json,
+            returning id, org_id, claude_settings_json, claude_md, mcp_json, skills_json,
                       env_vars, git_user_name, git_user_email, created_at, updated_at
             """
         ),
@@ -982,6 +984,7 @@ async def upsert_profile(
             "settings": claude_settings_json,
             "claude_md": claude_md,
             "mcp": mcp_json,
+            "skills": json.dumps(skills),
             "env": json.dumps(env_vars),
             "git_name": git_user_name,
             "git_email": git_user_email,
@@ -990,6 +993,117 @@ async def upsert_profile(
     row = result.first()
     if row is None:
         raise PermissionError("Not allowed to edit this organization's profile.")
+    return _row_to_dict(row)
+
+
+# ---------------------------------------------------------------------------
+# Claude config, scoped to a project or a single session
+#
+# Same four fields as workspace_profiles (claude_settings_json, claude_md,
+# mcp_json, skills_json), one layer down. RLS on the underlying table is what
+# actually enforces who may write these — a project needs admin/write access,
+# a session additionally needs to be yours — so these functions are thin.
+# ---------------------------------------------------------------------------
+
+CLAUDE_CONFIG_COLUMNS = "claude_settings_json, claude_md, mcp_json, skills_json"
+
+
+async def get_project_config(
+    conn: AsyncConnection, project_id: UUID
+) -> dict[str, Any] | None:
+    result = await conn.execute(
+        text(f"select {CLAUDE_CONFIG_COLUMNS} from projects where id = :id"),
+        {"id": project_id},
+    )
+    row = result.first()
+    return _row_to_dict(row) if row else None
+
+
+async def update_project_config(
+    conn: AsyncConnection,
+    project_id: UUID,
+    *,
+    claude_settings_json: str | None,
+    claude_md: str | None,
+    mcp_json: str | None,
+    skills: dict[str, str],
+) -> dict[str, Any]:
+    result = await conn.execute(
+        text(
+            f"""
+            update projects set
+              claude_settings_json = :settings,
+              claude_md            = :claude_md,
+              mcp_json             = :mcp,
+              skills_json           = cast(:skills as jsonb)
+            where id = :id
+            returning {CLAUDE_CONFIG_COLUMNS}
+            """
+        ),
+        {
+            "id": project_id,
+            "settings": claude_settings_json,
+            "claude_md": claude_md,
+            "mcp": mcp_json,
+            "skills": json.dumps(skills),
+        },
+    )
+    row = result.first()
+    if row is None:
+        raise PermissionError("Not allowed to edit this project's configuration.")
+    return _row_to_dict(row)
+
+
+async def get_session_config(
+    conn: AsyncConnection, project_id: UUID, tmux_session: str
+) -> dict[str, Any] | None:
+    result = await conn.execute(
+        text(
+            f"select {CLAUDE_CONFIG_COLUMNS} from project_sessions "
+            "where project_id = :pid and tmux_session = :ts"
+        ),
+        {"pid": project_id, "ts": tmux_session},
+    )
+    row = result.first()
+    return _row_to_dict(row) if row else None
+
+
+async def update_session_config(
+    conn: AsyncConnection,
+    project_id: UUID,
+    tmux_session: str,
+    *,
+    claude_settings_json: str | None,
+    claude_md: str | None,
+    mcp_json: str | None,
+    skills: dict[str, str],
+) -> dict[str, Any]:
+    result = await conn.execute(
+        text(
+            f"""
+            update project_sessions set
+              claude_settings_json = :settings,
+              claude_md            = :claude_md,
+              mcp_json             = :mcp,
+              skills_json           = cast(:skills as jsonb)
+            where project_id = :pid and tmux_session = :ts
+            returning {CLAUDE_CONFIG_COLUMNS}
+            """
+        ),
+        {
+            "pid": project_id,
+            "ts": tmux_session,
+            "settings": claude_settings_json,
+            "claude_md": claude_md,
+            "mcp": mcp_json,
+            "skills": json.dumps(skills),
+        },
+    )
+    row = result.first()
+    if row is None:
+        raise PermissionError(
+            "Not allowed to edit this session's configuration, or it does not exist."
+        )
     return _row_to_dict(row)
 
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shlex
 from dataclasses import dataclass, field
 from typing import Any
@@ -46,6 +47,9 @@ class WorkspaceProfile:
     claude_settings_json: str | None = None
     claude_md: str | None = None
     mcp_json: str | None = None
+    # {skill name: SKILL.md body}. Single-file skills only for now — no
+    # supporting scripts or reference docs alongside SKILL.md.
+    skills: dict[str, str] = field(default_factory=dict)
     env_vars: dict[str, str] = field(default_factory=dict)
     git_user_name: str | None = None
     git_user_email: str | None = None
@@ -106,6 +110,42 @@ async def read_file(
     return result.stdout
 
 
+# A skill's name becomes a directory under the harness's Skills folder, so it
+# is restricted to what is safe there regardless of what already passed
+# schema validation on the way in — this is the last line of defence before a
+# shell command.
+_SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+
+async def write_skills(
+    conn: asyncssh.SSHClientConnection,
+    container: str,
+    directory: str,
+    skills: dict[str, str],
+) -> None:
+    """Replace a harness's Skills directory wholesale.
+
+    Moonphase owns this directory outright once it has anything to say about
+    Skills, the same way it owns settings.json and CLAUDE.md — a skill removed
+    from the profile must actually disappear rather than linger from before
+    this session's config was last applied.
+    """
+    quoted_dir = shlex.quote(directory)
+    result = await docker_remote.exec_capture(
+        conn, container, ["sh", "-c", f"rm -rf {quoted_dir} && mkdir -p {quoted_dir}"],
+        timeout=30,
+    )
+    result.check(f"Clearing Skills directory {directory} in {container}")
+
+    for name, body in skills.items():
+        if not _SKILL_NAME_RE.match(name):
+            log.warning("skipping skill with an unsafe name: %r", name)
+            continue
+        await write_file(
+            conn, container, f"{directory}/{name}/SKILL.md", body, mode="600"
+        )
+
+
 def _git_credentials_line(credential: VcsCredential) -> str:
     # GitHub accepts any username when the password is a token; x-access-token
     # is the documented placeholder and avoids implying it is a real account.
@@ -149,6 +189,11 @@ async def apply(
         merged = harness.merge_into_profile_file(existing, profile)
         if merged is not None:
             await write_file(conn, container, merge_target, merged, mode="600")
+
+    # --- skills ---------------------------------------------------------------
+    skills_dir = harness.skills_directory(space)
+    if skills_dir is not None:
+        await write_skills(conn, container, skills_dir, profile.skills)
 
     # --- harness credentials ------------------------------------------------
     if profile.harness_credential is not None:
@@ -236,23 +281,37 @@ async def apply(
         )
 
 
+def parse_json_object(raw: Any) -> dict[str, Any]:
+    """A jsonb column's value, whatever shape the driver handed back.
+
+    asyncpg returns jsonb as a Python object in some paths and as its raw text
+    in others depending on the query; this accepts either rather than making
+    every caller guess which one it got.
+    """
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+    else:
+        parsed = raw or {}
+    return dict(parsed) if isinstance(parsed, dict) else {}
+
+
 def profile_from_row(
     row: dict[str, Any],
     harness_credential: HarnessCredential | None = None,
     vcs_credential: VcsCredential | None = None,
 ) -> WorkspaceProfile:
-    raw_env = row.get("env_vars") or {}
-    if isinstance(raw_env, str):
-        try:
-            raw_env = json.loads(raw_env)
-        except json.JSONDecodeError:
-            raw_env = {}
+    raw_env = parse_json_object(row.get("env_vars"))
+    raw_skills = parse_json_object(row.get("skills_json"))
     return WorkspaceProfile(
         org_id=str(row["org_id"]),
         claude_settings_json=row.get("claude_settings_json"),
         claude_md=row.get("claude_md"),
         mcp_json=row.get("mcp_json"),
-        env_vars={str(k): str(v) for k, v in dict(raw_env).items()},
+        skills={str(k): str(v) for k, v in raw_skills.items()},
+        env_vars={str(k): str(v) for k, v in raw_env.items()},
         git_user_name=row.get("git_user_name"),
         git_user_email=row.get("git_user_email"),
         harness_credential=harness_credential,

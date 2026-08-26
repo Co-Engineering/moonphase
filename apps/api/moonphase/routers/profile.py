@@ -19,6 +19,7 @@ from ..auth import Principal, current_principal
 from ..config import get_settings
 from ..db import service_session, user_session
 from ..harness import get as get_harness
+from ..profile import parse_json_object
 from ..runtime import CAN_CONTROL, NotFound
 from ..schemas import (
     GitHubDeviceOut,
@@ -55,6 +56,7 @@ async def _build_out(principal: Principal, org_id: UUID) -> WorkspaceProfileOut:
             "claude_settings_json": None,
             "claude_md": None,
             "mcp_json": None,
+            "skills_json": {},
             "env_vars": {},
             "git_user_name": None,
             "git_user_email": None,
@@ -66,21 +68,16 @@ async def _build_out(principal: Principal, org_id: UUID) -> WorkspaceProfileOut:
         )
         vcs_row = await queries.get_vcs_credential_privileged(conn, org_id, "github")
 
-    env = row.get("env_vars") or {}
-    if isinstance(env, str):
-        import json
-
-        try:
-            env = json.loads(env)
-        except json.JSONDecodeError:
-            env = {}
+    env = parse_json_object(row.get("env_vars"))
+    skills = parse_json_object(row.get("skills_json"))
 
     return WorkspaceProfileOut(
         org_id=org_id,
         claude_settings_json=row.get("claude_settings_json"),
         claude_md=row.get("claude_md"),
         mcp_json=row.get("mcp_json"),
-        env_vars={str(k): str(v) for k, v in dict(env).items()},
+        skills={str(k): str(v) for k, v in skills.items()},
+        env_vars={str(k): str(v) for k, v in env.items()},
         git_user_name=row.get("git_user_name"),
         git_user_email=row.get("git_user_email"),
         harness_connected=harness_row is not None,
@@ -117,6 +114,7 @@ async def update_profile(
                 claude_settings_json=payload.claude_settings_json,
                 claude_md=payload.claude_md,
                 mcp_json=payload.mcp_json,
+                skills=payload.skills,
                 env_vars=payload.env_vars,
                 git_user_name=payload.git_user_name,
                 git_user_email=payload.git_user_email,

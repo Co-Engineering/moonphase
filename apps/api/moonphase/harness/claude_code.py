@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import Any
 
 from .base import (
@@ -117,6 +118,113 @@ def _project_slug(workdir: str) -> str:
     return workdir.replace("/", "-")
 
 
+# --- layering project- and session-level config over the org profile --------
+#
+# Three scopes (org, project, session) compose into one effective config,
+# entirely under the session's own $HOME rather than into the project's git
+# checkout — see `profile_file_target` above for why `.mcp.json` at the repo
+# root is the wrong place for this. A more specific scope wins a scalar
+# setting; CLAUDE.md and MCP servers are additive; permission rules union with
+# the stricter decision winning, so a project-wide deny cannot be quietly
+# reopened by someone's own session settings.
+
+_PERMISSION_DECISIONS = ("deny", "ask", "allow")  # most restrictive first
+
+
+def _parse_object(raw: str | None) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _merge_settings_layers(layers: list[str | None]) -> str | None:
+    merged: dict[str, Any] = {}
+    decided: dict[str, str] = {}  # "Tool(pattern)" -> decision
+
+    for raw in layers:
+        doc = _parse_object(raw)
+        for key, value in doc.items():
+            if key != "permissions":
+                merged[key] = value
+        permissions = doc.get("permissions")
+        if not isinstance(permissions, dict):
+            continue
+        for decision in _PERMISSION_DECISIONS:
+            rules = permissions.get(decision)
+            if not isinstance(rules, list):
+                continue
+            for rule in rules:
+                if not isinstance(rule, str):
+                    continue
+                current = decided.get(rule)
+                if current is None or (
+                    _PERMISSION_DECISIONS.index(decision)
+                    < _PERMISSION_DECISIONS.index(current)
+                ):
+                    decided[rule] = decision
+
+    if decided:
+        by_decision: dict[str, list[str]] = {}
+        for rule, decision in decided.items():
+            by_decision.setdefault(decision, []).append(rule)
+        merged["permissions"] = by_decision
+
+    return json.dumps(merged) if merged else None
+
+
+def _merge_claude_md_layers(layers: list[tuple[str, str | None]]) -> str | None:
+    """Concatenate CLAUDE.md layers, broadest first.
+
+    Same order Claude Code itself loads nested CLAUDE.md files in: user, then
+    project, then the most specific one.
+    """
+    parts = [
+        f"# {label}\n\n{text.strip()}"
+        for label, text in layers
+        if text and text.strip()
+    ]
+    return "\n\n---\n\n".join(parts) if parts else None
+
+
+def _merge_mcp_layers(layers: list[str | None]) -> str | None:
+    servers: dict[str, Any] = {}
+    for raw in layers:
+        layer_servers = _parse_object(raw).get("mcpServers")
+        if isinstance(layer_servers, dict):
+            servers.update(layer_servers)
+    return json.dumps({"mcpServers": servers}) if servers else None
+
+
+def _merge_skills_layers(layers: list[dict[str, str]]) -> dict[str, str]:
+    merged: dict[str, str] = {}
+    for layer in layers:
+        merged.update(layer)
+    return merged
+
+
+def _row_skills(row: dict[str, Any] | None) -> dict[str, str]:
+    if not row:
+        return {}
+    from ..profile import parse_json_object
+
+    return {str(k): str(v) for k, v in parse_json_object(row.get("skills_json")).items()}
+
+
+def _row_has_config(row: dict[str, Any] | None) -> bool:
+    if not row:
+        return False
+    return bool(
+        row.get("claude_settings_json")
+        or row.get("claude_md")
+        or row.get("mcp_json")
+        or _row_skills(row)
+    )
+
+
 class ClaudeCode(Harness):
     kind = HarnessKind.CLAUDE_CODE
     display_name = "Claude Code"
@@ -221,6 +329,59 @@ class ClaudeCode(Harness):
             doc.pop("mcpServers", None)
 
         return json.dumps(doc)
+
+    def skills_directory(self, space: SessionSpace) -> str | None:
+        return f"{_claude_home(space)}/skills"
+
+    def compose_project_layers(
+        self,
+        profile: Any,
+        project_row: dict[str, Any] | None,
+        session_row: dict[str, Any] | None,
+    ) -> Any:
+        # No project- or session-level config exists: leave the org profile
+        # exactly as it was rather than round-tripping it through JSON
+        # parsing and a "Global preferences" header nobody asked for. Most
+        # projects and sessions never set any of this, and that case must be
+        # byte-for-byte what it always was.
+        if not _row_has_config(project_row) and not _row_has_config(session_row):
+            return profile
+
+        project_row = project_row or {}
+        session_row = session_row or {}
+
+        settings = _merge_settings_layers(
+            [
+                profile.claude_settings_json,
+                project_row.get("claude_settings_json"),
+                session_row.get("claude_settings_json"),
+            ]
+        )
+        claude_md = _merge_claude_md_layers(
+            [
+                ("Global preferences", profile.claude_md),
+                ("Project instructions", project_row.get("claude_md")),
+                ("Your session", session_row.get("claude_md")),
+            ]
+        )
+        mcp_json = _merge_mcp_layers(
+            [
+                profile.mcp_json,
+                project_row.get("mcp_json"),
+                session_row.get("mcp_json"),
+            ]
+        )
+        skills = _merge_skills_layers(
+            [profile.skills, _row_skills(project_row), _row_skills(session_row)]
+        )
+
+        return replace(
+            profile,
+            claude_settings_json=settings,
+            claude_md=claude_md,
+            mcp_json=mcp_json,
+            skills=skills,
+        )
 
     def activity_signals(self) -> Any:
         from ..activity import ActivitySignals

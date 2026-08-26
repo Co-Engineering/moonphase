@@ -601,6 +601,180 @@ export function McpEditor({ value, onChange }: SettingsProps) {
   )
 }
 
+// --- skills --------------------------------------------------------------------
+
+/**
+ * Skills, as {name: SKILL.md body}.
+ *
+ * Single-file skills only — a name and one body of instructions, no
+ * supporting scripts or reference docs alongside it. Claude discovers a skill
+ * on its own and only pulls it into context when it looks relevant, which is
+ * what makes it different from CLAUDE.md: instructions there load every time,
+ * a skill only when it is actually needed.
+ */
+export function SkillsEditor({ value, onChange }: SkillsProps) {
+  const entries = Object.entries(value)
+
+  const rename = (index: number, name: string) => {
+    const next = entries.map(([n, body], i) => [i === index ? name : n, body] as const)
+    onChange(Object.fromEntries(next))
+  }
+  const setBody = (index: number, body: string) => {
+    const next = entries.map(([n, b], i) => [n, i === index ? body : b] as const)
+    onChange(Object.fromEntries(next))
+  }
+  const remove = (index: number) =>
+    onChange(Object.fromEntries(entries.filter((_, i) => i !== index)))
+  const add = () => {
+    let name = 'new-skill'
+    for (let n = 1; name in value; n++) name = `new-skill-${n}`
+    onChange({ ...value, [name]: '' })
+  }
+
+  return (
+    <div className="config-editor">
+      <div className="config-head">
+        <span>
+          Written to <code>~/.claude/skills/&lt;name&gt;/SKILL.md</code>
+        </span>
+      </div>
+
+      {entries.length === 0 && (
+        <p className="muted small">
+          No skills configured. A skill teaches Claude how to do one specific task —
+          discovered on its own and only loaded into context when it looks relevant,
+          unlike CLAUDE.md which loads every time.
+        </p>
+      )}
+
+      {entries.map(([name, body], index) => (
+        <div className="mcp-server" key={index}>
+          <div className="mcp-server-head">
+            <input
+              className="mcp-name"
+              value={name}
+              onChange={(event) => rename(index, event.target.value)}
+              placeholder="skill-name"
+            />
+            <button
+              className="ghost small"
+              onClick={() => remove(index)}
+              aria-label="Remove skill"
+            >
+              ✕
+            </button>
+          </div>
+          <textarea
+            value={body}
+            onChange={(event) => setBody(index, event.target.value)}
+            placeholder={
+              '---\nname: skill-name\ndescription: When Claude should reach for this\n---\n\nInstructions for the task itself.'
+            }
+            rows={10}
+          />
+        </div>
+      ))}
+
+      <button className="ghost small" onClick={add}>
+        + Add skill
+      </button>
+    </div>
+  )
+}
+
+interface SkillsProps {
+  value: Record<string, string>
+  onChange: (next: Record<string, string>) => void
+}
+
+// --- combined editor, reused across org / project / session scopes ---------
+
+export interface ClaudeConfigValue {
+  claude_settings_json: string | null
+  claude_md: string | null
+  mcp_json: string | null
+  skills: Record<string, string>
+}
+
+type ClaudeConfigSection = 'settings' | 'mcp' | 'md' | 'skills'
+
+/**
+ * The four Claude Code editors as one unit — permissions, MCP servers,
+ * CLAUDE.md and skills — parameterised by what "applies to" means, since the
+ * same four fields exist at the org, project and session scope and only that
+ * sentence changes between them.
+ */
+export function ClaudeConfigFields({
+  value,
+  onChange,
+  claudeMdHint,
+}: {
+  value: ClaudeConfigValue
+  onChange: (next: ClaudeConfigValue) => void
+  claudeMdHint: string
+}) {
+  const [section, setSection] = useState<ClaudeConfigSection>('settings')
+
+  const tabs: [ClaudeConfigSection, string][] = [
+    ['settings', 'Permissions & behaviour'],
+    ['mcp', 'MCP servers'],
+    ['md', 'CLAUDE.md'],
+    ['skills', 'Skills'],
+  ]
+
+  return (
+    <>
+      <div className="subtabs" role="tablist">
+        {tabs.map(([key, label]) => (
+          <button
+            key={key}
+            role="tab"
+            aria-selected={section === key}
+            className={section === key ? 'active' : ''}
+            onClick={() => setSection(key)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {section === 'settings' && (
+        <SettingsEditor
+          value={value.claude_settings_json}
+          onChange={(next) => onChange({ ...value, claude_settings_json: next })}
+        />
+      )}
+      {section === 'mcp' && (
+        <McpEditor
+          value={value.mcp_json}
+          onChange={(next) => onChange({ ...value, mcp_json: next })}
+        />
+      )}
+      {section === 'md' && (
+        <label>
+          <span>{claudeMdHint}</span>
+          <textarea
+            value={value.claude_md ?? ''}
+            onChange={(event) =>
+              onChange({ ...value, claude_md: event.target.value })
+            }
+            placeholder={
+              '# My preferences\n\n- Prefer small, focused commits\n- Never add comments that restate the code'
+            }
+            rows={14}
+          />
+        </label>
+      )}
+      {section === 'skills' && (
+        <SkillsEditor
+          value={value.skills}
+          onChange={(next) => onChange({ ...value, skills: next })}
+        />
+      )}
+    </>
+  )
+}
+
 // --- shared ------------------------------------------------------------------
 
 function PairEditor({

@@ -232,6 +232,7 @@ export interface WorkspaceProfile {
   claude_settings_json: string | null
   claude_md: string | null
   mcp_json: string | null
+  skills: Record<string, string>
   env_vars: Record<string, string>
   git_user_name: string | null
   git_user_email: string | null
@@ -246,10 +247,26 @@ export interface WorkspaceProfileInput {
   claude_settings_json?: string | null
   claude_md?: string | null
   mcp_json?: string | null
+  skills?: Record<string, string>
   env_vars: Record<string, string>
   git_user_name?: string | null
   git_user_email?: string | null
 }
+
+/**
+ * The layer beneath the workspace profile: same four fields, scoped to one
+ * project (applies to every session in it) or one session (that person only).
+ * See `moonphase.harness.claude_code.ClaudeCode.compose_project_layers` on
+ * the backend for how the three scopes combine.
+ */
+export interface ClaudeConfig {
+  claude_settings_json: string | null
+  claude_md: string | null
+  mcp_json: string | null
+  skills: Record<string, string>
+}
+
+export type ClaudeConfigInput = ClaudeConfig
 
 export interface HarnessLogin {
   session_id: string
@@ -469,6 +486,26 @@ export const api = {
         session ? `?session=${encodeURIComponent(session)}` : ''
       }`,
       { method: 'POST', body: JSON.stringify({ keys, enter }) },
+    ),
+
+  // --- Claude config, scoped to a project or a session -----------------------
+  /** Applies to every session in this project. */
+  projectConfig: (projectId: string) =>
+    request<ClaudeConfig>(`/api/projects/${projectId}/config`),
+  saveProjectConfig: (projectId: string, input: ClaudeConfigInput) =>
+    request<ClaudeConfig>(`/api/projects/${projectId}/config`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    }),
+  /** One person's own session. Only its owner (or a project admin) can see it. */
+  sessionConfig: (projectId: string, session: string) =>
+    request<ClaudeConfig>(
+      `/api/projects/${projectId}/sessions/${encodeURIComponent(session)}/config`,
+    ),
+  saveSessionConfig: (projectId: string, session: string, input: ClaudeConfigInput) =>
+    request<ClaudeConfig>(
+      `/api/projects/${projectId}/sessions/${encodeURIComponent(session)}/config`,
+      { method: 'PUT', body: JSON.stringify(input) },
     ),
 
   // --- global profile -------------------------------------------------------

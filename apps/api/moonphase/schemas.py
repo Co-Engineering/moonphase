@@ -388,11 +388,52 @@ class EnvironmentIn(BaseModel):
 # --- workspace profile ------------------------------------------------------
 
 
+def _valid_json_object(v: str | None) -> str | None:
+    """Reject malformed JSON here rather than letting the harness choke.
+
+    An object specifically, not merely valid JSON: `settings.json` and
+    `.mcp.json` are both objects, and a bare string or list parses fine while
+    producing a container where the harness silently ignores the file.
+    Failing at the point someone can still fix it is the whole value of
+    checking at all.
+    """
+    if v is None or not v.strip():
+        return None
+    import json
+
+    try:
+        parsed = json.loads(v)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Must be valid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("Must be a JSON object.")
+    return v
+
+
+# A skill's name becomes a directory name (`~/.claude/skills/<name>/SKILL.md`),
+# so it is restricted to what is safe there — the same pattern profile.py
+# checks again server-side before it ever reaches a shell command.
+_SKILL_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+
+
+def _valid_skills(v: dict[str, str]) -> dict[str, str]:
+    import re
+
+    for name in v:
+        if not re.match(_SKILL_NAME_PATTERN, name):
+            raise ValueError(
+                f"Skill name {name!r} must be letters, numbers, - or _, starting "
+                "with a letter or number."
+            )
+    return v
+
+
 class WorkspaceProfileIn(BaseModel):
     org_id: UUID | None = None
     claude_settings_json: str | None = None
     claude_md: str | None = None
     mcp_json: str | None = None
+    skills: dict[str, str] = Field(default_factory=dict)
     env_vars: dict[str, str] = Field(default_factory=dict)
     git_user_name: str | None = None
     git_user_email: str | None = None
@@ -400,25 +441,12 @@ class WorkspaceProfileIn(BaseModel):
     @field_validator("claude_settings_json", "mcp_json")
     @classmethod
     def _valid_json(cls, v: str | None) -> str | None:
-        """Reject malformed JSON here rather than letting the harness choke.
+        return _valid_json_object(v)
 
-        An object specifically, not merely valid JSON: `settings.json` and
-        `.mcp.json` are both objects, and a bare string or list parses fine
-        while producing a container where the harness silently ignores the
-        file. Failing at the point someone can still fix it is the whole value
-        of checking at all.
-        """
-        if v is None or not v.strip():
-            return None
-        import json
-
-        try:
-            parsed = json.loads(v)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Must be valid JSON: {exc}") from exc
-        if not isinstance(parsed, dict):
-            raise ValueError("Must be a JSON object.")
-        return v
+    @field_validator("skills")
+    @classmethod
+    def _valid_skill_names(cls, v: dict[str, str]) -> dict[str, str]:
+        return _valid_skills(v)
 
 
 class WorkspaceProfileOut(BaseModel):
@@ -426,6 +454,7 @@ class WorkspaceProfileOut(BaseModel):
     claude_settings_json: str | None
     claude_md: str | None
     mcp_json: str | None
+    skills: dict[str, str] = Field(default_factory=dict)
     env_vars: dict[str, str]
     git_user_name: str | None
     git_user_email: str | None
@@ -435,6 +464,37 @@ class WorkspaceProfileOut(BaseModel):
     github_connected: bool = False
     github_account: str | None = None
     github_scopes: str | None = None
+
+
+# --- project / session Claude config ----------------------------------------
+#
+# Same four fields as the workspace profile, scoped to one project or one
+# session instead of the whole org — see moonphase/harness/claude_code.py's
+# `compose_project_layers` for how the three scopes combine.
+
+
+class ClaudeConfigIn(BaseModel):
+    claude_settings_json: str | None = None
+    claude_md: str | None = None
+    mcp_json: str | None = None
+    skills: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("claude_settings_json", "mcp_json")
+    @classmethod
+    def _valid_json(cls, v: str | None) -> str | None:
+        return _valid_json_object(v)
+
+    @field_validator("skills")
+    @classmethod
+    def _valid_skill_names(cls, v: dict[str, str]) -> dict[str, str]:
+        return _valid_skills(v)
+
+
+class ClaudeConfigOut(BaseModel):
+    claude_settings_json: str | None
+    claude_md: str | None
+    mcp_json: str | None
+    skills: dict[str, str] = Field(default_factory=dict)
 
 
 # --- harness sign-in --------------------------------------------------------
