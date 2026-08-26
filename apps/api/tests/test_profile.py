@@ -9,6 +9,7 @@ what was written.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import time
 import uuid
@@ -140,6 +141,15 @@ async def test_profile_reaches_the_container(fake_server: str) -> None:
         assert settings and "Bash(npm test)" in settings
         print("\n  global CLAUDE.md and settings.json written")
 
+        # --- MCP servers merge into ~/.claude.json, not a file under .claude/ --
+        claude_json = await profile_mod.read_file(conn, container, "/home/dev/.claude.json")
+        assert claude_json is not None
+        claude_state = json.loads(claude_json)
+        assert claude_state.get("mcpServers") == {}
+        # The seed file's own keys must survive the merge.
+        assert claude_state.get("hasCompletedOnboarding") is True
+        print("  MCP servers merged into ~/.claude.json without clobbering it")
+
         # --- environment ----------------------------------------------------
         env = await profile_mod.read_file(conn, container, SPACE.env_file)
         assert env and "MOONPHASE_TEST_VAR" in env
@@ -220,6 +230,37 @@ async def test_profile_reaches_the_container(fake_server: str) -> None:
         assert updated and "Now with different guidance" in updated
         assert "Prefer small commits" not in updated
         print("  re-applying the profile overwrites owned files")
+
+        # --- MCP servers merge without clobbering Claude Code's own state ------
+        # Simulate Claude Code itself having written a trust decision into
+        # ~/.claude.json between session starts.
+        await docker_remote.exec_capture(
+            conn, container,
+            ["sh", "-c",
+             "printf '%s' "
+             '\'{"hasCompletedOnboarding":true,"projects":{"/workspace":{"trusted":true}}}\' '
+             "> /home/dev/.claude.json"],
+        )
+        wp.mcp_json = '{"mcpServers":{"fs":{"command":"npx","args":["srv"]}}}'
+        await profile_mod.apply(conn, container, harness, wp)
+        after_merge = json.loads(
+            await profile_mod.read_file(conn, container, "/home/dev/.claude.json")
+        )
+        assert after_merge["mcpServers"] == {"fs": {"command": "npx", "args": ["srv"]}}
+        assert after_merge["projects"]["/workspace"]["trusted"] is True, (
+            "merging MCP servers must not discard Claude Code's own state"
+        )
+        print("  MCP servers merge without discarding trust decisions/history")
+
+        # Clearing the org's MCP config removes the key rather than leaving it.
+        wp.mcp_json = None
+        await profile_mod.apply(conn, container, harness, wp)
+        after_clear = json.loads(
+            await profile_mod.read_file(conn, container, "/home/dev/.claude.json")
+        )
+        assert "mcpServers" not in after_clear
+        assert after_clear["projects"]["/workspace"]["trusted"] is True
+        print("  clearing MCP servers removes the key and nothing else")
 
         # --- disconnecting GitHub cleans up ------------------------------------
         wp.vcs_credential = None

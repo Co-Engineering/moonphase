@@ -173,7 +173,10 @@ class ClaudeCode(Harness):
 
         `settings.json` and the global `CLAUDE.md` are exactly the things
         people expect to set once and have everywhere, so they are owned by
-        the profile and overwritten on each session start.
+        the profile and overwritten on each session start. MCP servers are
+        not here: Claude Code reads user-scoped servers from `~/.claude.json`
+        (see `profile_file_target`/`merge_into_profile_file`), not from a
+        file under `~/.claude`.
         """
         home = _claude_home(space)
         files: dict[str, str] = {}
@@ -181,9 +184,43 @@ class ClaudeCode(Harness):
             files[f"{home}/settings.json"] = profile.claude_settings_json
         if profile.claude_md:
             files[f"{home}/CLAUDE.md"] = profile.claude_md
-        if profile.mcp_json:
-            files[f"{home}/.mcp.json"] = profile.mcp_json
         return files
+
+    def profile_file_target(self, space: SessionSpace) -> str | None:
+        return f"{space.home}/.claude.json"
+
+    def merge_into_profile_file(self, existing: str | None, profile: Any) -> str | None:
+        """Merge the org's MCP servers into Claude Code's own state file.
+
+        `~/.claude.json` is where Claude Code keeps trust decisions, project
+        history and the rest of its own mutable state, and also where it
+        looks for user-scoped MCP servers — under a top-level `mcpServers`
+        key. Overwriting the whole file the way `profile_files()` does for
+        `settings.json` would throw that state away, so only that one key is
+        replaced.
+        """
+        try:
+            doc = json.loads(existing) if existing else {}
+        except json.JSONDecodeError:
+            doc = {}
+        if not isinstance(doc, dict):
+            doc = {}
+
+        servers = None
+        if profile.mcp_json:
+            try:
+                parsed = json.loads(profile.mcp_json)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict):
+                servers = parsed.get("mcpServers")
+
+        if isinstance(servers, dict):
+            doc["mcpServers"] = servers
+        else:
+            doc.pop("mcpServers", None)
+
+        return json.dumps(doc)
 
     def activity_signals(self) -> Any:
         from ..activity import ActivitySignals

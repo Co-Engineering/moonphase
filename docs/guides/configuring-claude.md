@@ -35,8 +35,8 @@ is a dropdown:
 
 ## MCP servers
 
-`~/.claude/.mcp.json`, as a card per server. Pick the transport and you are shown only
-the fields it needs:
+The `mcpServers` key of `~/.claude.json`, as a card per server. Pick the transport and
+you are shown only the fields it needs:
 
 === "Local process"
 

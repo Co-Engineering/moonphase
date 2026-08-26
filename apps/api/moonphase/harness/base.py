@@ -152,6 +152,27 @@ class Harness(abc.ABC):
         """
         return {}
 
+    def profile_file_target(self, space: SessionSpace) -> str | None:
+        """Path of a config file the harness also mutates on its own, if any.
+
+        Some profile-owned settings live inside a file the harness treats as
+        its own state (trust decisions, history, project list) rather than a
+        file Moonphase fully owns — `profile_files()`'s blind overwrite would
+        destroy that state. Returning a path here routes that file through
+        `merge_into_profile_file` instead, which reads it first. None means
+        the harness has no such file.
+        """
+        return None
+
+    def merge_into_profile_file(self, existing: str | None, profile: Any) -> str | None:
+        """New contents for `profile_file_target`, given what is there now.
+
+        `existing` is None when the file does not exist yet. Return None to
+        leave the file untouched this session.
+        """
+        del existing, profile
+        return None
+
     def activity_signals(self) -> Any:
         """Hints for reading a still terminal, as an `ActivitySignals`.
 
