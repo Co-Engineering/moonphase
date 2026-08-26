@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from .base import (
@@ -15,6 +16,8 @@ from .base import (
     SessionSpace,
     register,
 )
+
+log = logging.getLogger(__name__)
 
 __all__ = ["ClaudeCode", "AuthStatus"]
 
@@ -225,9 +228,14 @@ class ClaudeCode(Harness):
         try:
             doc = json.loads(existing) if existing else {}
         except json.JSONDecodeError:
-            doc = {}
+            # Something is there and it is not JSON we understand. Starting
+            # from {} would hand back a file with the MCP servers in it and
+            # every trust decision and project history gone — losing the MCP
+            # config is the smaller of those two, so leave the file alone.
+            log.warning("%s is not readable JSON; leaving it untouched", "~/.claude.json")
+            return None
         if not isinstance(doc, dict):
-            doc = {}
+            return None
 
         servers = None
         if profile.mcp_json:
