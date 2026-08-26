@@ -1887,6 +1887,15 @@ button.linkish:hover:not(:disabled) {
   max-width: 260px;
 }
 
+/* Without its own `flex` shorthand, the global `select { width: 100% }` rule
+   becomes this element's flex-basis, so it claimed the whole row and left
+   the name input no space to grow into. */
+.new-session select {
+  flex: 1;
+  min-width: 0;
+  max-width: 180px;
+}
+
 .new-session button {
   flex: none;
 }
