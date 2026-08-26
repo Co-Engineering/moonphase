@@ -103,6 +103,17 @@ The update replaces the API container, so the page loses contact for a few
 seconds. That is expected: the panel says so, and a reload during that window
 waits for the instance to come back rather than asking you where it lives.
 
+The updater runs Compose inside a throwaway container that holds your project
+at the same path the host does. That sounds like a detail and is not: the
+daemon resolves a bind mount like `./docker/Caddyfile` against the *host's*
+filesystem, so running Compose from a container that sees the project
+somewhere else hands Docker a path that does not exist out there — which it
+then creates as an empty directory, and the proxy dies mounting a directory
+onto a file.
+
+It also checks the services settled before reporting success. `up -d`
+returning means the containers were started, not that they stayed up.
+
 The updater is the one service an update leaves alone. It runs the restart, so
 recreating it would stop the command part way through — which is exactly what
 happened once, leaving an instance with no database. It picks up its own new

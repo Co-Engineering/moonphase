@@ -78,11 +78,42 @@ while true; do
   seen="$current"
 
   say "update requested"
-  status "running|pulling images"
 
-  # --project-directory, because the compose files are mounted read-only and
-  # this container's working directory is not theirs.
-  if ! output=$(cd "$PROJECT" && docker compose pull 2>&1); then
+  # Where the project actually lives, on the host.
+  #
+  # Compose is being run from inside a container, and the daemon it talks to
+  # resolves bind mounts against the *host's* filesystem. A relative source
+  # like `./docker/Caddyfile` became `/project/docker/Caddyfile` — this
+  # container's view — which does not exist out there, so Docker created it as
+  # an empty directory and the proxy died trying to mount a directory onto a
+  # file. The auth container went the same way and the instance was
+  # unreachable.
+  #
+  # Asked of the daemon rather than configured, so an install that predates
+  # this needs no new setting.
+  host_dir=$(docker inspect "$(cat /etc/hostname)" \
+    --format '{{range .Mounts}}{{if eq .Destination "'"$PROJECT"'"}}{{.Source}}{{end}}{{end}}' \
+    2>/dev/null || true)
+  if [ -z "$host_dir" ]; then
+    say "could not find the project's path on the host"
+    status "failed|the updater could not work out where the project lives on the host"
+    continue
+  fi
+
+  # Everything runs in a throwaway container that holds the project at the
+  # same path the host does, so every relative path means the same thing in
+  # both places. It is also not part of the compose project, so nothing the
+  # update does can stop it half way through.
+  compose() {
+    docker run --rm \
+      -v /var/run/docker.sock:/var/run/docker.sock \
+      -v "$host_dir:$host_dir" \
+      -w "$host_dir" \
+      docker:28-cli docker compose "$@" 2>&1
+  }
+
+  status "running|pulling images"
+  if ! output=$(compose pull); then
     say "pull failed"
     status "failed|$(printf '%s' "$output" | tail -3 | tr '\n' ' ')"
     continue
@@ -100,8 +131,7 @@ while true; do
   #
   # Asking Compose for the service list keeps this correct whichever overlay
   # files are in play, rather than naming services here and going stale.
-  services=$(cd "$PROJECT" && docker compose config --services 2>/dev/null \
-    | grep -vx updater | tr '\n' ' ')
+  services=$(compose config --services 2>/dev/null | grep -vx updater | tr '\n' ' ')
   if [ -z "$(printf '%s' "$services" | tr -d ' ')" ]; then
     say "could not list services"
     status "failed|could not read the compose project's service list"
@@ -109,9 +139,22 @@ while true; do
   fi
 
   # shellcheck disable=SC2086 - a deliberate word list.
-  if ! output=$(cd "$PROJECT" && docker compose up -d $services 2>&1); then
+  if ! output=$(compose up -d $services); then
     say "up failed"
     status "failed|$(printf '%s' "$output" | tail -3 | tr '\n' ' ')"
+    continue
+  fi
+
+  # `up -d` returning says the containers were created and started, not that
+  # they stayed up. An update that leaves a service crash-looping reported
+  # "ok|updated" and looked like a success from the settings screen while the
+  # instance was unreachable — which is exactly how one went unnoticed.
+  sleep 10
+  broken=$(compose ps --format '{{.Service}} {{.State}}' 2>/dev/null \
+    | grep -vE ' (running|exited)$' | awk '{print $1}' | tr '\n' ' ')
+  if [ -n "$(printf '%s' "$broken" | tr -d ' ')" ]; then
+    say "some services did not settle: $broken"
+    status "failed|these did not come up: $broken"
     continue
   fi
 
