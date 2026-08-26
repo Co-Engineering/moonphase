@@ -1,6 +1,6 @@
 [project]
 name = "moonphase-api"
-version = "0.7.0"
+version = "0.7.1"
 description = "Moonphase backend — SSH, Docker orchestration and PTY bridging"
 requires-python = ">=3.11"
 dependencies = [
@@ -16,6 +16,8 @@ dependencies = [
     "httpx>=0.27",
     "python-slugify>=8.0",
     "pywebpush>=2.0",
+    # FastAPI's UploadFile needs this to parse multipart/form-data at all.
+    "python-multipart>=0.0.12",
 ]
 
 [project.optional-dependencies]

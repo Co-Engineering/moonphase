@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, feedUrl, type DiffLine, type FeedEvent, type Prompt } from '../lib/api'
 
+interface Attachment {
+  id: string
+  file: File
+  previewUrl: string
+  /** Set once the upload lands and the container has a path to point at. */
+  path: string | null
+  uploading: boolean
+  error: string | null
+}
+
 interface Props {
   projectId: string
   session: string
@@ -63,20 +73,89 @@ export function Feed({
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState('')
   const [sending, setSending] = useState(false)
+  const [attachments, setAttachments] = useState<Attachment[]>([])
 
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const scrollerRef = useRef<HTMLDivElement | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
   // Only follow new output when the reader is already at the bottom; yanking
   // the view while someone is reading history is worse than a missed update.
   const pinnedRef = useRef(true)
   const socketRef = useRef<WebSocket | null>(null)
   const disposedRef = useRef(false)
 
+  // Object URLs are the browser's, not React's — they leak until revoked, so
+  // every attachment that ever existed gets cleaned up on the way out.
+  const revokeAttachments = useCallback((list: Attachment[]) => {
+    for (const a of list) URL.revokeObjectURL(a.previewUrl)
+  }, [])
+  const attachmentsRef = useRef<Attachment[]>([])
+  useEffect(() => {
+    attachmentsRef.current = attachments
+  }, [attachments])
+  useEffect(() => () => revokeAttachments(attachmentsRef.current), [revokeAttachments])
+
+  const addFiles = useCallback(
+    (files: Iterable<File>) => {
+      const images = Array.from(files).filter((f) => f.type.startsWith('image/'))
+      if (!images.length) return
+      const next: Attachment[] = images.map((file) => ({
+        id: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2)}`,
+        file,
+        previewUrl: URL.createObjectURL(file),
+        path: null,
+        uploading: true,
+        error: null,
+      }))
+      setAttachments((current) => [...current, ...next])
+      for (const attachment of next) {
+        api
+          .uploadFeedImage(projectId, attachment.file, session)
+          .then((res) =>
+            setAttachments((current) =>
+              current.map((a) =>
+                a.id === attachment.id ? { ...a, uploading: false, path: res.path } : a,
+              ),
+            ),
+          )
+          .catch((err) =>
+            setAttachments((current) =>
+              current.map((a) =>
+                a.id === attachment.id
+                  ? {
+                      ...a,
+                      uploading: false,
+                      error: err instanceof Error ? err.message : String(err),
+                    }
+                  : a,
+              ),
+            ),
+          )
+      }
+    },
+    [projectId, session],
+  )
+
+  const removeAttachment = useCallback(
+    (id: string) => {
+      setAttachments((current) => {
+        const found = current.find((a) => a.id === id)
+        if (found) revokeAttachments([found])
+        return current.filter((a) => a.id !== id)
+      })
+    },
+    [revokeAttachments],
+  )
+
   useEffect(() => {
     if (!running) return
     disposedRef.current = false
     setEvents([])
     setPrompt(null)
+    setAttachments((current) => {
+      revokeAttachments(current)
+      return []
+    })
     pinnedRef.current = true
 
     let pollTimer: number | undefined
@@ -177,7 +256,7 @@ export function Feed({
       socketRef.current?.close()
       socketRef.current = null
     }
-  }, [projectId, session, running])
+  }, [projectId, session, running, revokeAttachments])
 
   useEffect(() => {
     if (pinnedRef.current) bottomRef.current?.scrollIntoView({ block: 'end' })
@@ -190,13 +269,21 @@ export function Feed({
   }
 
   const send = useCallback(
-    async (text: string) => {
-      if (!text.trim()) return
+    async (text: string, withAttachments: Attachment[] = []) => {
+      const paths = withAttachments.filter((a) => a.path).map((a) => a.path as string)
+      if (!text.trim() && paths.length === 0) return
+      // A path per line ahead of the message, same as pasting one in by hand —
+      // the harness reads it with its own Read tool, no special syntax needed.
+      const body = [...paths, text.trim()].filter(Boolean).join('\n')
       setSending(true)
       setError(null)
       try {
-        await api.answerFeed(projectId, text, session)
+        await api.answerFeed(projectId, body, session)
         setMessage('')
+        if (withAttachments.length) {
+          revokeAttachments(withAttachments)
+          setAttachments([])
+        }
         // The stream will report the result; clearing the prompt immediately
         // stops a tapped button sitting there looking unresponsive.
         setPrompt(null)
@@ -206,7 +293,7 @@ export function Feed({
         setSending(false)
       }
     },
-    [projectId, session],
+    [projectId, session, revokeAttachments],
   )
 
   // An edit awaiting approval: show its diff with the question, so the answer
@@ -277,34 +364,113 @@ export function Feed({
         onSubmit={(e) => {
           e.preventDefault()
           if (readOnly) onRefusedInput?.()
-          else void send(message)
+          else void send(message, attachments)
+        }}
+        onDragOver={(e) => {
+          if (!readOnly) e.preventDefault()
+        }}
+        onDrop={(e) => {
+          if (readOnly) {
+            onRefusedInput?.()
+            return
+          }
+          if (e.dataTransfer.files.length) {
+            e.preventDefault()
+            addFiles(e.dataTransfer.files)
+          }
         }}
       >
-        <input
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          placeholder={
-            readOnly
-              ? 'Read-only — this session is someone else\u2019s'
-              : activity === 'working'
-                ? 'Claude is working…'
-                : 'Send a message'
-          }
-          readOnly={readOnly}
-          onClick={() => readOnly && onRefusedInput?.()}
-          disabled={!running || sending}
-        />
-        <button
-          className="primary"
-          type="submit"
-          disabled={!running || sending || (!readOnly && !message.trim())}
-        >
-          Send
-        </button>
-        <span
-          className={`feed-live${live ? ' on' : ''}`}
-          title={live ? 'Streaming live' : 'Polling — the live connection is unavailable'}
-        />
+        {attachments.length > 0 && (
+          <div className="feed-attachments">
+            {attachments.map((a) => (
+              <div key={a.id} className={`feed-attachment${a.error ? ' error' : ''}`}>
+                <img src={a.previewUrl} alt="" />
+                {(a.uploading || a.error) && (
+                  <div className="feed-attachment-status" title={a.error ?? undefined}>
+                    {a.uploading ? (
+                      <span className="feed-attachment-spinner" aria-hidden="true" />
+                    ) : (
+                      <span>!</span>
+                    )}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className="feed-attachment-remove"
+                  onClick={() => removeAttachment(a.id)}
+                  aria-label="Remove image"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="feed-compose-row">
+          <input
+            ref={fileInputRef}
+            className="feed-file-input"
+            type="file"
+            accept="image/*"
+            multiple
+            tabIndex={-1}
+            onChange={(e) => {
+              if (e.target.files?.length) addFiles(e.target.files)
+              e.target.value = ''
+            }}
+          />
+          <button
+            type="button"
+            className="feed-attach"
+            title={
+              readOnly
+                ? "This session belongs to someone else — only they can answer"
+                : 'Attach an image'
+            }
+            aria-label="Attach an image"
+            disabled={!running}
+            onClick={() => (readOnly ? onRefusedInput?.() : fileInputRef.current?.click())}
+          >
+            +
+          </button>
+          <input
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            onPaste={(e) => {
+              if (readOnly) return
+              const files = Array.from(e.clipboardData.files).filter((f) =>
+                f.type.startsWith('image/'),
+              )
+              if (files.length) addFiles(files)
+            }}
+            placeholder={
+              readOnly
+                ? 'Read-only — this session is someone else\u2019s'
+                : activity === 'working'
+                  ? 'Claude is working…'
+                  : 'Send a message'
+            }
+            readOnly={readOnly}
+            onClick={() => readOnly && onRefusedInput?.()}
+            disabled={!running || sending}
+          />
+          <button
+            className="primary"
+            type="submit"
+            disabled={
+              !running ||
+              sending ||
+              attachments.some((a) => a.uploading) ||
+              (!readOnly && !message.trim() && attachments.length === 0)
+            }
+          >
+            Send
+          </button>
+          <span
+            className={`feed-live${live ? ' on' : ''}`}
+            title={live ? 'Streaming live' : 'Polling — the live connection is unavailable'}
+          />
+        </div>
       </form>
     </div>
   )
