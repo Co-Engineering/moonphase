@@ -154,6 +154,12 @@ export interface Session {
   id: string
   project_id: string
   tmux_session: string
+  /**
+   * What to call it. `tmux_session` names the actual tmux session and can
+   * never safely change — it derives the worktree and branch — so this is
+   * the editable label. Falls back to tmux_session until someone sets one.
+   */
+  display_name: string | null
   harness: HarnessKind
   state: string
   started_at: string | null
@@ -481,6 +487,12 @@ export const api = {
     request<void>(`/api/projects/${projectId}/sessions/${encodeURIComponent(name)}`, {
       method: 'DELETE',
     }),
+  /** The display name only — tmux_session, its worktree and its branch stay put. */
+  renameSession: (projectId: string, name: string, displayName: string) =>
+    request<Session>(
+      `/api/projects/${projectId}/sessions/${encodeURIComponent(name)}/rename`,
+      { method: 'PATCH', body: JSON.stringify({ name: displayName }) },
+    ),
   detachClients: (projectId: string, name: string) =>
     request<{ detached: number }>(
       `/api/projects/${projectId}/sessions/${encodeURIComponent(name)}/detach-clients`,
