@@ -659,7 +659,7 @@ async def delete_project(conn: AsyncConnection, project_id: UUID) -> bool:
 SESSION_COLUMNS = """
     id, project_id, tmux_session, harness, state, started_at, last_attached_at,
     transcript_path, user_id, workdir, home_dir, branch, activity_at, checked_at,
-    activity::text as activity, activity_detail,
+    activity::text as activity, activity_detail, display_name,
     (user_id = auth.uid()) as is_mine,
     public.session_owner_label(user_id) as owner
 """
@@ -761,6 +761,27 @@ async def get_session(
             "where project_id = :pid and tmux_session = :ts"
         ),
         {"pid": project_id, "ts": tmux_session},
+    )
+    row = result.first()
+    return _row_to_dict(row) if row else None
+
+
+async def rename_session(
+    conn: AsyncConnection, project_id: UUID, tmux_session: str, display_name: str
+) -> dict[str, Any] | None:
+    """Change what a session is called. Not `tmux_session`, `workdir` or
+    `branch` — those are what the session *is*, derived once at creation and
+    load-bearing afterward; this is only the label shown in the sidebar.
+    """
+    result = await conn.execute(
+        text(
+            f"""
+            update project_sessions set display_name = :display_name
+            where project_id = :pid and tmux_session = :ts
+            returning {SESSION_COLUMNS}
+            """
+        ),
+        {"display_name": display_name, "pid": project_id, "ts": tmux_session},
     )
     row = result.first()
     return _row_to_dict(row) if row else None

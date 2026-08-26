@@ -39,11 +39,11 @@ export function SessionWindow({ projectId, session }: Props) {
   const drivable = Boolean(project.data && canControl(project.data.access) && mine?.is_mine)
   const watching = mine !== null && !mine.is_mine
 
+  const label = mine?.display_name ?? session
+
   useEffect(() => {
-    document.title = project.data
-      ? `${session} — ${project.data.name}`
-      : `${session} — Moonphase`
-  }, [project.data, session])
+    document.title = project.data ? `${label} — ${project.data.name}` : `${label} — Moonphase`
+  }, [project.data, label])
 
   const act = useCallback(
     async (fn: () => Promise<unknown>) => {
@@ -71,7 +71,7 @@ export function SessionWindow({ projectId, session }: Props) {
   return (
     <div className="session-window">
       <div className="topbar">
-        <h1>{session}</h1>
+        <h1>{label}</h1>
         <span className="sub">
           {project.data.name} · {project.data.server_name}
         </span>

@@ -171,7 +171,11 @@ function Shell({ email }: { email: string }) {
   const [showSettings, setShowSettings] = useState(false)
   const [showHost, setShowHost] = useState(false)
   const [renaming, setRenaming] = useState<
-    { kind: 'server' | 'project'; id: string; name: string } | null
+    | { kind: 'server' | 'project'; id: string; name: string }
+    // `id` is the tmux session name — the identifier `renameSession` needs
+    // alongside the project it belongs to, not something being changed.
+    | { kind: 'session'; id: string; name: string; projectId: string }
+    | null
   >(null)
   const [showUsage, setShowUsage] = useState(false)
   const [showSearch, setShowSearch] = useState(false)
@@ -417,6 +421,14 @@ function Shell({ email }: { email: string }) {
                         name: item.name,
                       })
                     }
+                    onRenameSession={(item) =>
+                      setRenaming({
+                        kind: 'session',
+                        id: item.tmux_session,
+                        name: item.display_name ?? item.tmux_session,
+                        projectId: project.id,
+                      })
+                    }
                     onCloseSession={(item) => closeSession(project.id, item.tmux_session)}
                   />
                 ))}
@@ -451,6 +463,14 @@ function Shell({ email }: { email: string }) {
                   onRemove={(item) => void api.deleteProject(item.id).then(reloadAll)}
                   onRename={(item) =>
                     setRenaming({ kind: 'project', id: item.id, name: item.name })
+                  }
+                  onRenameSession={(item) =>
+                    setRenaming({
+                      kind: 'session',
+                      id: item.tmux_session,
+                      name: item.display_name ?? item.tmux_session,
+                      projectId: project.id,
+                    })
                   }
                   onCloseSession={(item) => closeSession(project.id, item.tmux_session)}
                 />
@@ -577,10 +597,14 @@ function Shell({ email }: { email: string }) {
           note={
             renaming.kind === 'project'
               ? 'The display name only. The container and its volumes keep the name they were created with.'
-              : undefined
+              : renaming.kind === 'session'
+                ? 'The display name only. Its home directory, worktree and branch keep the name they were created with.'
+                : undefined
           }
           onRename={async (name) => {
             if (renaming.kind === 'server') await api.renameServer(renaming.id, name)
+            else if (renaming.kind === 'session')
+              await api.renameSession(renaming.projectId, renaming.id, name)
             else await api.renameProject(renaming.id, name)
             reloadAll()
           }}
@@ -645,6 +669,7 @@ function ProjectRow({
   onShare,
   onRemove,
   onRename,
+  onRenameSession,
   onCloseSession,
 }: {
   project: Project
@@ -656,6 +681,7 @@ function ProjectRow({
   onShare?: (project: Project) => void
   onRemove?: (project: Project) => void
   onRename?: (project: Project) => void
+  onRenameSession?: (session: Session) => void
   onCloseSession?: (session: Session) => void
 }) {
   return (
@@ -745,7 +771,7 @@ function ProjectRow({
               .join(' · ')}
           >
             <span className="dot" />
-            <span className="name">{session.tmux_session}</span>
+            <span className="name">{session.display_name ?? session.tmux_session}</span>
             {!session.is_mine && (
               <span className="session-theirs">
                 {session.owner?.split('@')[0] ?? 'shared'}
@@ -758,16 +784,14 @@ function ProjectRow({
             )}
           </button>
           <RowMenu
-            label={session.tmux_session}
+            label={session.display_name ?? session.tmux_session}
             actions={[
               {
                 label: 'Rename',
-                // The name is not a label: it decides the session's home
-                // directory, its git worktree and its branch. Renaming would
-                // mean moving all three inside a running container, which is a
-                // great deal of risk for a nicer word.
-                disabledReason: 'a session name is its branch',
-                onSelect: () => {},
+                // Just the label: tmux_session — and the home directory,
+                // worktree and branch it derives — stays exactly as created.
+                disabledReason: session.is_mine ? undefined : 'not yours',
+                onSelect: () => onRenameSession?.(session),
               },
               {
                 label: 'Close session',
@@ -1062,7 +1086,7 @@ export function ProjectView({
                   <div className="session-card" key={item.id}>
                     <button className="session-enter" onClick={() => onEnter(item.tmux_session)}>
                       <span className={`dot activity-${liveActivity(item)}`} />
-                      <span className="session-name">{item.tmux_session}</span>
+                      <span className="session-name">{item.display_name ?? item.tmux_session}</span>
                       <span className="session-meta">
                         {item.is_mine ? 'yours' : (item.owner ?? 'someone else')}
                         {item.branch ? ` · ${item.branch}` : ''}
@@ -1096,7 +1120,7 @@ export function ProjectView({
                           openSessionWindow({
                             projectId: project.id,
                             session: item.tmux_session,
-                            title: `${item.tmux_session} — ${project.name}`,
+                            title: `${item.display_name ?? item.tmux_session} — ${project.name}`,
                             url: sessionWindowUrl(project.id, item.tmux_session),
                           }),
                         )

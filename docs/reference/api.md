@@ -74,6 +74,7 @@ own configuration at runtime rather than having it baked into the bundle.
 | `GET`, `POST` | `/api/projects/{project_id}/sessions` | List, create |
 | `POST` | `/api/projects/{project_id}/sessions/start` | Start the harness |
 | `DELETE` | `/api/projects/{project_id}/sessions/{name}` | Remove |
+| `PATCH` | `/api/projects/{project_id}/sessions/{name}/rename` | Display name only — see [sessions](../concepts/sessions.md) |
 | `POST` | `/api/projects/{project_id}/sessions/keys` | Type into a session |
 | `GET` | `/api/projects/{project_id}/sessions/snapshot` | Plain-text pane capture |
 | `POST` | `/api/projects/{project_id}/sessions/{name}/detach-clients` | Drop stale tmux clients |
