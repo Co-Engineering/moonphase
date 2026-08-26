@@ -346,6 +346,9 @@ export interface FeedEvent {
   added: number
   removed: number
   truncated: boolean
+  /** A screenshot the tool returned — a browser MCP server, most often. */
+  image_media_type: string | null
+  image_data: string | null
 }
 
 export interface Prompt {

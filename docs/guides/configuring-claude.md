@@ -67,6 +67,10 @@ There are one-click templates for the common ones, because nobody should have to
     everything else. An existing project can switch by recreating its container on
     that environment, same as any other environment change.
 
+    Every screenshot Claude takes with it also shows up in the project's
+    **Feed**, right alongside the tool call that took it — so you can watch
+    what it's checking without opening a live view of the browser yourself.
+
 !!! tip "Secrets belong in Workspace"
     Values you put in an MCP server's environment are written into the container as
     written. Anything secret belongs in **Settings → Workspace → Environment variables**,

@@ -1062,6 +1062,36 @@ button.linkish:hover:not(:disabled) {
   white-space: normal;
 }
 
+/* A screenshot the agent took — shown small so it doesn't dominate the feed,
+   full-size on a click. No control surface: viewing it is not driving it. */
+.feed-screenshot {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 4px 0;
+}
+
+.feed-screenshot:hover:not(:disabled) {
+  background: none;
+}
+
+.feed-screenshot-img {
+  max-width: 220px;
+  max-height: 140px;
+  object-fit: contain;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.feed-screenshot.open .feed-screenshot-img {
+  max-width: 100%;
+  max-height: none;
+}
+
 .feed-error {
   color: var(--red);
   font-size: 12px;

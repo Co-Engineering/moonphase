@@ -406,7 +406,39 @@ function Thinking({ text, dim }: { text: string; dim: string }) {
   )
 }
 
-function FeedRow({ event }: { event: FeedEvent }) {
+/**
+ * A screenshot the agent took, most often while checking a UI change in the
+ * browser MCP server it has been given.
+ *
+ * Shown at a glance, thumbnail-sized, with a click to see it full size — the
+ * same disclose pattern as a diff or a thinking block, and no different from
+ * viewing an image anywhere else: nothing here reaches into the browser.
+ */
+function Screenshot({
+  mediaType,
+  data,
+  dim,
+}: {
+  mediaType: string
+  data: string
+  dim: string
+}) {
+  const [open, setOpen] = useState(false)
+  const src = `data:${mediaType};base64,${data}`
+
+  return (
+    <button
+      className={`feed-row feed-screenshot${dim}${open ? ' open' : ''}`}
+      onClick={() => setOpen((v) => !v)}
+      title={open ? 'Shrink screenshot' : 'View full size'}
+    >
+      <span className="disclose" aria-hidden="true" />
+      <img className="feed-screenshot-img" src={src} alt="Screenshot from the agent's browser" />
+    </button>
+  )
+}
+
+export function FeedRow({ event }: { event: FeedEvent }) {
   const dim = event.sidechain ? ' sidechain' : ''
 
   if (event.kind === 'tool') {
@@ -433,6 +465,15 @@ function FeedRow({ event }: { event: FeedEvent }) {
   }
 
   if (event.kind === 'result') {
+    if (event.image_data) {
+      return (
+        <Screenshot
+          mediaType={event.image_media_type ?? 'image/png'}
+          data={event.image_data}
+          dim={dim}
+        />
+      )
+    }
     // Successful results are noise on a small screen; failures never are.
     if (event.ok) return null
     return (
