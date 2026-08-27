@@ -729,23 +729,20 @@ function Shell({ email }: { email: string }) {
           // Connecting a server relays OAuth through a running session, so it
           // needs one — but a server is normally defined for the whole
           // project, and the project's own dialog has no session in hand.
-          // Without this it offered Connect only where servers are rarely
-          // defined, and the button was missing exactly where they are.
-          mcpConnect={(() => {
-            if (configureTarget.session) {
-              return {
-                projectId: configureTarget.projectId,
-                session: configureTarget.session,
-              }
-            }
-            const mine = (sessions.data ?? []).find(
-              (s) =>
-                s.project_id === configureTarget.projectId && s.is_mine && s.alive,
-            )
-            return mine
-              ? { projectId: configureTarget.projectId, session: mine.tmux_session }
-              : undefined
-          })()}
+          // Picking one is the backend's job (any of the caller's own running
+          // sessions in this project will do, since the credential that comes
+          // out is org-wide regardless), not something to guess at here from
+          // whichever session list happens to be loaded and however fresh its
+          // liveness is.
+          mcpConnect={
+            configureTarget.session
+              ? {
+                  scope: 'session',
+                  projectId: configureTarget.projectId,
+                  session: configureTarget.session,
+                }
+              : { scope: 'project', projectId: configureTarget.projectId }
+          }
         />
       )}
       {showNewProject && (

@@ -574,6 +574,12 @@ class McpOAuthStartIn(BaseModel):
 
 class McpOAuthOut(BaseModel):
     session_id: str
+    # Which project's session the relay is actually running through — the
+    # caller does not always know this in advance (Connect offered from a
+    # project's or the org's own Configure dialog auto-picks one), so it is
+    # reported back rather than assumed, and used for every subsequent poll
+    # and paste call.
+    project_id: str
     state: str
     url: str | None = None
     detail: str | None = None

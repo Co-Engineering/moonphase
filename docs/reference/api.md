@@ -99,6 +99,23 @@ tickets, and is what the feed and preview sockets below still use:
 ws(s)://<host>/ws/projects/{project_id}/feed?session=<name>&token=<jwt>
 ```
 
+## MCP server OAuth
+
+Relays an MCP server's own OAuth flow through a running session — see
+[Connecting a server that needs OAuth](../guides/configuring-claude.md). The three
+`start` variants differ only in how the session that carries the relay is chosen; every
+other call is identical regardless of which one kicked things off, keyed by
+`session_id` from the start response.
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| `POST` | `/api/projects/{project_id}/sessions/{name}/mcp-oauth/start` | Begin, through that specific session |
+| `POST` | `/api/projects/{project_id}/mcp-oauth/start` | Begin, through any of your own running sessions in this project |
+| `POST` | `/api/profile/mcp-oauth/start` | Begin, through any of your own running sessions anywhere |
+| `GET` | `/api/projects/{project_id}/mcp-oauth/{session_id}` | Poll for the authorization URL, then for completion |
+| `POST` | `/api/projects/{project_id}/mcp-oauth/{session_id}/paste` | Hand back the redirect URL your browser landed on |
+| `GET`, `DELETE` | `/api/profile/mcp-oauth`, `/api/profile/mcp-oauth/{server_name}` | List, disconnect — org-wide, same as the credential |
+
 ## Reading a session
 
 | Method | Path | Purpose |
