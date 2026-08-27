@@ -47,6 +47,21 @@ def test_recipe_installs_everything_moonphase_depends_on() -> None:
     assert "FROM debian:bookworm-slim" in recipe
 
 
+def test_recipe_lets_the_harnesss_clipboard_copy_reach_the_browser() -> None:
+    # With no X server and no Wayland in here, the harness's own clipboard
+    # copy falls back to an OSC 52 escape wrapped in tmux's DCS passthrough
+    # format — the standard way to get it through tmux to the browser's
+    # xterm. tmux has dropped that format by default since 3.3, silently, so
+    # without this the harness's "c to copy" (and any Ctrl+C text-selection
+    # copy) does nothing and says nothing.
+    #
+    # tmux.conf is baked into the recipe as base64 (see _recipe), not literal
+    # text, so this checks the source constant directly rather than the
+    # generated Dockerfile — a decode-and-search would just be testing base64
+    # round-tripping, which isn't what could actually break here.
+    assert "allow-passthrough on" in imagebuild.TMUX_CONF
+
+
 def test_recipe_rejects_a_base_without_apt() -> None:
     recipe = imagebuild.recipe_for("alpine:3.20", None)
     # The build must fail with an explanation rather than producing a container

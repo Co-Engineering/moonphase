@@ -36,7 +36,10 @@ log = logging.getLogger(__name__)
 # v5 added the xclip shim: an image built before it has no bridge for the
 # browser's clipboard, so pasting an image into the harness silently does
 # nothing instead of attaching it.
-RECIPE_VERSION = "5"
+# v6 turned on tmux's allow-passthrough: an image built before it drops the
+# harness's own clipboard-copy (the DCS-wrapped OSC 52 it falls back to with
+# no real OS clipboard in here) silently, with nothing to say why.
+RECIPE_VERSION = "6"
 
 NODE_VERSION = "22.20.0"
 
@@ -65,6 +68,7 @@ set  -g  focus-events on
 set  -g  mouse on
 set  -g  base-index 1
 setw -g  pane-base-index 1
+set  -g  allow-passthrough on
 set  -g  status-style "bg=#1a1b26,fg=#a9b1d6"
 set  -g  status-left  " #[bold]moonphase#[default] "
 set  -g  status-right " #{session_name} \\u00b7 %H:%M "
