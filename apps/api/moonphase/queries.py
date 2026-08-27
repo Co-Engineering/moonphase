@@ -1828,7 +1828,7 @@ async def get_auth_methods_privileged(conn: AsyncConnection) -> dict[str, Any]:
             text(
                 """
                 select m.*, s.google_client_secret, s.microsoft_client_secret,
-                       s.smtp_password, i.public_url
+                       s.smtp_password, i.public_url, i.signup_open
                   from auth_methods m
                   cross join private.auth_secrets s
                   cross join instance_settings i

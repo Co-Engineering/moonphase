@@ -115,6 +115,58 @@ def test_the_rendered_config_is_shell_safe() -> None:
     assert "'it'\\''s; rm -rf /'" in rendered
 
 
+def test_closed_signup_is_carried_all_the_way_to_gotrue_itself() -> None:
+    """Caddy's forward_auth only gates /auth/v1/signup, per request. GoTrue's
+    own switch is what also closes /otp and any other implicit-signup path —
+    and unlike the per-request check, it needs the file rewritten and the
+    container restarted before it takes effect at all."""
+    assert "GOTRUE_DISABLE_SIGNUP='false'" in render(AuthMethods(signup_open=True))
+    assert "GOTRUE_DISABLE_SIGNUP='true'" in render(AuthMethods(signup_open=False))
+
+
+def test_signup_open_defaults_to_open_in_code_same_as_the_column() -> None:
+    """`instance_settings.signup_open` defaults open too (closed-by-default is
+    the setup screen's own choice, made explicit at setup time) — mismatched
+    defaults here would make an unconfigured field render as the wrong side."""
+    assert AuthMethods().signup_open is True
+
+
+def test_the_row_that_feeds_render_carries_signup_open() -> None:
+    """`_methods_from` is the only place a database row becomes what `render`
+    reads, so a column missing from that translation renders as if it were
+    never there — this used to be true of signup_open specifically."""
+    from moonphase.routers.setup import _methods_from
+
+    assert _methods_from({"signup_open": False}).signup_open is False
+    assert _methods_from({"signup_open": True}).signup_open is True
+    # Absent, as a row from before this column mattered here would be: open,
+    # matching the column's own default rather than silently closing signup.
+    assert _methods_from({}).signup_open is True
+
+
+def test_finishing_setup_publishes_the_gate_it_just_set() -> None:
+    """Otherwise an administrator closes signup during setup, the screen says
+    saved, and GoTrue answers requests with whatever it booted with until
+    someone unrelated later saves the sign-in methods screen."""
+    import inspect
+
+    from moonphase.routers import setup as setup_router
+
+    source = inspect.getsource(setup_router.complete)
+    assert "publish_auth_config" in source
+
+
+def test_changing_instance_settings_publishes_the_gate_too() -> None:
+    """The settings screen is the only place signup_open changes after first
+    run, and is exactly where this was missing."""
+    import inspect
+
+    from moonphase.routers import people
+
+    source = inspect.getsource(people.write_settings)
+    assert "publish_auth_config" in source
+
+
 def test_autoconfirm_follows_whether_mail_can_be_sent() -> None:
     """Confirmation on an instance with no SMTP locks out password signup,
     because GoTrue insists on confirming an address it cannot email."""
