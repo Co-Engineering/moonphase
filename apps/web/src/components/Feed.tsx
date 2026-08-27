@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, feedUrl, type DiffLine, type FeedEvent, type Prompt } from '../lib/api'
+import { Markdown } from './Markdown'
 
 interface Attachment {
   id: string
@@ -681,10 +682,15 @@ export function FeedRow({ event }: { event: FeedEvent }) {
     return <Thinking text={event.text} dim={dim} />
   }
 
+  // Your own typed message is shown exactly as typed — it is input, not a
+  // reply, and re-interpreting a stray `*` or `_` in it as formatting would
+  // make it look different from what was actually sent. The agent's side is
+  // real markdown and reads far better rendered as such.
+  const isUser = event.kind === 'user'
   return (
     <div className={`feed-row feed-${event.kind}${dim}`}>
-      <div className="feed-who">{event.kind === 'user' ? 'You' : 'Claude'}</div>
-      <div className="feed-body">{event.text}</div>
+      <div className="feed-who">{isUser ? 'You' : 'Claude'}</div>
+      <div className="feed-body">{isUser ? event.text : <Markdown text={event.text} />}</div>
     </div>
   )
 }
