@@ -95,6 +95,52 @@ async def test_no_ticket_and_no_token_is_refused() -> None:
     assert caught.value.detail == "Missing token."
 
 
+# --- Origin --------------------------------------------------------------------
+
+
+async def test_a_page_from_an_unlisted_origin_is_refused_even_with_a_good_ticket() -> None:
+    """A browser is the only client that ever sends `Origin` on a WebSocket
+    handshake — it is what enforces same-origin policy — so one present at
+    all and not ours is the CSRF-shaped case this exists to catch, whatever
+    else the request carries."""
+    ticket = tickets.issue({"sub": "user-1"}, scope=auth.ticket_scope(PROJECT_ID))
+
+    with pytest.raises(HTTPException) as caught:
+        await auth.websocket_principal(
+            _FakeWebSocket({"origin": "https://evil.example"}),
+            project_id=PROJECT_ID,
+            ticket=ticket,
+        )
+
+    assert caught.value.status_code == 403
+
+
+async def test_a_page_from_a_configured_origin_is_allowed() -> None:
+    from moonphase.config import get_settings
+
+    allowed = get_settings().cors_origins[0]
+    ticket = tickets.issue({"sub": "user-1"}, scope=auth.ticket_scope(PROJECT_ID))
+
+    principal = await auth.websocket_principal(
+        _FakeWebSocket({"origin": allowed}), project_id=PROJECT_ID, ticket=ticket
+    )
+
+    assert principal.user_id == "user-1"
+
+
+async def test_a_non_browser_client_sends_no_origin_and_is_not_penalised_for_it() -> None:
+    """The desktop app's preview relay is a plain `ws` client in Node, not a
+    browser — it never sends `Origin` at all, and was never a same-origin
+    participant to begin with. Requiring the header would just break it."""
+    ticket = tickets.issue({"sub": "user-1"}, scope=auth.ticket_scope(PROJECT_ID))
+
+    principal = await auth.websocket_principal(
+        _FakeWebSocket(), project_id=PROJECT_ID, ticket=ticket
+    )
+
+    assert principal.user_id == "user-1"
+
+
 # --- issuing a ticket, end to end ------------------------------------------
 
 
