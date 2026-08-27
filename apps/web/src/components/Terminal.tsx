@@ -506,8 +506,8 @@ export function ProjectTerminal({
       if (!readOnlyRef.current) event.preventDefault()
     }
     const onDrop = (event: DragEvent) => {
+      event.preventDefault()
       if (readOnlyRef.current) {
-        event.preventDefault()
         refusedRef.current?.()
         return
       }
@@ -515,7 +515,6 @@ export function ProjectTerminal({
         f.type.startsWith('image/'),
       )
       if (!file) return
-      event.preventDefault()
       stageImage(file, '')
     }
     host.addEventListener('dragover', onDragOver)
