@@ -25,6 +25,27 @@ export function isShiftEnter(event: Pick<KeyboardEvent, 'key' | 'shiftKey'>): bo
  */
 export const SHIFT_ENTER_SEQUENCE = '\x1b\r'
 
+/**
+ * What the harness's own "check the clipboard for an image" code is bound
+ * to, and the only thing that reaches it — a bracketed-paste of text (even
+ * empty text) is a different code path entirely and never triggers it. See
+ * the onPaste handler below for how staging and this are sequenced.
+ */
+export const HARNESS_CLIPBOARD_PASTE_TRIGGER = '\x16'
+
+/**
+ * What to do once a copy of the pasted image has (or hasn't) made it onto
+ * the harness's side, split out from the paste handler because it has no
+ * dependency on xterm/canvas/the socket and so can be tested directly rather
+ * than through a canvas encode this environment cannot run.
+ */
+export function clipboardImagePasteFollowUp(
+  staged: boolean,
+  fallbackText: string,
+): { pasteText: string | null; sendTrigger: boolean } {
+  return { pasteText: fallbackText || null, sendTrigger: staged }
+}
+
 type KeydownLike = Pick<KeyboardEvent, 'key' | 'shiftKey' | 'type' | 'preventDefault' | 'stopPropagation'>
 
 /**
@@ -402,11 +423,17 @@ export function ProjectTerminal({
      * left alone and reaches xterm's own paste handling exactly as before.
      *
      * Ordering matters. The staged image must land in the container before
-     * the paste that makes the harness go looking for it, so the default
-     * (synchronous) paste is suppressed and replayed manually through
-     * `term.paste()` once staging is confirmed sent — both then go out over
-     * the one WebSocket in that order, and the server's single-threaded
-     * receive loop (see terminal.py) preserves it the rest of the way.
+     * the harness goes looking for it, so the default (synchronous) paste is
+     * suppressed and the trigger is sent manually once staging is confirmed
+     * sent — both then go out over the one WebSocket in that order, and the
+     * server's single-threaded receive loop (see terminal.py) preserves it
+     * the rest of the way.
+     *
+     * The trigger is Ctrl+V itself (0x16), not a text paste: the harness's
+     * own "check the clipboard for an image" code is bound to that keystroke
+     * specifically and nothing else reaches it — `term.paste()` delivers
+     * bracketed-paste text, which is a different thing even when the text
+     * happens to be empty, so it was never going to ask the harness to look.
      *
      * Shared with drag-and-drop below: a file dropped onto the pane needs
      * exactly the same staging trip, with no clipboard involved at all.
@@ -423,11 +450,13 @@ export function ProjectTerminal({
 
       setPastingImage(true)
       void (async () => {
+        let staged = false
         try {
           const base64 = await imageBlobToPngBase64(file)
           const socket = socketRef.current
           if (socket?.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ type: 'clipboard-image', data: base64 }))
+            staged = true
           } else {
             flashDropped()
           }
@@ -435,7 +464,14 @@ export function ProjectTerminal({
           // Nothing sane to stage — the harness still gets whatever paste
           // would otherwise have happened, below.
         } finally {
-          if (fallbackText) term.paste(fallbackText)
+          const { pasteText, sendTrigger } = clipboardImagePasteFollowUp(staged, fallbackText)
+          if (pasteText) term.paste(pasteText)
+          if (sendTrigger) {
+            const socket = socketRef.current
+            if (socket?.readyState === WebSocket.OPEN) {
+              socket.send(new TextEncoder().encode(HARNESS_CLIPBOARD_PASTE_TRIGGER))
+            }
+          }
           setPastingImage(false)
         }
       })()

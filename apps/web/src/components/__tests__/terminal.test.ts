@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
-import { SHIFT_ENTER_SEQUENCE, handleShiftEnterKeydown, isShiftEnter } from '../Terminal'
+import {
+  HARNESS_CLIPBOARD_PASTE_TRIGGER,
+  SHIFT_ENTER_SEQUENCE,
+  clipboardImagePasteFollowUp,
+  handleShiftEnterKeydown,
+  isShiftEnter,
+} from '../Terminal'
 
 function fakeEvent(overrides: Partial<{ key: string; shiftKey: boolean; type: string }> = {}) {
   return {
@@ -93,5 +99,39 @@ describe('handleShiftEnterKeydown', () => {
     expect(event.preventDefault).toHaveBeenCalledTimes(1)
     expect(onRefused).toHaveBeenCalledTimes(1)
     expect(send).not.toHaveBeenCalled()
+  })
+})
+
+describe('HARNESS_CLIPBOARD_PASTE_TRIGGER', () => {
+  it('is Ctrl+V (0x16) — the only thing the harness’s own clipboard-image check listens for', () => {
+    expect(HARNESS_CLIPBOARD_PASTE_TRIGGER).toBe('\x16')
+  })
+})
+
+/**
+ * A pasted image was staged on the harness's side over the socket, but
+ * nothing there makes the harness go looking for it — bracketed-paste text
+ * (`term.paste`) is a different code path from the Ctrl+V keystroke the
+ * harness's own clipboard-image check is bound to, so a staged file with no
+ * follow-up trigger just sits there. This is the exact shipped regression:
+ * "still not possible to paste an image" with no error, because the image
+ * really was staged — it just was never asked for.
+ */
+describe('clipboardImagePasteFollowUp', () => {
+  it('sends the trigger once staging succeeded', () => {
+    expect(clipboardImagePasteFollowUp(true, '').sendTrigger).toBe(true)
+  })
+
+  it('does not send the trigger when staging failed — nothing there to find', () => {
+    expect(clipboardImagePasteFollowUp(false, '').sendTrigger).toBe(false)
+  })
+
+  it('pastes any accompanying text regardless of whether staging succeeded', () => {
+    expect(clipboardImagePasteFollowUp(true, 'a caption').pasteText).toBe('a caption')
+    expect(clipboardImagePasteFollowUp(false, 'a caption').pasteText).toBe('a caption')
+  })
+
+  it('has nothing to paste for a pure image with no text', () => {
+    expect(clipboardImagePasteFollowUp(true, '').pasteText).toBeNull()
   })
 })
