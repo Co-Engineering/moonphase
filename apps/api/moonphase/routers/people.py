@@ -46,6 +46,7 @@ from ..schemas import (
     PersonOut,
     UpdateStateOut,
 )
+from .setup import publish_auth_config
 
 log = logging.getLogger(__name__)
 
@@ -483,6 +484,9 @@ async def write_settings(
         "instance settings changed by %s: public_url=%s signup_open=%s",
         principal.user_id, row.public_url, row.signup_open,
     )
+    # This is the only screen that changes signup_open outside of first-run
+    # setup, and GoTrue's own signup gate never otherwise learns it changed.
+    await publish_auth_config()
     return InstanceSettingsOut(
         public_url=row.public_url, signup_open=bool(row.signup_open)
     )

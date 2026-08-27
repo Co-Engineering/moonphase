@@ -43,6 +43,12 @@ class AuthMethods:
     microsoft_client_secret: str = ""
     microsoft_tenant: str = "common"
 
+    # Whether anyone besides the first account may sign up. The setup screen's
+    # own switch — the thing GoTrue's own signup-blocking endpoints (`/otp`,
+    # and any implicit-signup path, not just `/signup`) need to actually agree
+    # with, rather than just the one route Caddy happens to gate per request.
+    signup_open: bool = True
+
     # Where GoTrue thinks it lives. Redirects after an OAuth round trip are
     # built from this, so it has to be the address the browser used — which is
     # the one the setup screen collected.
@@ -210,6 +216,10 @@ def render(methods: AuthMethods) -> str:
         f"API_EXTERNAL_URL={_quote(site)}",
         f"GOTRUE_SITE_URL={_quote(site)}",
         f"GOTRUE_URI_ALLOW_LIST={_quote(site + '/**')}",
+        # Caddy's forward_auth in front of /auth/v1/signup is per-request and
+        # covers that one route; this is GoTrue's own switch, and the only
+        # thing that also closes /otp and any other implicit-signup path.
+        f"GOTRUE_DISABLE_SIGNUP={_quote(str(not methods.signup_open).lower())}",
         "",
         f"GOTRUE_EXTERNAL_EMAIL_ENABLED={_quote(email_on)}",
         # Off means GoTrue insists on confirming an address it cannot email

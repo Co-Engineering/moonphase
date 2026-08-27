@@ -149,6 +149,11 @@ async def complete(
     log.info(
         "setup completed: public_url=%s signup_open=%s", row.public_url, row.signup_open
     )
+    # Otherwise GoTrue keeps its bootstrap defaults — the site URL, the
+    # signup-allowed OTP/OAuth endpoints — until someone separately saves the
+    # "ways to sign in" screen, even though this is the point where an
+    # administrator has just decided both.
+    await publish_auth_config()
     return SetupStateOut(
         needs_setup=False,
         signup_open=bool(row.signup_open),
@@ -232,6 +237,7 @@ def _methods_from(row: dict) -> authconfig.AuthMethods:
         microsoft_client_secret=row.get("microsoft_client_secret") or "",
         microsoft_tenant=row.get("microsoft_tenant") or "common",
         public_url=row.get("public_url") or "",
+        signup_open=bool(row.get("signup_open", True)),
     )
 
 
