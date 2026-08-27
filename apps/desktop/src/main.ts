@@ -6,10 +6,11 @@
  * privileged client — no sessions live here, and closing it detaches rather
  * than stopping anything.
  */
-import { app, BrowserWindow, ipcMain, session, shell } from 'electron'
+import { app, BrowserWindow, dialog, Menu, ipcMain, session, shell } from 'electron'
 import { existsSync } from 'node:fs'
 import * as path from 'node:path'
 import { closeAllRelays, closeRelay, ensureRelay } from './socksrelay'
+import { checkForUpdates } from './updates'
 
 // Set by `pnpm dev`; in a packaged build we load the built assets from disk.
 const DEV_SERVER_URL = process.env.MOONPHASE_DEV_SERVER_URL ?? 'http://127.0.0.1:8472'
@@ -252,7 +253,93 @@ async function openSessionWindow(request: {
   return { ok: true }
 }
 
+/**
+ * Checks GitHub for a newer release and reports the result in a dialog.
+ *
+ * No silent auto-download: the app isn't code-signed, and Squirrel.Mac won't
+ * drive an update onto an unsigned build. This tells the person a release
+ * exists and hands them its page instead.
+ */
+async function runUpdateCheck(): Promise<void> {
+  const parent = window ?? undefined
+  const result = await checkForUpdates(app.getVersion())
+
+  if (result.detail) {
+    await (parent
+      ? dialog.showMessageBox(parent, { type: 'warning', message: 'Could not check for updates', detail: result.detail })
+      : dialog.showMessageBox({ type: 'warning', message: 'Could not check for updates', detail: result.detail }))
+    return
+  }
+
+  if (!result.updateAvailable) {
+    const detail = `Moonphase ${app.getVersion()} is the latest version.`
+    await (parent
+      ? dialog.showMessageBox(parent, { type: 'info', message: "You're up to date", detail })
+      : dialog.showMessageBox({ type: 'info', message: "You're up to date", detail }))
+    return
+  }
+
+  const options = {
+    type: 'info' as const,
+    message: `Moonphase ${result.latestVersion} is available`,
+    detail: `You're running ${app.getVersion()}. Download the new version to update.`,
+    buttons: ['Download', 'Later'],
+    defaultId: 0,
+    cancelId: 1,
+  }
+  const { response } = await (parent
+    ? dialog.showMessageBox(parent, options)
+    : dialog.showMessageBox(options))
+  if (response === 0 && result.releaseUrl) {
+    void shell.openExternal(result.releaseUrl)
+  }
+}
+
+/**
+ * Rebuilds Electron's default menu via roles so nothing standard is lost
+ * (copy/paste, reload, quit, ...), adding just one item: Check for Updates.
+ * On macOS that lives in the app menu, where people expect it; elsewhere in
+ * Help.
+ */
+function buildMenu(): Menu {
+  const template: Electron.MenuItemConstructorOptions[] = []
+
+  if (process.platform === 'darwin') {
+    template.push({
+      label: app.name,
+      submenu: [
+        { role: 'about' },
+        { type: 'separator' },
+        { label: 'Check for Updates…', click: () => void runUpdateCheck() },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' },
+      ],
+    })
+  }
+
+  template.push({ role: 'fileMenu' })
+  template.push({ role: 'editMenu' })
+  template.push({ role: 'viewMenu' })
+  template.push({ role: 'windowMenu' })
+  template.push({
+    role: 'help',
+    submenu:
+      process.platform === 'darwin'
+        ? []
+        : [{ label: 'Check for Updates…', click: () => void runUpdateCheck() }],
+  })
+
+  return Menu.buildFromTemplate(template)
+}
+
 void app.whenReady().then(() => {
+  Menu.setApplicationMenu(buildMenu())
   ipcMain.handle('preview:open', (_event, request) => openPreview(request))
   ipcMain.handle('session:open', (_event, request) => openSessionWindow(request))
   createWindow()
