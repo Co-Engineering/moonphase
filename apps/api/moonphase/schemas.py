@@ -581,7 +581,10 @@ class McpOAuthOut(BaseModel):
 
 
 class McpOAuthPasteIn(BaseModel):
-    session_id: str
+    # No session id: it is a path parameter on the only route that takes this,
+    # and the handler reads it from there. Requiring it here as well meant
+    # every paste was refused with "Field required" — the client had nothing
+    # to put in it, because the id was already in the URL.
     redirect_url: str = Field(min_length=1, max_length=4096)
 
 
