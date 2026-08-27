@@ -68,8 +68,13 @@ function createWindow(): void {
 
   // Anything the app tries to open in a new window is an external link —
   // hand it to the real browser instead of spawning a chromeless window.
+  // Checked the same way the preview window's own handler already is:
+  // shell.openExternal on an unvalidated string is a sink other code in this
+  // file is careful never to reach.
   window.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url)
+    if (validate({ url }) === null) {
+      void shell.openExternal(url)
+    }
     return { action: 'deny' }
   })
 
@@ -112,6 +117,54 @@ function validate(request: { url: string }): string | null {
   return null
 }
 
+/**
+ * Where the frame that actually sent an IPC message is loaded from — not
+ * just "some window this app made", but the specific frame, since a
+ * compromised renderer (an agent's output rendered somewhere unsafely, say)
+ * is still a page loaded from this app's own location, not a different one.
+ *
+ * `senderFrame` rather than `event.sender.getURL()`: the latter is the
+ * top-level WebContents, which would still read as "ours" even from a
+ * malicious iframe nested inside a trusted page.
+ */
+function callerLocation(event: Electron.IpcMainInvokeEvent): string | null {
+  return event.senderFrame?.url ?? null
+}
+
+/**
+ * Same page, not just same origin.
+ *
+ * A packaged build's window is `file://`, and every `file:` URL's `.origin`
+ * is the literal string `"null"` regardless of path — so comparing origins
+ * alone would treat any two local files as identical, which is exactly the
+ * case this needs to tell apart (this app's own bundled index.html vs. an
+ * arbitrary local path). Comparing protocol, host and pathname together
+ * covers both that and the ordinary http(s) case, and deliberately ignores
+ * the query string: sessionWindowUrl() only ever differs from the caller's
+ * own location there.
+ */
+function sameLocation(a: string, b: string): boolean {
+  try {
+    const ua = new URL(a)
+    const ub = new URL(b)
+    return ua.protocol === ub.protocol && ua.host === ub.host && ua.pathname === ub.pathname
+  } catch {
+    return false
+  }
+}
+
+/** Well-formed and http(s) — the shape every caller of this file expects a
+ * server address to have, whether it names the preview target or the API
+ * itself. */
+function validApiUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 async function openPreview(request: {
   projectId: string
   projectName: string
@@ -121,6 +174,17 @@ async function openPreview(request: {
 }): Promise<{ ok: boolean; error?: string }> {
   const invalid = validate(request)
   if (invalid) return { ok: false, error: invalid }
+
+  // Not a same-origin check against the caller: the whole point of this app
+  // is connecting to a self-hosted server that is almost never the origin
+  // its own static assets loaded from — a packaged build's window is
+  // `file://`, and even in dev the frontend and API are on different ports.
+  // What is still worth refusing is a value that isn't an address at all,
+  // since ensureRelay hands it a real bearer token in an Authorization
+  // header the moment this succeeds.
+  if (!validApiUrl(request.apiUrl)) {
+    return { ok: false, error: 'Invalid API address.' }
+  }
 
   // The proxy runs wherever the API does, which for an installed app is not
   // this machine. A local port that carries each connection there is what makes
@@ -214,14 +278,30 @@ const sessionWindows = new Map<string, BrowserWindow>()
  *
  * No proxy here — this is Moonphase's own UI, talking to the API as usual.
  */
-async function openSessionWindow(request: {
-  projectId: string
-  session: string
-  title: string
-  url: string
-}): Promise<{ ok: boolean; error?: string }> {
+async function openSessionWindow(
+  request: {
+    projectId: string
+    session: string
+    title: string
+    url: string
+  },
+  caller: string | null,
+): Promise<{ ok: boolean; error?: string }> {
   const invalid = validate({ url: request.url })
   if (invalid) return { ok: false, error: invalid }
+
+  // This is the one call that attaches the same privileged preload.js the
+  // main window has — every capability in it, to whatever page loads at
+  // `request.url`. The renderer only ever legitimately asks for a window on
+  // its own page (see sessionWindowUrl in the web app, which builds this
+  // from its own location); anything else would hand that bridge to a page
+  // this app does not otherwise trust.
+  if (!caller || !sameLocation(request.url, caller)) {
+    return {
+      ok: false,
+      error: 'Refusing to open a session window on a different page than the app itself.',
+    }
+  }
 
   const key = `${request.projectId}:${request.session}`
   const existing = sessionWindows.get(key)
@@ -341,7 +421,9 @@ function buildMenu(): Menu {
 void app.whenReady().then(() => {
   Menu.setApplicationMenu(buildMenu())
   ipcMain.handle('preview:open', (_event, request) => openPreview(request))
-  ipcMain.handle('session:open', (_event, request) => openSessionWindow(request))
+  ipcMain.handle('session:open', (event, request) =>
+    openSessionWindow(request, callerLocation(event)),
+  )
   createWindow()
 
   app.on('activate', () => {
