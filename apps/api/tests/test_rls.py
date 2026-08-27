@@ -130,6 +130,60 @@ async def test_private_schema_is_unreachable_from_authenticated(two_users) -> No
     assert "permission denied" in message or "does not exist" in message, message
 
 
+async def test_only_an_instance_admin_can_change_how_people_sign_in(two_users) -> None:
+    """`auth_methods_write` used to authorize anyone who was 'owner'/'admin'
+    of *any* organization — which every account is, of its own personal org,
+    from the moment it signs up. That made the check pass for every signed-in
+    user, letting any of them repoint the instance's SMTP relay or OAuth
+    client secrets. It has to require actual instance administration instead.
+    """
+    alice, _ = two_users
+    claims = claims_for(alice, "not-an-admin@example.test")
+
+    async with service_session() as conn:
+        before = (
+            await conn.execute(text("select password_enabled from auth_methods"))
+        ).scalar_one()
+
+    # An ordinary account — not an instance admin — must not be able to
+    # change this, even though it owns its own personal organization.
+    async with user_session(claims) as conn:
+        result = await conn.execute(
+            text("update auth_methods set password_enabled = :v"),
+            {"v": not before},
+        )
+    assert result.rowcount == 0, "a non-admin's write must affect no rows"
+
+    async with service_session() as conn:
+        unchanged = (
+            await conn.execute(text("select password_enabled from auth_methods"))
+        ).scalar_one()
+    assert unchanged == before
+
+    # An instance admin, on the other hand, must still be able to.
+    async with service_session() as conn:
+        await conn.execute(
+            text("insert into instance_admins (user_id) values (cast(:id as uuid))"),
+            {"id": alice},
+        )
+    try:
+        async with user_session(claims) as conn:
+            result = await conn.execute(
+                text("update auth_methods set password_enabled = :v"),
+                {"v": not before},
+            )
+        assert result.rowcount == 1
+    finally:
+        async with service_session() as conn:
+            await conn.execute(
+                text("update auth_methods set password_enabled = :v"), {"v": before}
+            )
+            await conn.execute(
+                text("delete from instance_admins where user_id = cast(:id as uuid)"),
+                {"id": alice},
+            )
+
+
 async def test_service_session_bypasses_rls(two_users) -> None:
     alice, _ = two_users
     async with user_session(claims_for(alice, "a@example.test")) as conn:

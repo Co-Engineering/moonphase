@@ -48,6 +48,29 @@ def host_of(url: str) -> str:
     return host.split("/")[0].split(":")[0].strip()
 
 
+async def _require_instance_admin(principal: Principal) -> None:
+    """Defense in depth alongside the `auth_methods_write` RLS policy.
+
+    That policy is the real gate — every org's owner is `owner`/`admin` of
+    their own personal org from the moment they sign up, which is not the
+    same thing as administering this instance, and a prior version of this
+    policy conflated the two. Checking again here means a future regression
+    in the DB policy fails closed at this layer too, rather than silently
+    reopening "any signed-in user can rewrite the instance's SMTP relay and
+    OAuth secrets."
+    """
+    async with service_session() as conn:
+        found = await conn.execute(
+            text("select 1 from instance_admins where user_id = cast(:id as uuid)"),
+            {"id": str(principal.user_id)},
+        )
+    if found.first() is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Only an administrator of this Moonphase can change how people sign in.",
+        )
+
+
 async def _state() -> dict:
     """Whether anyone has signed up yet, and what the instance is set to.
 
@@ -323,6 +346,7 @@ async def write_methods(
     payload: AuthMethodsIn, principal: Principal = Depends(current_principal)
 ) -> AuthMethodsOut:
     """Change how people sign in, and hand the result to the auth service."""
+    await _require_instance_admin(principal)
     async with user_session(principal.claims) as conn:
         try:
             await queries.set_auth_methods(
