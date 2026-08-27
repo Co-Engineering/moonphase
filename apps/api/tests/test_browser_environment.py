@@ -58,3 +58,21 @@ def test_the_recipe_version_moved() -> None:
     from moonphase.imagebuild import RECIPE_VERSION
 
     assert int(RECIPE_VERSION) >= 6
+
+
+def test_each_change_to_the_image_gets_its_own_recipe_version() -> None:
+    """Two changes to what the image contains landed in one release and both
+    called themselves v6 — the browser pinning and tmux's allow-passthrough.
+
+    A container keeps the image it was built with, and the tag comes from this
+    number, so a second change sharing the first's version reaches none of the
+    containers built in between. The note beside it records which change took
+    which number, so the next one has somewhere to look.
+    """
+    from moonphase import imagebuild
+
+    source = Path(imagebuild.__file__).read_text()
+    note = source[: source.index("RECIPE_VERSION =")]
+
+    assert "v7" in note and "v6" in note, "say which change took which version"
+    assert int(imagebuild.RECIPE_VERSION) >= 7

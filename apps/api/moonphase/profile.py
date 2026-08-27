@@ -57,6 +57,10 @@ class WorkspaceProfile:
     # Resolved separately from the private schema.
     harness_credential: HarnessCredential | None = None
     vcs_credential: VcsCredential | None = None
+    # {server_name: raw "<name>|<hash>": {...} credential JSON}, captured by
+    # the MCP OAuth relay and replayed into every session. See
+    # ClaudeCode.merge_into_credentials_file.
+    mcp_oauth: dict[str, str] = field(default_factory=dict)
 
     @property
     def has_harness_auth(self) -> bool:
@@ -201,6 +205,18 @@ async def apply(
             profile.harness_credential, space
         ).items():
             await write_file(conn, container, path, contents, mode="600")
+
+    # --- MCP server OAuth credentials -----------------------------------------
+    # Runs after the block above on purpose: on OAuth mode that block just
+    # overwrote this same file wholesale with the account's own credential, so
+    # this has to read that back and merge into it rather than run first and
+    # get overwritten.
+    creds_target = harness.credentials_merge_target(space)
+    if creds_target is not None:
+        existing_creds = await read_file(conn, container, creds_target)
+        merged_creds = harness.merge_into_credentials_file(existing_creds, profile.mcp_oauth)
+        if merged_creds is not None:
+            await write_file(conn, container, creds_target, merged_creds, mode="600")
 
     # --- environment ---------------------------------------------------------
     env: dict[str, str] = dict(profile.env_vars)

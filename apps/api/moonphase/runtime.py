@@ -251,6 +251,7 @@ async def load_session_profile(
             harness=harness_kind,
         )
         vcs_row = await queries.get_vcs_credential_privileged(conn, org_id, "github")
+        mcp_oauth = await queries.get_mcp_oauth_credentials_privileged(conn, org_id)
 
     vcs = None
     if vcs_row and vcs_row.get("token"):
@@ -265,6 +266,7 @@ async def load_session_profile(
         harness_credential=credential_from_row(credential_row),
         vcs_credential=vcs,
     )
+    base.mcp_oauth = mcp_oauth
     return get_harness(harness_kind).compose_project_layers(
         base, project_row, session_row
     )

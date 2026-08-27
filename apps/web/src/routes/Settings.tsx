@@ -16,6 +16,7 @@ import {
   type Environment,
   type GitHubDevice,
   type HarnessLogin,
+  type McpOAuthConnectionInfo,
   type PushStatus,
   type WorkspaceProfile,
 } from '../lib/api'
@@ -629,7 +630,57 @@ function HarnessSettingsTab({
           Save settings
         </button>
       </div>
+
+      <ConnectedMcpServers />
     </>
+  )
+}
+
+/**
+ * MCP servers connected via OAuth, org-wide.
+ *
+ * Connecting one happens from a session's own Configure dialog — it needs a
+ * running container to relay through — but disconnecting does not, so it
+ * lives here instead of leaving no way to revoke one without starting a
+ * session just to do it.
+ */
+function ConnectedMcpServers() {
+  const [connections, setConnections] = useState<McpOAuthConnectionInfo[] | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = () => void api.mcpOAuthConnections().then(setConnections).catch(() => setConnections([]))
+  useEffect(load, [])
+
+  if (!connections || connections.length === 0) return null
+
+  const disconnect = async (name: string) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await api.disconnectMcpOAuth(name)
+      load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="card inner" style={{ marginTop: 16 }}>
+      <h3>Connected MCP servers</h3>
+      <p className="hint">Connected via OAuth, available to every session in this org.</p>
+      {error && <div className="banner error">{error}</div>}
+      {connections.map((c) => (
+        <div className="row-between" key={c.id}>
+          <span>{c.server_name}</span>
+          <button className="danger" disabled={busy} onClick={() => void disconnect(c.server_name)}>
+            Disconnect
+          </button>
+        </div>
+      ))}
+    </div>
   )
 }
 

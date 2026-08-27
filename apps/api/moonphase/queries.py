@@ -1386,6 +1386,85 @@ async def delete_harness_credential_privileged(
     )
 
 
+# ---------------------------------------------------------------------------
+# MCP server OAuth credentials
+#
+# One per (org, server name), org-wide only — a given org typically has one
+# identity for a third-party service, and a per-project override would mean
+# re-authenticating the same server once per project for no benefit. See the
+# migration for what `credential_json` actually holds.
+# ---------------------------------------------------------------------------
+
+
+async def get_mcp_oauth_credentials_privileged(
+    conn: AsyncConnection, org_id: UUID
+) -> dict[str, str]:
+    """Every connected MCP server for this org, as {server_name: credential_json}."""
+    result = await conn.execute(
+        text(
+            "select server_name, credential_json_enc from private.mcp_oauth_credentials "
+            "where org_id = :org_id"
+        ),
+        {"org_id": org_id},
+    )
+    return {str(row[0]): decrypt(row[1]) or "" for row in result}
+
+
+async def list_mcp_oauth_credentials_privileged(
+    conn: AsyncConnection, org_id: UUID
+) -> list[dict[str, Any]]:
+    """Metadata only, for a "connected servers" list — never the token itself."""
+    result = await conn.execute(
+        text(
+            "select id, server_name, created_at, updated_at "
+            "from private.mcp_oauth_credentials where org_id = :org_id "
+            "order by server_name"
+        ),
+        {"org_id": org_id},
+    )
+    return [_row_to_dict(r) for r in result]
+
+
+async def upsert_mcp_oauth_credential_privileged(
+    conn: AsyncConnection,
+    *,
+    org_id: UUID,
+    server_name: str,
+    credential_json: str,
+    created_by: str | None,
+) -> None:
+    await conn.execute(
+        text(
+            """
+            insert into private.mcp_oauth_credentials
+              (org_id, server_name, credential_json_enc, created_by)
+            values (:org_id, :name, :cred, cast(:created_by as uuid))
+            on conflict (org_id, server_name) do update set
+              credential_json_enc = excluded.credential_json_enc,
+              created_by      = excluded.created_by
+            """
+        ),
+        {
+            "org_id": org_id,
+            "name": server_name,
+            "cred": encrypt(credential_json),
+            "created_by": created_by,
+        },
+    )
+
+
+async def delete_mcp_oauth_credential_privileged(
+    conn: AsyncConnection, org_id: UUID, server_name: str
+) -> None:
+    await conn.execute(
+        text(
+            "delete from private.mcp_oauth_credentials "
+            "where org_id = :org_id and server_name = :name"
+        ),
+        {"org_id": org_id, "name": server_name},
+    )
+
+
 async def list_harness_credentials(
     conn: AsyncConnection, org_ids: list[UUID]
 ) -> list[dict[str, Any]]:

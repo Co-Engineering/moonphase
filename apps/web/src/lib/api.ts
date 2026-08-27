@@ -279,6 +279,21 @@ export interface ClaudeConfig {
 
 export type ClaudeConfigInput = ClaudeConfig
 
+export interface McpOAuthConnection {
+  session_id: string
+  state: 'starting' | 'awaiting_paste' | 'verifying' | 'complete' | 'error'
+  url: string | null
+  detail: string | null
+  pane: string | null
+}
+
+export interface McpOAuthConnectionInfo {
+  id: string
+  server_name: string
+  created_at: string
+  updated_at: string
+}
+
 export interface HarnessLogin {
   session_id: string
   state: 'starting' | 'awaiting_code' | 'verifying' | 'complete' | 'error'
@@ -545,6 +560,33 @@ export const api = {
       `/api/projects/${projectId}/sessions/${encodeURIComponent(session)}/config`,
       { method: 'PUT', body: JSON.stringify(input) },
     ),
+
+  // --- MCP server OAuth, relayed through a running session -------------------
+  /**
+   * Claude Code's own OAuth for an MCP server redirects to
+   * `http://localhost:PORT/callback`, which is meaningless from a container
+   * on a remote server. `--no-browser` mode also accepts the resulting
+   * redirect URL typed back at a prompt, so this relays exactly that: open
+   * the link yourself, then paste back wherever your browser lands.
+   */
+  startMcpOAuth: (projectId: string, session: string, serverName: string) =>
+    request<McpOAuthConnection>(
+      `/api/projects/${projectId}/sessions/${encodeURIComponent(session)}/mcp-oauth/start`,
+      { method: 'POST', body: JSON.stringify({ server_name: serverName }) },
+    ),
+  pollMcpOAuth: (projectId: string, sessionId: string) =>
+    request<McpOAuthConnection>(`/api/projects/${projectId}/mcp-oauth/${sessionId}`),
+  pasteMcpOAuth: (projectId: string, sessionId: string, redirectUrl: string) =>
+    request<McpOAuthConnection>(
+      `/api/projects/${projectId}/mcp-oauth/${sessionId}/paste`,
+      { method: 'POST', body: JSON.stringify({ redirect_url: redirectUrl }) },
+    ),
+  /** Every MCP server the org has connected via OAuth. */
+  mcpOAuthConnections: () => request<McpOAuthConnectionInfo[]>('/api/profile/mcp-oauth'),
+  disconnectMcpOAuth: (serverName: string) =>
+    request<void>(`/api/profile/mcp-oauth/${encodeURIComponent(serverName)}`, {
+      method: 'DELETE',
+    }),
 
   // --- global profile -------------------------------------------------------
   profile: () => request<WorkspaceProfile>('/api/profile'),

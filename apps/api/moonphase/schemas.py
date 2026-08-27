@@ -561,6 +561,37 @@ class HarnessApiKeyIn(BaseModel):
     api_key: str = Field(min_length=8, max_length=512)
 
 
+# --- MCP server OAuth ---------------------------------------------------------
+#
+# The same relayed-flow shape as HarnessLogin*, one level down: a specific MCP
+# server rather than the harness's own account, driven inside a project's
+# session rather than a throwaway container. See mcp_login.py.
+
+
+class McpOAuthStartIn(BaseModel):
+    server_name: str = Field(min_length=1, max_length=128)
+
+
+class McpOAuthOut(BaseModel):
+    session_id: str
+    state: str
+    url: str | None = None
+    detail: str | None = None
+    pane: str | None = None
+
+
+class McpOAuthPasteIn(BaseModel):
+    session_id: str
+    redirect_url: str = Field(min_length=1, max_length=4096)
+
+
+class McpOAuthConnectionOut(BaseModel):
+    id: UUID
+    server_name: str
+    created_at: datetime
+    updated_at: datetime
+
+
 # --- github -----------------------------------------------------------------
 
 
