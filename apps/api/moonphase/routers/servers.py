@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 
 from .. import docker_remote, provision, queries, ssh
 from ..auth import Principal, current_principal
+from ..config import get_settings
 from ..db import service_session, user_session
 from ..runtime import CAN_ADMINISTER, Forbidden, NotFound, load_server_target
 from ..schemas import RenameIn, ServerBootstrapOut, ServerCreate, ServerOut
@@ -66,6 +67,16 @@ async def create_server(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    if (
+        not get_settings().moonphase_ssh_trust_on_first_use
+        and not payload.expected_host_key_fingerprint
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="MOONPHASE_SSH_TRUST_ON_FIRST_USE is disabled, so a server "
+            "cannot be added without its expected host key fingerprint.",
+        )
+
     async with user_session(principal.claims) as conn:
         try:
             org_id = await queries.resolve_org(conn, payload.org_id)
@@ -81,6 +92,7 @@ async def create_server(
                 ssh_user=payload.ssh_user.strip(),
                 auth_mode=payload.auth_mode,
                 created_by=principal.user_id,
+                host_key_fingerprint=payload.expected_host_key_fingerprint,
             )
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc

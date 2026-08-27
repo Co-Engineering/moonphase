@@ -209,6 +209,7 @@ export interface CreateServerInput {
   passphrase?: string
   auto_install_docker: boolean
   org_id?: string
+  expected_host_key_fingerprint?: string
 }
 
 export interface CreateProjectInput {

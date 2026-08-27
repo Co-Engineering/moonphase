@@ -41,6 +41,7 @@ export function AddServer({ onClose, onCreated }: Props) {
   const [privateKey, setPrivateKey] = useState('')
   const [passphrase, setPassphrase] = useState('')
   const [autoInstallDocker, setAutoInstallDocker] = useState(true)
+  const [expectedFingerprint, setExpectedFingerprint] = useState('')
 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -93,6 +94,7 @@ export function AddServer({ onClose, onCreated }: Props) {
         private_key: mode === 'provided_key' ? privateKey : undefined,
         passphrase: mode === 'provided_key' && passphrase ? passphrase : undefined,
         auto_install_docker: autoInstallDocker,
+        expected_host_key_fingerprint: expectedFingerprint.trim() || undefined,
       })
       setResult(created)
       onCreated()
@@ -295,6 +297,22 @@ export function AddServer({ onClose, onCreated }: Props) {
             />
             <span style={{ margin: 0 }}>Install Docker if missing (needs sudo)</span>
           </label>
+
+          <label>
+            <span>Expected host key fingerprint (optional)</span>
+            <input
+              value={expectedFingerprint}
+              onChange={(e) => setExpectedFingerprint(e.target.value)}
+              placeholder="SHA256:..."
+            />
+          </label>
+          <p className="hint" style={{ marginTop: -6 }}>
+            Moonphase trusts whatever host key the server presents the first time it
+            connects, then refuses to connect again if it ever changes. Fill this in — from{' '}
+            <code>ssh-keyscan</code> or a provider&apos;s console — to have the first
+            connection checked too, instead of trusted blindly. Required if this instance has
+            trust-on-first-use disabled.
+          </p>
 
           <div className="actions">
             <button className="primary" type="submit" disabled={busy}>
