@@ -430,7 +430,7 @@ class SessionMonitor:
 
         dead: list[str] = []
         for sub in subscriptions:
-            alive = await push.send(
+            result = await push.send(
                 push.Subscription(
                     endpoint=sub["endpoint"], p256dh=sub["p256dh"], auth=sub["auth"]
                 ),
@@ -447,8 +447,14 @@ class SessionMonitor:
                 # Collapse repeats for the same project rather than stacking.
                 tag=f"moonphase-{row['id']}",
             )
-            if not alive:
+            if not result.alive:
                 dead.append(sub["endpoint"])
+            elif not result.delivered:
+                log.warning(
+                    "push to a live subscription failed for project %s: %s",
+                    row["id"],
+                    result.error,
+                )
 
         if dead:
             async with service_session() as conn:

@@ -671,9 +671,10 @@ export const api = {
       body: JSON.stringify(input),
     }),
   testPush: () =>
-    request<{ delivered: number; subscriptions: number }>('/api/notifications/test', {
-      method: 'POST',
-    }),
+    request<{ delivered: number; subscriptions: number; errors: string[] }>(
+      '/api/notifications/test',
+      { method: 'POST' },
+    ),
 
   // --- phone feed -----------------------------------------------------------
   feed: (projectId: string, session?: string, cursor?: string) => {

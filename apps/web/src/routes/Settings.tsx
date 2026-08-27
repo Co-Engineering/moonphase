@@ -1099,11 +1099,16 @@ function NotificationsPanel({ run }: { run: Runner }) {
     setNotice(null)
     try {
       const result = await api.testPush()
-      setNotice(
-        result.delivered > 0
-          ? `Sent to ${result.delivered} device${result.delivered === 1 ? '' : 's'}.`
-          : 'No devices are subscribed yet.',
-      )
+      if (result.delivered > 0) {
+        setNotice(`Sent to ${result.delivered} device${result.delivered === 1 ? '' : 's'}.`)
+      } else if (result.subscriptions === 0) {
+        setNotice('No devices are subscribed yet.')
+      } else {
+        // Subscribed, but the push service itself refused or could not be
+        // reached — the previous version of this screen said "Sent" here
+        // regardless, which is worse than saying nothing.
+        setError(result.errors[0] ?? 'Could not deliver to any subscribed device.')
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
