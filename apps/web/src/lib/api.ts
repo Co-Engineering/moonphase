@@ -254,16 +254,19 @@ export interface WorkspaceProfileInput {
 }
 
 /**
- * The layer beneath the workspace profile: same four fields, scoped to one
+ * The layer beneath the workspace profile: same fields, scoped to one
  * project (applies to every session in it) or one session (that person only).
  * See `moonphase.harness.claude_code.ClaudeCode.compose_project_layers` on
- * the backend for how the three scopes combine.
+ * the backend for how the Claude-specific fields combine, and
+ * `runtime.load_session_profile` for env_vars, which combines the same way
+ * (most specific scope wins a key) but applies regardless of harness.
  */
 export interface ClaudeConfig {
   claude_settings_json: string | null
   claude_md: string | null
   mcp_json: string | null
   skills: Record<string, string>
+  env_vars: Record<string, string>
 }
 
 export type ClaudeConfigInput = ClaudeConfig

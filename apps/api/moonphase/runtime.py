@@ -10,7 +10,7 @@ rather than someone else's server.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from uuid import UUID
 
@@ -24,6 +24,7 @@ from .profile import (
     VcsCredential,
     WorkspaceProfile,
     credential_from_row,
+    parse_json_object,
     profile_from_row,
 )
 from .ssh import SSHError, SSHTarget
@@ -194,6 +195,34 @@ class NoCredential(Exception):
     """The person starting this session has not connected the harness."""
 
 
+def _with_env_layers(
+    profile: WorkspaceProfile,
+    project_row: dict[str, Any] | None,
+    session_row: dict[str, Any] | None,
+) -> WorkspaceProfile:
+    """Layer project- and session-level env vars over the org profile's.
+
+    Unlike settings/CLAUDE.md/MCP servers this is not routed through the
+    harness's `compose_project_layers` — env vars apply the same way
+    regardless of which harness a project runs, so this combines them
+    directly rather than only for harnesses that know about Claude Code's
+    own config shape. Most specific scope wins a key collision, the same
+    precedence the Claude-specific fields already use.
+    """
+    project_env = parse_json_object((project_row or {}).get("env_vars"))
+    session_env = parse_json_object((session_row or {}).get("env_vars"))
+    if not project_env and not session_env:
+        return profile
+    return replace(
+        profile,
+        env_vars={
+            **profile.env_vars,
+            **{str(k): str(v) for k, v in project_env.items()},
+            **{str(k): str(v) for k, v in session_env.items()},
+        },
+    )
+
+
 async def load_session_profile(
     claims: dict[str, Any],
     project: dict[str, Any],
@@ -267,6 +296,57 @@ async def load_session_profile(
         vcs_credential=vcs,
     )
     base.mcp_oauth = mcp_oauth
-    return get_harness(harness_kind).compose_project_layers(
+    composed = get_harness(harness_kind).compose_project_layers(
         base, project_row, session_row
     )
+    return _with_env_layers(composed, project_row, session_row)
+
+
+async def load_session_profile_privileged(
+    org_id: UUID, project: dict[str, Any], harness_kind: str, session: str | None = None
+) -> WorkspaceProfile:
+    """`load_session_profile`, for a caller with no JWT of its own.
+
+    The monitor resuming a session after a reboot is the one caller of this:
+    it already knows whose session it is and which org that resolves to (see
+    `queries.personal_org_id_for_user_privileged`) from the row it is
+    reconciling, not from a request. Every read goes through the privileged
+    connection directly — there is no RLS to scope against without a caller,
+    so `org_id` must already be verified by whoever called this rather than
+    trusted blindly.
+    """
+    async with service_session() as conn:
+        row = await queries.get_profile(conn, org_id)
+        project_row = await queries.get_project_config(conn, project["id"])
+        session_row = (
+            await queries.get_session_config(conn, project["id"], session)
+            if session
+            else None
+        )
+        credential_row = await queries.resolve_harness_credential_privileged(
+            conn, org_id=org_id, project_id=project["id"], harness=harness_kind
+        )
+        vcs_row = await queries.get_vcs_credential_privileged(conn, org_id, "github")
+        mcp_oauth = await queries.get_mcp_oauth_credentials_privileged(conn, org_id)
+
+    if row is None:
+        row = {"org_id": org_id, "env_vars": {}}
+
+    vcs = None
+    if vcs_row and vcs_row.get("token"):
+        vcs = VcsCredential(
+            provider=str(vcs_row["provider"]),
+            token=str(vcs_row["token"]),
+            account=vcs_row.get("account"),
+        )
+
+    base = profile_from_row(
+        row,
+        harness_credential=credential_from_row(credential_row),
+        vcs_credential=vcs,
+    )
+    base.mcp_oauth = mcp_oauth
+    composed = get_harness(harness_kind).compose_project_layers(
+        base, project_row, session_row
+    )
+    return _with_env_layers(composed, project_row, session_row)

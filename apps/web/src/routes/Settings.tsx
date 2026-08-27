@@ -600,6 +600,9 @@ function HarnessSettingsTab({
     claude_md: profile.claude_md,
     mcp_json: profile.mcp_json,
     skills: profile.skills,
+    // Not editable here — Settings → Workspace already owns this at the org
+    // scope — but ClaudeConfigValue still needs a value to carry.
+    env_vars: profile.env_vars,
   })
 
   const save = () =>
@@ -623,6 +626,7 @@ function HarnessSettingsTab({
         value={config}
         onChange={setConfig}
         claudeMdHint="Written to ~/.claude/CLAUDE.md, so it applies to every project"
+        showEnvVars={false}
       />
 
       <div className="actions">

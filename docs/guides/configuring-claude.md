@@ -1,9 +1,11 @@
 # Configuring Claude Code
 
-Three scopes, same four things to configure at each: permissions & behaviour, MCP
-servers, CLAUDE.md, and skills.
+Three scopes, same things to configure at each: permissions & behaviour, MCP
+servers, CLAUDE.md, skills, and environment variables.
 
 - **Organization** — **Settings → Claude.** Set once, applies to every project.
+  Environment variables live on their own **Settings → Workspace** tab rather than
+  inside this one, since that predates the project and session layers below it.
 - **Project** — a project's **⋯ menu → Configure.** Applies to every session in that
   project, for everyone who can drive one.
 - **Session** — a session's **⋯ menu → Configure.** Applies to that one session only,
@@ -16,7 +18,8 @@ team's own committed `.claude/` files. CLAUDE.md instructions from every layer t
 sets one are concatenated together; MCP servers and skills merge by name, with the
 more specific scope winning a collision; permission rules union, with the strictest
 decision winning regardless of which layer set it — a project-wide `deny` cannot be
-quietly reopened by someone's own session settings.
+quietly reopened by someone's own session settings; environment variables merge by
+key, most specific scope wins.
 
 ## Permissions and behaviour
 
