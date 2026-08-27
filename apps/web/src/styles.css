@@ -295,6 +295,29 @@ pre {
   font-family: var(--mono);
 }
 
+/*
+ * The Electron desktop app hides the native title bar on macOS
+ * (titleBarStyle: 'hiddenInset' — see apps/desktop/src/main.ts), and nothing
+ * anywhere reserved a region of the window as draggable. Without one, macOS
+ * has no drag handle for the window at all — and, in practice, that also
+ * left dragging its edges to resize unreliable, since both are the same
+ * native window-server interaction this window otherwise never engages.
+ *
+ * This property is meaningless outside a frameless/inset Electron window —
+ * a plain browser tab (this app's other host) ignores it entirely, so it
+ * ships unconditionally rather than behind an isDesktop() check.
+ */
+.topbar {
+  -webkit-app-region: drag;
+}
+
+.topbar button,
+.topbar a,
+.topbar input,
+.topbar select {
+  -webkit-app-region: no-drag;
+}
+
 .spacer {
   flex: 1;
 }
@@ -529,6 +552,22 @@ pre {
   display: grid;
   place-items: center;
   padding: 24px;
+  /* No .topbar exists yet on sign-in/setup screens — same drag-region need
+     as .topbar above, met here instead. */
+  -webkit-app-region: drag;
+}
+
+/* Excluded by element type rather than by card class: this shell wraps a
+   plain .auth-card in most places but a bare .card form in Connect.tsx, and
+   the point is that nothing clickable or typeable in here is ever
+   draggable, regardless of which container class it happens to sit in. */
+.auth-shell form,
+.auth-shell button,
+.auth-shell a,
+.auth-shell input,
+.auth-shell select,
+.auth-shell textarea {
+  -webkit-app-region: no-drag;
 }
 
 .auth-card {
