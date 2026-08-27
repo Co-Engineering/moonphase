@@ -25,6 +25,33 @@ export function isShiftEnter(event: Pick<KeyboardEvent, 'key' | 'shiftKey'>): bo
  */
 export const SHIFT_ENTER_SEQUENCE = '\x1b\r'
 
+type KeydownLike = Pick<KeyboardEvent, 'key' | 'shiftKey' | 'type' | 'preventDefault' | 'stopPropagation'>
+
+/**
+ * The xterm custom key handler for Shift+Enter.
+ *
+ * Returning `false` from `attachCustomKeyEventHandler` only tells xterm to
+ * skip its own key handling — unlike that handling, it does not call
+ * `preventDefault`. Left alone, the browser's native default action for
+ * Enter in the textarea xterm renders into (inserting a literal newline)
+ * still fires right behind whatever this sends, so `preventDefault` and
+ * `stopPropagation` are called explicitly, every time, before anything else.
+ */
+export function handleShiftEnterKeydown(
+  event: KeydownLike,
+  { readOnly, onRefused, send }: { readOnly: boolean; onRefused?: () => void; send: (bytes: Uint8Array) => void },
+): boolean {
+  if (event.type !== 'keydown' || !isShiftEnter(event)) return true
+  event.preventDefault()
+  event.stopPropagation()
+  if (readOnly) {
+    onRefused?.()
+    return false
+  }
+  send(new TextEncoder().encode(SHIFT_ENTER_SEQUENCE))
+  return false
+}
+
 // A silent network drop (Wi-Fi association lost, a VPN blip, laptop sleep)
 // often never fires `onclose`/`onerror` at all — the socket just sits
 // half-open until some lengthy OS-level TCP timeout, if that ever comes. A
@@ -329,20 +356,18 @@ export function ProjectTerminal({
     // xterm treats Enter and Shift+Enter identically — both would otherwise
     // submit the line below. Intercepting here, ahead of that default
     // handling, is what lets Shift+Enter send a distinguishable sequence
-    // instead (see SHIFT_ENTER_SEQUENCE for what the harness expects).
-    const onKeyEvent = (event: KeyboardEvent) => {
-      if (event.type !== 'keydown' || !isShiftEnter(event)) return true
-      if (readOnlyRef.current) {
-        refusedRef.current?.()
-        return false
-      }
-      const socket = socketRef.current
-      if (socket?.readyState === WebSocket.OPEN) {
-        socket.send(new TextEncoder().encode(SHIFT_ENTER_SEQUENCE))
-      }
-      return false
-    }
-    term.attachCustomKeyEventHandler(onKeyEvent)
+    // instead (see handleShiftEnterKeydown for what the harness expects, and
+    // why this cannot just return `false` and stop there).
+    term.attachCustomKeyEventHandler((event) =>
+      handleShiftEnterKeydown(event, {
+        readOnly: readOnlyRef.current,
+        onRefused: refusedRef.current,
+        send: (bytes) => {
+          const socket = socketRef.current
+          if (socket?.readyState === WebSocket.OPEN) socket.send(bytes)
+        },
+      }),
+    )
 
     /**
      * The harness's own image paste shells out to the OS clipboard, which
