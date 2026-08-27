@@ -253,6 +253,25 @@ def test_administering_the_instance_is_not_the_same_as_owning_an_org() -> None:
     assert "grant insert" not in migration
 
 
+def test_auth_methods_write_requires_instance_administration_too() -> None:
+    """`auth_methods_write` was the sibling of `instance_settings_write` and
+    had the exact same bug — 'owner'/'admin' of any organization, which every
+    account is of its own personal one — but the earlier fix was never
+    ported to it. Any signed-in user could repoint the instance's SMTP relay
+    or OAuth client secrets, or turn password auth off instance-wide.
+    """
+    migration = (
+        Path(__file__).resolve().parents[3]
+        / "supabase/migrations/20260827190000_fix_auth_methods_write_policy.sql"
+    ).read_text()
+
+    assert "drop policy if exists auth_methods_write" in migration
+    assert "from public.instance_admins a where a.user_id = auth.uid()" in migration
+    # The org-role check this replaces must not still be present anywhere in
+    # the new policy body — a stray `or` would silently keep the old hole.
+    assert "org_members" not in migration
+
+
 def test_an_existing_install_keeps_an_administrator() -> None:
     """Nobody would be able to administer an instance that already exists, and
     the fix would be a database client. The earliest account is the one that
