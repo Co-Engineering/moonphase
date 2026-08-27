@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 # v5 added the xclip shim: an image built before it has no bridge for the
 # browser's clipboard, so pasting an image into the harness silently does
 # nothing instead of attaching it.
-RECIPE_VERSION = "5"
+RECIPE_VERSION = "6"
 
 NODE_VERSION = "22.20.0"
 

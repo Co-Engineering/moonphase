@@ -16,8 +16,13 @@ def test_the_browser_environment_installs_chromium_as_root_before_dev_exists() -
     browser = environments.resolve("browser", custom_rows=[])
 
     assert browser.setup_script is not None
-    assert "playwright install" in browser.setup_script
-    assert "chromium" in browser.setup_script
+    # `playwright ... install`, not the literal "playwright install": the
+    # package is pinned to a version, so the two words are no longer adjacent.
+    # What matters is that Playwright does the installing, into the shared
+    # path, rather than which spelling gets there.
+    assert "playwright@" in browser.setup_script
+    assert "install --with-deps chromium" in browser.setup_script
+    assert "PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers" in browser.setup_script
     # World-readable: installed as root, used later as `dev`.
     assert "chmod" in browser.setup_script and "a+rX" in browser.setup_script
 

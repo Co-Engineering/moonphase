@@ -457,7 +457,11 @@ const TEMPLATES: {
       // connects happily and then fails on first use with "Chromium isn't
       // installed at the expected path", which reads like a broken
       // environment rather than a wrong flag.
-      args: '-y @playwright/mcp@latest --browser chromium --headless --isolated',
+      // Pinned, and the browser environment installs the browser this exact
+      // version expects — see PLAYWRIGHT_MCP_VERSION in environments.py.
+      // `@latest` here meant the server asked for a browser revision the image
+      // had never heard of, and reported it as "not installed".
+      args: '-y @playwright/mcp@0.0.79 --browser chromium --headless --isolated',
       url: '',
       // Matches where the "Browser tools" built-in environment installs
       // Chromium (see environments.py) — headless needs no DISPLAY, but it

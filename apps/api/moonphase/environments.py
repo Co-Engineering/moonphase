@@ -45,10 +45,25 @@ class Environment:
 # ~/.cache/ms-playwright) because this script runs as root before the `dev`
 # user in imagebuild.py's recipe even exists — the Browser MCP template
 # points PLAYWRIGHT_BROWSERS_PATH at the same path.
-_BROWSER_SETUP_SCRIPT = """
+# The MCP server the Browser template runs, pinned. The template pins the same
+# version — `apps/web/src/components/ClaudeConfig.tsx`, kept honest by a test.
+#
+# Pinned because the two halves are installed at different moments: the browser
+# when this image is built, the server when a session starts. Playwright refuses
+# a browser revision it did not expect, so `@latest` on the server side meant
+# the pair drifted apart the day a new Playwright shipped — an image holding
+# chromium-1234 against a server asking for chromium-1237, and an agent told
+# the browser "isn't installed" when it plainly was.
+PLAYWRIGHT_MCP_VERSION = "0.0.79"
+
+_BROWSER_SETUP_SCRIPT = f"""
 set -eux
 mkdir -p /opt/playwright-browsers
-PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers npx -y playwright install --with-deps chromium
+# Ask the pinned server which Playwright it runs, and install that one's
+# browsers. One version to bump rather than two to keep in step.
+playwright_version=$(npm view @playwright/mcp@{PLAYWRIGHT_MCP_VERSION} dependencies.playwright)
+PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers \\
+  npx -y playwright@"$playwright_version" install --with-deps chromium
 chmod -R a+rX /opt/playwright-browsers
 """.strip()
 
