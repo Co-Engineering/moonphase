@@ -1158,10 +1158,20 @@ button.linkish:hover:not(:disabled) {
   gap: 6px;
 }
 
-.feed-compose input {
+.feed-compose input,
+.feed-compose textarea.feed-message {
   flex: 1;
   /* 16px or iOS zooms the whole page on focus. */
   font-size: 16px;
+}
+
+.feed-compose textarea.feed-message {
+  font-family: inherit;
+  resize: none;
+  min-height: 0;
+  max-height: 160px;
+  line-height: 1.4;
+  overflow-y: auto;
 }
 
 .feed-compose button {
@@ -1292,7 +1302,8 @@ button.linkish:hover:not(:disabled) {
     max-height: 22vh;
   }
 
-  .feed-compose input {
+  .feed-compose input,
+  .feed-compose textarea.feed-message {
     min-width: 0;
   }
 

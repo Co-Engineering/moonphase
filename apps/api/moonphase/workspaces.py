@@ -157,11 +157,7 @@ if ! git rev-parse HEAD >/dev/null 2>&1; then
 fi
 """
     result = await _run(conn, container, script)
-    if not result.ok:
-        raise SSHError(
-            "Could not prepare the workspace repository: "
-            f"{(result.stderr or result.stdout).strip()[:400]}"
-        )
+    result.check("Preparing the workspace repository")
 
 
 async def ensure_worktree(
@@ -248,11 +244,7 @@ fi
     finally:
         if token:
             await _clear_fetch_credential(conn, container)
-    if not result.ok:
-        raise SSHError(
-            f"Could not create a working directory for session {session!r}: "
-            f"{(result.stderr or result.stdout).strip()[:400]}"
-        )
+    result.check(f"Creating a working directory for session {session!r}")
     return workdir, branch
 
 
