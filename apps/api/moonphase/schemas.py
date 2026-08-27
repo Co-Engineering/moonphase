@@ -9,6 +9,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .push import InvalidPushEndpoint
+from .push import validate_endpoint as _validate_push_endpoint
+
 SshAuthMode = Literal["password_bootstrap", "managed_key", "provided_key"]
 HarnessKindStr = Literal["claude_code", "opencode", "pydantic_ai"]
 HarnessAuthModeStr = Literal["oauth", "api_key"]
@@ -200,6 +203,17 @@ class PushSubscriptionIn(BaseModel):
     p256dh: str = Field(min_length=8, max_length=512)
     auth: str = Field(min_length=8, max_length=512)
     user_agent: str | None = None
+
+    @field_validator("endpoint")
+    @classmethod
+    def _real_push_service(cls, v: str) -> str:
+        # Otherwise this is a way to make the server POST to any URL of an
+        # authenticated caller's choosing — see push.validate_endpoint.
+        try:
+            _validate_push_endpoint(v)
+        except InvalidPushEndpoint as exc:
+            raise ValueError(str(exc)) from exc
+        return v
 
 
 class PushStatusOut(BaseModel):

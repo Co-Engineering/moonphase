@@ -15,6 +15,7 @@ import base64
 import json
 import logging
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives import serialization
 from py_vapid import Vapid01
@@ -23,6 +24,48 @@ from pywebpush import WebPushException, webpush
 from .config import get_settings
 
 log = logging.getLogger(__name__)
+
+# A browser only ever hands out an endpoint on one of its vendor's own push
+# services — never an arbitrary URL of the page's choosing. `endpoint` still
+# arrives here as a string a caller wrote by hand, and `send()` below is a
+# server-side POST to whatever it says: an unchecked value turns this into an
+# SSRF primitive any signed-in user can point at the internal network, cloud
+# metadata endpoints, or anything else this container can reach.
+#
+# A domain allowlist beats a private-IP blocklist here: this is a closed set
+# (every push service in real use), and unlike a blocklist it is not a race
+# against redirects, decimal/octal IP encodings, or DNS rebinding — there is
+# no "safe" IP address to rebind an allowed hostname's own DNS to.
+ALLOWED_PUSH_ENDPOINT_SUFFIXES = (
+    "fcm.googleapis.com",  # Chrome, Edge, Opera, Firefox on Android
+    "updates.push.services.mozilla.com",  # Firefox desktop
+    "web.push.apple.com",  # Safari
+    "notify.windows.com",  # legacy Edge / WNS
+)
+
+
+class InvalidPushEndpoint(ValueError):
+    """`endpoint` is not a real push service, or not shaped like a URL at all."""
+
+
+def validate_endpoint(endpoint: str) -> None:
+    """Raise unless `endpoint` is a plausible browser push-service URL.
+
+    Called both when a subscription is stored and again immediately before
+    `send()` posts to it, so a row that reached the table some other way
+    (a direct DB write, an older client) cannot use this as a delivery path.
+    """
+    parsed = urlsplit(endpoint)
+    host = parsed.hostname
+    if parsed.scheme != "https" or not host:
+        raise InvalidPushEndpoint("Push endpoint must be an https:// URL.")
+    if not any(
+        host == suffix or host.endswith(f".{suffix}")
+        for suffix in ALLOWED_PUSH_ENDPOINT_SUFFIXES
+    ):
+        raise InvalidPushEndpoint(
+            f"{host!r} is not a recognized push service endpoint."
+        )
 
 
 @dataclass
@@ -97,6 +140,14 @@ async def send(
         raise PushNotConfigured(
             "MOONPHASE_VAPID_PUBLIC_KEY and MOONPHASE_VAPID_PRIVATE_KEY are not set."
         )
+    try:
+        validate_endpoint(subscription.endpoint)
+    except InvalidPushEndpoint as exc:
+        # Should not be reachable — subscribe() already validates — but a row
+        # from before this check existed, or written some other way, must be
+        # pruned rather than used to make a request on the caller's behalf.
+        log.warning("refusing to deliver to a bad push endpoint: %s", exc)
+        return False
 
     payload = json.dumps(
         {
