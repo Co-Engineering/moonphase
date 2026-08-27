@@ -452,7 +452,18 @@ const TEMPLATES: { label: string; server: Omit<McpServer, 'name'> & { name: stri
   },
 ]
 
-export function McpEditor({ value, onChange }: SettingsProps) {
+export function McpEditor({
+  value,
+  onChange,
+  onConnect,
+}: SettingsProps & {
+  /**
+   * Relay this server's OAuth through a running session. Omitted at the org
+   * and project scope, where there is no specific session to run it in —
+   * offered only from a session's own Configure dialog.
+   */
+  onConnect?: (serverName: string) => void
+}) {
   const [raw, setRaw] = useState(false)
   const doc = useMemo(() => parseDoc(value), [value])
   const servers = useMemo(() => serversFrom(doc), [doc])
@@ -511,6 +522,15 @@ export function McpEditor({ value, onChange }: SettingsProps) {
               <option value="http">HTTP</option>
               <option value="sse">SSE</option>
             </select>
+            {onConnect && server.transport !== 'stdio' && server.name.trim() && (
+              <button
+                className="ghost small"
+                onClick={() => onConnect(server.name.trim())}
+                title="Relay this server's OAuth through this session"
+              >
+                Connect
+              </button>
+            )}
             <button
               className="ghost small"
               onClick={() => update(servers.filter((_, i) => i !== index))}
@@ -708,10 +728,12 @@ export function ClaudeConfigFields({
   value,
   onChange,
   claudeMdHint,
+  onConnectMcp,
 }: {
   value: ClaudeConfigValue
   onChange: (next: ClaudeConfigValue) => void
   claudeMdHint: string
+  onConnectMcp?: (serverName: string) => void
 }) {
   const [section, setSection] = useState<ClaudeConfigSection>('settings')
 
@@ -748,6 +770,7 @@ export function ClaudeConfigFields({
         <McpEditor
           value={value.mcp_json}
           onChange={(next) => onChange({ ...value, mcp_json: next })}
+          onConnect={onConnectMcp}
         />
       )}
       {section === 'md' && (

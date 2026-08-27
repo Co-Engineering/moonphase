@@ -183,6 +183,29 @@ class Harness(abc.ABC):
         del space
         return None
 
+    def credentials_merge_target(self, space: SessionSpace) -> str | None:
+        """Path of a credentials file the harness also mutates on its own.
+
+        Distinct from `profile_file_target`: this one may already have been
+        overwritten wholesale by `credential_files()` earlier in the same
+        apply(), so it needs merging into *that* rather than into whatever was
+        on disk before this session even started. None means no such file.
+        """
+        del space
+        return None
+
+    def merge_into_credentials_file(
+        self, existing: str | None, mcp_oauth: dict[str, str]
+    ) -> str | None:
+        """New contents for `credentials_merge_target`.
+
+        `mcp_oauth` maps an MCP server's name to the raw credential entry a
+        successful OAuth relay captured for it. Return None to leave the file
+        untouched.
+        """
+        del existing, mcp_oauth
+        return None
+
     def compose_project_layers(
         self,
         profile: Any,
