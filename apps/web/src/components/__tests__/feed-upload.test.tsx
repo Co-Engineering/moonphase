@@ -39,6 +39,14 @@ function png(name = 'photo.png') {
   return new File([new Uint8Array([1, 2, 3])], name, { type: 'image/png' })
 }
 
+/** `size` is a real getter, but reassigning it on the instance is enough to
+ * exercise the size guard without actually allocating a 20MB buffer. */
+function oversizedPng(name = 'huge.png') {
+  const file = png(name)
+  Object.defineProperty(file, 'size', { value: 20 * 1024 * 1024 })
+  return file
+}
+
 afterEach(() => {
   vi.unstubAllGlobals()
 })
@@ -117,5 +125,33 @@ describe('attaching an image in the feed', () => {
     )
     // The thumbnail strip clears once the message carrying it has gone out.
     expect(container.querySelector('.feed-attachment')).toBeFalsy()
+  })
+
+  it('refuses an oversized image immediately, without ever uploading it', async () => {
+    const upload = vi.fn()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.includes('/feed/upload')) {
+          upload()
+          return new Response(JSON.stringify({ path: '/x.png' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        return emptyPage()
+      }),
+    )
+    vi.stubGlobal('WebSocket', StubSocket)
+
+    const { container } = render(<Feed projectId="p1" session="s1" running />)
+    const fileInput = container.querySelector('.feed-file-input') as HTMLInputElement
+    fireEvent.change(fileInput, { target: { files: [oversizedPng()] } })
+
+    // A thumbnail appears, already marked as failed — a slow phone upload
+    // was never attempted just to find out the same thing 15MB later.
+    expect(container.querySelector('.feed-attachment.error')).toBeTruthy()
+    expect(upload).not.toHaveBeenCalled()
   })
 })

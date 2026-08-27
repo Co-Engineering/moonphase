@@ -8,9 +8,10 @@ process on disconnect — it only closes its own channel.
 
 Wire protocol
     client → server   binary frame : raw stdin bytes
-                      text frame   : JSON control, {"type": "resize", ...}
+                      text frame   : JSON control, {"type": "resize"|"clipboard-image", ...}
     server → client   binary frame : raw stdout bytes
-                      text frame   : JSON status, {"type": "exit"|"error", ...}
+                      text frame   : JSON status,
+                          {"type": "exit"|"error"|"clipboard-image-error", ...}
 """
 
 from __future__ import annotations
@@ -156,11 +157,31 @@ async def _pump_input(
             # harness's own clipboard read before the file it is looking for
             # exists. The single-threaded receive loop is what makes that
             # ordering a guarantee rather than a race.
-            if writable and conn_ssh is not None and container is not None and space is not None:
-                data = control.get("data")
-                if isinstance(data, str) and data and len(data) <= MAX_CLIPBOARD_IMAGE_BASE64:
-                    with contextlib.suppress(SSHError):
-                        await sessions.stage_clipboard_image(conn_ssh, container, space, data)
+            have_target = conn_ssh is not None and container is not None and space is not None
+            if not (writable and have_target):
+                continue
+            data = control.get("data")
+            if not isinstance(data, str) or not data:
+                continue
+            # A silent drop here used to be indistinguishable from the paste
+            # never having been noticed at all — the one thing a screenshot
+            # (routinely several MB once base64-inflated) is likely to hit.
+            if len(data) > MAX_CLIPBOARD_IMAGE_BASE64:
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "clipboard-image-error",
+                            "message": "That image was too large to paste.",
+                        }
+                    )
+                )
+                continue
+            try:
+                await sessions.stage_clipboard_image(conn_ssh, container, space, data)
+            except SSHError as exc:
+                await websocket.send_text(
+                    json.dumps({"type": "clipboard-image-error", "message": str(exc)})
+                )
         elif kind == "ping":
             await websocket.send_text(json.dumps({"type": "pong"}))
 
