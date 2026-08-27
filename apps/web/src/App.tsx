@@ -726,6 +726,11 @@ function Shell({ email }: { email: string }) {
               : api.saveProjectConfig(configureTarget.projectId, input)
           }
           onClose={() => setConfigureTarget(null)}
+          mcpConnect={
+            configureTarget.session
+              ? { projectId: configureTarget.projectId, session: configureTarget.session }
+              : undefined
+          }
         />
       )}
       {showNewProject && (

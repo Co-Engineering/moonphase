@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ClaudeConfigFields, type ClaudeConfigValue } from './ClaudeConfig'
+import { McpConnectDialog } from './McpConnectDialog'
 import type { ClaudeConfig } from '../lib/api'
 
 const EMPTY: ClaudeConfigValue = {
@@ -23,6 +24,7 @@ export function ClaudeConfigDialog({
   save,
   onClose,
   onSaved,
+  mcpConnect,
 }: {
   title: string
   note: string
@@ -30,12 +32,19 @@ export function ClaudeConfigDialog({
   save: (input: ClaudeConfig) => Promise<unknown>
   onClose: () => void
   onSaved?: () => void
+  /**
+   * Lets the MCP tab offer "Connect" for a server needing OAuth, relayed
+   * through this specific running session. Omitted for the org and project
+   * scopes, where there is no one session to run it in.
+   */
+  mcpConnect?: { projectId: string; session: string }
 }) {
   const [value, setValue] = useState<ClaudeConfigValue>(EMPTY)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [connecting, setConnecting] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -90,6 +99,7 @@ export function ClaudeConfigDialog({
             value={value}
             onChange={setValue}
             claudeMdHint="Added to CLAUDE.md for this scope, alongside anything set above it"
+            onConnectMcp={mcpConnect ? (name) => setConnecting(name) : undefined}
           />
         )}
 
@@ -103,6 +113,16 @@ export function ClaudeConfigDialog({
           </button>
         </div>
       </div>
+
+      {connecting && mcpConnect && (
+        <McpConnectDialog
+          projectId={mcpConnect.projectId}
+          session={mcpConnect.session}
+          serverName={connecting}
+          onClose={() => setConnecting(null)}
+          onConnected={() => setConnecting(null)}
+        />
+      )}
     </div>
   )
 }

@@ -364,6 +364,53 @@ class ClaudeCode(Harness):
     def skills_directory(self, space: SessionSpace) -> str | None:
         return f"{_claude_home(space)}/skills"
 
+    def credentials_merge_target(self, space: SessionSpace) -> str | None:
+        return f"{_claude_home(space)}/.credentials.json"
+
+    def merge_into_credentials_file(
+        self, existing: str | None, mcp_oauth: dict[str, str]
+    ) -> str | None:
+        """Merge saved MCP server OAuth tokens into Claude Code's own credentials file.
+
+        This is the same file the account's own OAuth credential lives in
+        (`credential_files()`, above) — on OAuth mode that has already
+        overwritten it wholesale by the time this runs, and on API-key mode
+        it may not exist at all yet either way. Claude Code stores an MCP
+        server's token under a top-level `mcpOAuth` key, keyed by
+        `"<server-name>|<hash>"` — the hash is Claude Code's own and not
+        recomputed here; each entry is replayed exactly as captured.
+        """
+        try:
+            doc = json.loads(existing) if existing else {}
+        except json.JSONDecodeError:
+            doc = {}
+        if not isinstance(doc, dict):
+            doc = {}
+
+        existing_oauth = doc.get("mcpOAuth")
+        merged_oauth = dict(existing_oauth) if isinstance(existing_oauth, dict) else {}
+
+        for server_name, raw_entry in mcp_oauth.items():
+            try:
+                parsed = json.loads(raw_entry)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            # A server's hash changes if its config does, so drop whatever was
+            # there for this name before adding the current entry — otherwise
+            # a stale, no-longer-valid hash lingers alongside the live one.
+            for key in [k for k in merged_oauth if k.split("|", 1)[0] == server_name]:
+                del merged_oauth[key]
+            merged_oauth.update(parsed)
+
+        if merged_oauth:
+            doc["mcpOAuth"] = merged_oauth
+        else:
+            doc.pop("mcpOAuth", None)
+
+        return json.dumps(doc)
+
     def compose_project_layers(
         self,
         profile: Any,

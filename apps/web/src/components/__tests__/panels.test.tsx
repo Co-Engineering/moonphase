@@ -199,6 +199,26 @@ describe('McpEditor', () => {
     const written = String(onChange.mock.calls[0][0])
     expect(JSON.parse(written).mcpServers.filesystem.command).toBe('npx')
   })
+
+  it('offers Connect for a named HTTP server, but not a stdio one, and only when wired up', () => {
+    const value = JSON.stringify({
+      mcpServers: {
+        remote: { type: 'http', url: 'https://example.com/mcp' },
+        local: { command: 'npx', args: ['x'] },
+      },
+    })
+
+    const { rerender } = render(<McpEditor value={value} onChange={vi.fn()} />)
+    expect(screen.queryByText('Connect')).toBeNull()
+
+    const onConnect = vi.fn()
+    rerender(<McpEditor value={value} onChange={vi.fn()} onConnect={onConnect} />)
+    const connectButtons = screen.getAllByText('Connect')
+    expect(connectButtons).toHaveLength(1)
+
+    fireEvent.click(connectButtons[0])
+    expect(onConnect).toHaveBeenCalledWith('remote')
+  })
 })
 
 describe('SkillsEditor', () => {
