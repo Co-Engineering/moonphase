@@ -8,6 +8,7 @@ const EMPTY: ClaudeConfigValue = {
   claude_md: null,
   mcp_json: null,
   skills: {},
+  env_vars: {},
 }
 
 /**

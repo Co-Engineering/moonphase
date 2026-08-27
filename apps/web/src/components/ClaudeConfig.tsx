@@ -759,26 +759,35 @@ export interface ClaudeConfigValue {
   claude_md: string | null
   mcp_json: string | null
   skills: Record<string, string>
+  env_vars: Record<string, string>
 }
 
-type ClaudeConfigSection = 'settings' | 'mcp' | 'md' | 'skills'
+type ClaudeConfigSection = 'settings' | 'mcp' | 'md' | 'skills' | 'env'
 
 /**
- * The four Claude Code editors as one unit — permissions, MCP servers,
- * CLAUDE.md and skills — parameterised by what "applies to" means, since the
- * same four fields exist at the org, project and session scope and only that
- * sentence changes between them.
+ * The Claude Code editors as one unit — permissions, MCP servers, CLAUDE.md,
+ * skills and environment variables — parameterised by what "applies to"
+ * means, since the same fields exist at the org, project and session scope
+ * and only that sentence changes between them.
  */
 export function ClaudeConfigFields({
   value,
   onChange,
   claudeMdHint,
   onConnectMcp,
+  showEnvVars = true,
 }: {
   value: ClaudeConfigValue
   onChange: (next: ClaudeConfigValue) => void
   claudeMdHint: string
   onConnectMcp?: (serverName: string) => void
+  /**
+   * The org scope already has a dedicated environment-variables editor
+   * (Settings → Workspace) predating this tab; showing a second one here
+   * too would just be two places editing the same thing, so the org caller
+   * turns this off rather than the tab meaning something different there.
+   */
+  showEnvVars?: boolean
 }) {
   const [section, setSection] = useState<ClaudeConfigSection>('settings')
 
@@ -787,6 +796,7 @@ export function ClaudeConfigFields({
     ['mcp', 'MCP servers'],
     ['md', 'CLAUDE.md'],
     ['skills', 'Skills'],
+    ...(showEnvVars ? ([['env', 'Environment variables']] as [ClaudeConfigSection, string][]) : []),
   ]
 
   return (
@@ -838,6 +848,16 @@ export function ClaudeConfigFields({
           value={value.skills}
           onChange={(next) => onChange({ ...value, skills: next })}
         />
+      )}
+      {section === 'env' && (
+        <div className="config-editor">
+          <PairEditor
+            label="Environment variables"
+            hint="Written into every session's environment at this scope. Values are stored as plain text, the same as the other settings on this screen — not a secrets vault."
+            pairs={value.env_vars}
+            onChange={(next) => onChange({ ...value, env_vars: next })}
+          />
+        </div>
       )}
     </>
   )

@@ -117,14 +117,18 @@ something that does not exist.
 
 And a container that came back with nothing running in it is a state of its own
 — genuinely running, genuinely empty — worth naming rather than reporting as
-either half. Sessions in that state offer **Resume**, which starts the harness
-with `--continue` so it reopens the conversation it was having instead of a
-blank prompt in the right directory. Restarting without that would be
-technically a recovery and practically a loss.
+either half. The monitor resumes each session in it itself, the same
+`--continue` a person clicking **Resume** would ask for, so it reopens the
+conversation it was having instead of a blank prompt in the right directory.
+Restarting without that would be technically a recovery and practically a
+loss — and one nobody should have to walk into every session to fix by hand.
 
 Resuming is asked of the harness rather than assumed: `launch_spec(resume=...)`
 is part of the seam, and an agent that cannot resume ignores it and starts
-normally.
+normally. It is also best-effort per session, not all-or-nothing: one
+person's revoked credential or deleted project does not stop their
+neighbours' sessions in the same container from coming back, and whatever
+could not be resumed automatically still offers **Resume** as before.
 
 ## Notifications are the product working while you are gone
 

@@ -501,9 +501,11 @@ class WorkspaceProfileOut(BaseModel):
 
 # --- project / session Claude config ----------------------------------------
 #
-# Same four fields as the workspace profile, scoped to one project or one
-# session instead of the whole org — see moonphase/harness/claude_code.py's
-# `compose_project_layers` for how the three scopes combine.
+# Same fields as the workspace profile, scoped to one project or one session
+# instead of the whole org — see moonphase/harness/claude_code.py's
+# `compose_project_layers` for how the Claude-specific ones combine, and
+# `runtime.load_session_profile` for env_vars, which is harness-agnostic and
+# combines the same way (most specific scope wins a key) regardless.
 
 
 class ClaudeConfigIn(BaseModel):
@@ -511,6 +513,7 @@ class ClaudeConfigIn(BaseModel):
     claude_md: str | None = None
     mcp_json: str | None = None
     skills: dict[str, str] = Field(default_factory=dict)
+    env_vars: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("claude_settings_json", "mcp_json")
     @classmethod
@@ -528,6 +531,7 @@ class ClaudeConfigOut(BaseModel):
     claude_md: str | None
     mcp_json: str | None
     skills: dict[str, str] = Field(default_factory=dict)
+    env_vars: dict[str, str] = Field(default_factory=dict)
 
 
 # --- harness sign-in --------------------------------------------------------

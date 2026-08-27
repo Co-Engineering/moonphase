@@ -75,6 +75,34 @@ async def personal_org_id(conn: AsyncConnection) -> UUID | None:
     return row[0] if row else None
 
 
+async def personal_org_id_for_user_privileged(
+    conn: AsyncConnection, user_id: str
+) -> UUID | None:
+    """Same as `personal_org_id`, for a caller with no JWT of its own.
+
+    The monitor resuming someone else's session after a reboot is the one
+    caller of this: it knows a session's owner from the row it is
+    reconciling, not from a claim on its own connection, so it has to name
+    the user explicitly rather than lean on `auth.uid()`. Requires a
+    privileged connection for exactly that reason.
+    """
+    result = await conn.execute(
+        text(
+            """
+            select o.id
+            from organizations o
+            join org_members m on m.org_id = o.id and m.user_id = cast(:user_id as uuid)
+            where o.is_personal
+            order by o.created_at
+            limit 1
+            """
+        ),
+        {"user_id": user_id},
+    )
+    row = result.first()
+    return row[0] if row else None
+
+
 async def resolve_org(conn: AsyncConnection, org_id: UUID | None) -> UUID:
     """Pick the org for a write, defaulting to the caller's personal org."""
     if org_id is not None:
@@ -1020,13 +1048,14 @@ async def upsert_profile(
 # ---------------------------------------------------------------------------
 # Claude config, scoped to a project or a single session
 #
-# Same four fields as workspace_profiles (claude_settings_json, claude_md,
-# mcp_json, skills_json), one layer down. RLS on the underlying table is what
-# actually enforces who may write these — a project needs admin/write access,
-# a session additionally needs to be yours — so these functions are thin.
+# Same fields as workspace_profiles (claude_settings_json, claude_md,
+# mcp_json, skills_json, env_vars), one layer down. RLS on the underlying
+# table is what actually enforces who may write these — a project needs
+# admin/write access, a session additionally needs to be yours — so these
+# functions are thin.
 # ---------------------------------------------------------------------------
 
-CLAUDE_CONFIG_COLUMNS = "claude_settings_json, claude_md, mcp_json, skills_json"
+CLAUDE_CONFIG_COLUMNS = "claude_settings_json, claude_md, mcp_json, skills_json, env_vars"
 
 
 async def get_project_config(
@@ -1048,6 +1077,7 @@ async def update_project_config(
     claude_md: str | None,
     mcp_json: str | None,
     skills: dict[str, str],
+    env_vars: dict[str, str],
 ) -> dict[str, Any]:
     result = await conn.execute(
         text(
@@ -1056,7 +1086,8 @@ async def update_project_config(
               claude_settings_json = :settings,
               claude_md            = :claude_md,
               mcp_json             = :mcp,
-              skills_json           = cast(:skills as jsonb)
+              skills_json           = cast(:skills as jsonb),
+              env_vars              = cast(:env as jsonb)
             where id = :id
             returning {CLAUDE_CONFIG_COLUMNS}
             """
@@ -1067,6 +1098,7 @@ async def update_project_config(
             "claude_md": claude_md,
             "mcp": mcp_json,
             "skills": json.dumps(skills),
+            "env": json.dumps(env_vars),
         },
     )
     row = result.first()
@@ -1098,6 +1130,7 @@ async def update_session_config(
     claude_md: str | None,
     mcp_json: str | None,
     skills: dict[str, str],
+    env_vars: dict[str, str],
 ) -> dict[str, Any]:
     result = await conn.execute(
         text(
@@ -1106,7 +1139,8 @@ async def update_session_config(
               claude_settings_json = :settings,
               claude_md            = :claude_md,
               mcp_json             = :mcp,
-              skills_json           = cast(:skills as jsonb)
+              skills_json           = cast(:skills as jsonb),
+              env_vars              = cast(:env as jsonb)
             where project_id = :pid and tmux_session = :ts
             returning {CLAUDE_CONFIG_COLUMNS}
             """
@@ -1118,6 +1152,7 @@ async def update_session_config(
             "claude_md": claude_md,
             "mcp": mcp_json,
             "skills": json.dumps(skills),
+            "env": json.dumps(env_vars),
         },
     )
     row = result.first()

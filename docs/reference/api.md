@@ -65,7 +65,7 @@ own configuration at runtime rather than having it baked into the bundle.
 | `GET` | `/api/projects/{project_id}/logs` | Container logs |
 | `GET`, `POST` | `/api/projects/{project_id}/shares` | List, grant |
 | `PATCH`, `DELETE` | `/api/projects/{project_id}/shares/{share_id}` | Change role, revoke |
-| `GET`, `PUT` | `/api/projects/{project_id}/config` | Claude settings, MCP, CLAUDE.md, skills — applies to every session in this project |
+| `GET`, `PUT` | `/api/projects/{project_id}/config` | Claude settings, MCP, CLAUDE.md, skills, env vars — applies to every session in this project |
 
 ## Sessions
 

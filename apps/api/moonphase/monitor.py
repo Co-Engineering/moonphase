@@ -21,11 +21,12 @@ from typing import Any
 
 from sqlalchemy import text
 
-from . import activity, docker_remote, push, queries, sessions, ssh, usage
+from . import activity, docker_remote, push, queries, runtime, sessions, ssh, usage
 from . import harness as harness_registry
 from .activity import ActivityState
 from .config import get_settings
 from .db import service_session
+from .harness import SessionSpace
 from .ssh import SSHError
 
 log = logging.getLogger(__name__)
@@ -174,18 +175,29 @@ class SessionMonitor:
 
         # A host reboot brings the container back — that is what the restart
         # policy is for — but everything inside it started fresh, so the agents
-        # are gone. The project is genuinely running and every session in it is
-        # not, which is worth recording as exactly that rather than as either
-        # one alone.
+        # are gone. Bring each session back with `--continue` the same way the
+        # "Resume" button would, so a reboot is invisible rather than an errand
+        # to run once per session.
         if not panes and group:
-            await self._reconcile_project(
-                group[0],
-                status="running",
-                detail=(
+            resumed, failed = await self._auto_resume(conn_ssh, container, group)
+            if resumed:
+                # What got resumed is now actually running; re-read rather than
+                # let the per-session loop below judge against the pre-resume
+                # (empty) snapshot and settle everything as stopped.
+                panes = await sessions.capture_all_panes(conn_ssh, container)
+            if failed and resumed:
+                detail = (
+                    f"The container restarted; {resumed} of {resumed + failed} "
+                    "sessions resumed automatically. The rest need a manual Resume."
+                )
+            elif failed:
+                detail = (
                     "The container restarted, so the agents in it are not running. "
                     "Resume a session to pick it back up."
-                ),
-            )
+                )
+            else:
+                detail = None
+            await self._reconcile_project(group[0], status="running", detail=detail)
         elif group:
             await self._reconcile_project(group[0], status="running", detail=None)
 
@@ -218,6 +230,64 @@ class SessionMonitor:
             await self._settle(row, snapshot)
 
         return len(group)
+
+    async def _auto_resume(
+        self, conn_ssh: Any, container: str, group: list[dict[str, Any]]
+    ) -> tuple[int, int]:
+        """Bring every session in a freshly-rebooted container back on its own.
+
+        Best effort, one session at a time: one person's revoked credential or
+        deleted project must not stop their neighbours' sessions in the same
+        container from resuming, so a failure is counted and logged rather
+        than raised. Returns (resumed, failed).
+        """
+        resumed = 0
+        failed = 0
+        for row in group:
+            user_id = row.get("user_id")
+            session_name = str(row["tmux_session"])
+            if user_id is None:
+                # A session from before sessions had owners has no account to
+                # resume on — left for a person to do by hand, as always.
+                failed += 1
+                continue
+            try:
+                async with service_session() as conn:
+                    org_id = await queries.personal_org_id_for_user_privileged(
+                        conn, str(user_id)
+                    )
+                    project = await queries.get_project(conn, row["id"])
+                if org_id is None:
+                    raise SSHError("the session's owner has no personal organization")
+                if project is None:
+                    raise SSHError("the project no longer exists")
+
+                profile = await runtime.load_session_profile_privileged(
+                    org_id, project, str(row["harness"]), session_name
+                )
+                if not profile.has_harness_auth:
+                    raise SSHError("no harness credential to resume with")
+
+                space = SessionSpace(
+                    home=str(row["home_dir"]), workdir=str(row["workdir"])
+                )
+                await sessions.ensure_session(
+                    conn_ssh,
+                    container,
+                    harness_kind=str(row["harness"]),
+                    workspace_profile=profile,
+                    session=session_name,
+                    space=space,
+                    resume=True,
+                )
+                resumed += 1
+            except Exception as exc:  # noqa: BLE001 — one session must not sink the rest
+                log.info(
+                    "monitor: could not auto-resume %s in %s: %s",
+                    session_name, container, exc,
+                )
+                failed += 1
+        return resumed, failed
 
     async def _collect_usage(
         self, conn_ssh: Any, container: str, group: list[dict[str, Any]]
@@ -471,6 +541,7 @@ async def _running_projects(conn: Any) -> list[dict[str, Any]]:
             select p.id, p.org_id, p.name, p.server_id, p.harness, p.container_name,
                    p.status::text as project_status, p.status_detail,
                    s.id as session_id, s.tmux_session, s.user_id,
+                   s.home_dir, s.workdir,
                    s.transcript_path, s.usage_cursors,
                    s.activity, s.pane_digest, s.notified_state
             from projects p
