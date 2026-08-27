@@ -43,6 +43,12 @@ AUTH_TIMEOUT_SECONDS = 5.0
 # deserves a different sentence.
 REQUIRED_TABLES = ("organizations", "servers", "projects", "project_sessions")
 
+# `supabase start` prints this exact string on every machine it has ever run
+# on — it ships inside the Supabase CLI itself, not generated per-project. A
+# deployment still using it lets anyone who has ever read the CLI's source
+# forge a JWT this API will accept as a valid session for any user.
+KNOWN_DEFAULT_JWT_SECRET = "super-secret-jwt-token-with-at-least-32-characters-long"
+
 
 @dataclass
 class Finding:
@@ -164,6 +170,15 @@ async def check_auth() -> Finding | None:
             fatal=True,
             summary="SUPABASE_URL is not set, so no one can sign in.",
             fix="Point it at the address your browser uses to reach this install.",
+        )
+
+    if settings.supabase_jwt_secret == KNOWN_DEFAULT_JWT_SECRET:
+        return Finding(
+            fatal=True,
+            summary="SUPABASE_JWT_SECRET is still the local-dev default `supabase "
+            "start` prints on every machine.",
+            fix="Anyone who knows this well-known string can forge a valid session "
+            "token for any user. Generate a real one: `openssl rand -hex 32`.",
         )
 
     if settings.supabase_jwt_secret:
