@@ -202,6 +202,22 @@ def ticket_scope(project_id: UUID | None) -> str:
     return f"ws:{project_id}"
 
 
+def _origin_allowed(websocket: WebSocket) -> bool:
+    """Whether the page that opened this WebSocket is one of ours.
+
+    Only a browser ever sends `Origin` on a WebSocket handshake — it is the
+    thing enforcing same-origin policy in the first place — so its absence
+    means a non-browser client, like the desktop app's preview relay, which
+    was never a participant in that model and has no origin to compare. A
+    browser that does send one, sending something other than a page this
+    deployment actually serves, is the CSRF-shaped case this exists to catch.
+    """
+    origin = websocket.headers.get("origin")
+    if not origin:
+        return True
+    return origin in get_settings().cors_origins
+
+
 async def websocket_principal(
     websocket: WebSocket,
     project_id: UUID | None = None,
@@ -217,6 +233,11 @@ async def websocket_principal(
     authenticated HTTP request — is preferred. `token` remains as a fallback
     for a client that has not switched over.
     """
+    if not _origin_allowed(websocket):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Origin not allowed."
+        )
+
     if ticket:
         claims = tickets.redeem(ticket, scope=ticket_scope(project_id))
         if claims is None:
