@@ -104,10 +104,17 @@ async def state() -> SetupStateOut:
     screen or a sign-in form, and before the first account exists there is
     nobody who could authenticate. It discloses only that — not the address,
     not anything configured.
+
+    Driven by `setup_completed_at`, not `auth.users` count. Count is not
+    sticky: complete() already guards against re-claiming an instance once
+    it has an administrator, but that guard means nothing if this screen —
+    which needs no authentication at all — reopens itself the moment
+    `auth.users` is ever empty for any other reason. `setup_completed_at` is
+    set once and never cleared, so a completed instance stays completed.
     """
     found = await _state()
     return SetupStateOut(
-        needs_setup=found["users"] == 0,
+        needs_setup=found["completed_at"] is None,
         signup_open=found["signup_open"],
     )
 

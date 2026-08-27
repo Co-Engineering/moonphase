@@ -53,7 +53,13 @@ services:
       GOTRUE_DB_DRIVER: postgres
       GOTRUE_DB_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-postgres}?search_path=auth&sslmode=disable
       GOTRUE_SITE_URL: ${MOONPHASE_PUBLIC_URL:-http://localhost:8471}
-      GOTRUE_URI_ALLOW_LIST: ${MOONPHASE_PUBLIC_URL:-*}
+      # `*` would accept a redirect to anywhere until the "Ways to sign in"
+      # screen is saved once and the API rewrites this to the real address —
+      # a wide-open window for account takeover via a crafted redirect_to on
+      # a magic-link or OAuth callback. Same fallback as GOTRUE_SITE_URL
+      # above, so an install that never sets MOONPHASE_PUBLIC_URL is at least
+      # scoped to itself rather than to everywhere.
+      GOTRUE_URI_ALLOW_LIST: ${MOONPHASE_PUBLIC_URL:-http://localhost:8471}/**
       # HS256 with a shared secret. The API accepts both this and asymmetric
       # tokens over JWKS; the shared secret keeps the stack to two services.
       GOTRUE_JWT_SECRET: ${SUPABASE_JWT_SECRET:?set SUPABASE_JWT_SECRET in .env}
