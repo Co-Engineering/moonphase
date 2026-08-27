@@ -27,7 +27,7 @@ create table private.mcp_oauth_credentials (
   -- credentials.json, round-tripped exactly as captured — and encrypted, like
   -- every other credential this system stores. A live OAuth token in a table
   -- is a live OAuth token in every backup and every dump of it.
-  credential_json_enc text not null,
+  credential_json_enc bytea not null,
   created_by      uuid references auth.users (id) on delete set null,
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now(),
