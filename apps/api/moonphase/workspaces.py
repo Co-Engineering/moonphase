@@ -73,6 +73,17 @@ def branch_for(session: str) -> str:
     return f"{BRANCH_PREFIX}{session}"
 
 
+def wrap_for_login_shell(script: str) -> str:
+    """`script`, made safe to run under `bash -lc`.
+
+    Run in a subshell whose status is handed back with errexit switched off,
+    so nothing the logout script does can become the answer. Failures and
+    their output pass through untouched — the point is only that a success
+    stays a success.
+    """
+    return f"(\n{script}\n)\nrc=$?\nset +e\nexit $rc\n"
+
+
 async def _run(
     conn: asyncssh.SSHClientConnection,
     container: str,
@@ -80,8 +91,24 @@ async def _run(
     *,
     timeout: int = 120,
 ) -> ssh.CommandResult:
+    # A login shell, because the harness's toolchain is on the PATH the
+    # profile sets — and a login shell runs ~/.bash_logout on the way out.
+    # Debian's copies it into every home and it calls `clear_console`, which
+    # fails when there is no console, which a `docker exec` without a TTY has
+    # none of. With `set -e` still in force that failure became the shell's
+    # exit status: a script that ran perfectly reported exit 1 with nothing on
+    # either stream.
+    #
+    #   bash -lc 'set -e; exit 0'   -> 1
+    #   bash -lc 'set -e; true'     -> 0
+    #
+    # It only bit a script that exits explicitly, so `ensure_worktree` failed
+    # on precisely the path where it had nothing to do — the worktree already
+    # existed — and "Restart harness" failed for every session that had been
+    # started once before.
+    #
     return await docker_remote.exec_capture(
-        conn, container, ["bash", "-lc", script], timeout=timeout
+        conn, container, ["bash", "-lc", wrap_for_login_shell(script)], timeout=timeout
     )
 
 
