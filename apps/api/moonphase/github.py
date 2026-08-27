@@ -73,6 +73,9 @@ class DeviceSession:
     id: str
     org_id: str
     flow: DeviceFlow
+    # Who started it. Checked before anyone may poll or complete this session —
+    # see profile.py's poll_github_device.
+    user_id: str | None = None
     state: str = "awaiting_authorization"  # awaiting_authorization | complete | error
     detail: str | None = None
     identity: GitHubIdentity | None = None

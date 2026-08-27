@@ -28,6 +28,22 @@ from ..ssh import SSHError
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["mcp-oauth"])
 
 
+def _get_mcp_session(
+    login_session_id: str, principal: Principal
+) -> mcp_login.McpLoginSession:
+    """`mcp_login.get`, refused for anyone but the account that started it.
+
+    The session id is a random token, but it is also the only thing gating a
+    flow that ends in a credential stored under `session.org_id` and
+    `created_by=session.user_id` — a mismatch here must read as "no such
+    session", not as a way to tell a wrong id apart from someone else's.
+    """
+    session = mcp_login.get(login_session_id)
+    if session is None or session.user_id != str(principal.user_id):
+        raise HTTPException(status_code=404, detail="No such connection attempt.")
+    return session
+
+
 def _out(session: mcp_login.McpLoginSession) -> McpOAuthOut:
     # The pane is only useful once something is worth showing — the same
     # judgement call routers/profile.py makes for the account flow.
@@ -130,9 +146,7 @@ async def poll_mcp_oauth(
     Persists the captured credential the moment it appears — an upsert, so a
     client that keeps polling after completion does not cause a second row.
     """
-    mcp_session = mcp_login.get(login_session_id)
-    if mcp_session is None:
-        raise HTTPException(status_code=404, detail="No such connection attempt.")
+    mcp_session = _get_mcp_session(login_session_id, principal)
 
     if mcp_session.state == "verifying":
         try:
@@ -170,9 +184,7 @@ async def paste_mcp_oauth(
     Types it and returns at once; the client polls for the result the same
     way it already does for the harness's own sign-in.
     """
-    mcp_session = mcp_login.get(login_session_id)
-    if mcp_session is None:
-        raise HTTPException(status_code=404, detail="No such connection attempt.")
+    mcp_session = _get_mcp_session(login_session_id, principal)
 
     try:
         ctx = await runtime.load_project_context(

@@ -161,13 +161,23 @@ async def _pick_login_server(
     return online[0]
 
 
-def _get_login_session(session_id: str) -> login.LoginSession:
+def _get_login_session(session_id: str, principal: Principal) -> login.LoginSession:
     """`login.get`, translated into the 404 a caller should see.
 
     A restart (including the one docker-compose.update.yml exists to
     support) silently drops every sign-in in flight; without this, the user
     just sees a generic "no such sign-in" with no hint that it was not their
     mistake.
+
+    `session_id` is a 128-bit random token, not itself a secret this checks
+    against — but it is also the *only* thing gating a session that ends in
+    `_store_login_credential` writing to `session.org_id`, whatever that is.
+    Someone else's id reaching here at all (a logged URL, a shared screen, a
+    monitoring tool that captures request paths) should not be able to
+    advance, corrupt, or complete another account's sign-in — so ownership is
+    checked before a caller ever gets far enough to touch the session's state.
+    A mismatch reads as "no such sign-in", the same as a wrong id, so this
+    cannot be used to tell the two apart.
     """
     try:
         session = login.get(session_id)
@@ -176,8 +186,23 @@ def _get_login_session(session_id: str) -> login.LoginSession:
             status_code=404,
             detail="Sign-in session lost, likely due to a server restart — please try again.",
         ) from exc
-    if session is None:
+    if session is None or session.user_id != str(principal.user_id):
         raise HTTPException(status_code=404, detail="No such sign-in.")
+    return session
+
+
+def _get_github_session(session_id: str, principal: Principal) -> github.DeviceSession:
+    """`github.get_session`, refused for anyone but the account that started it.
+
+    Same reasoning as `_get_login_session`: this ends in a credential written
+    to `session.org_id` on the caller's say-so, so someone else's session id
+    reaching here must not be pollable, advanceable, or completable by an
+    account that did not start it. A mismatch reads as "no such sign-in",
+    the same as a wrong id.
+    """
+    session = github.get_session(session_id)
+    if session is None or session.user_id != str(principal.user_id):
+        raise HTTPException(status_code=404, detail="No such GitHub sign-in.")
     return session
 
 
@@ -267,7 +292,7 @@ async def poll_harness_login(
     made here rather than in a long-lived request. Each poll does one bounded
     check and returns.
     """
-    session = _get_login_session(session_id)
+    session = _get_login_session(session_id, principal)
 
     if session.state == "verifying":
         harness = get_harness(session.harness_kind)
@@ -292,7 +317,7 @@ async def submit_harness_code(
     payload: HarnessLoginCode, principal: Principal = Depends(current_principal)
 ) -> HarnessLoginOut:
     """Hand the pasted code to the waiting flow, then store what it produced."""
-    session = _get_login_session(payload.session_id)
+    session = _get_login_session(payload.session_id, principal)
 
     try:
         target = await runtime.load_server_target(
@@ -366,7 +391,10 @@ async def start_github_device(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     session = github.DeviceSession(
-        id=secrets.token_urlsafe(16), org_id=str(org_id), flow=flow
+        id=secrets.token_urlsafe(16),
+        org_id=str(org_id),
+        flow=flow,
+        user_id=str(principal.user_id),
     )
     github.put_session(session)
 
@@ -385,9 +413,7 @@ async def poll_github_device(
 ) -> GitHubDeviceOut:
     """Check whether the user has approved yet, and store the token if so."""
     settings = get_settings()
-    session = github.get_session(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="No such GitHub sign-in.")
+    session = _get_github_session(session_id, principal)
 
     if session.state == "complete":
         return GitHubDeviceOut(
