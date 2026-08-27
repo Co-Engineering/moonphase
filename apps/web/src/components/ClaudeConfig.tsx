@@ -413,7 +413,12 @@ export function serversInto(doc: Doc, servers: McpServer[]): Doc {
 }
 
 /** Servers common enough that typing the command from memory is a waste. */
-const TEMPLATES: { label: string; server: Omit<McpServer, 'name'> & { name: string } }[] = [
+const TEMPLATES: {
+  label: string
+  /** What the container must already have, when a template needs anything. */
+  needs?: string
+  server: Omit<McpServer, 'name'> & { name: string }
+}[] = [
   {
     label: 'Filesystem',
     server: {
@@ -440,11 +445,19 @@ const TEMPLATES: { label: string; server: Omit<McpServer, 'name'> & { name: stri
   },
   {
     label: 'Browser',
+    // Needs a browser in the container, which only one environment installs.
+    needs: 'the "Debian 12 + browser tools" environment — no other one has a browser to drive',
     server: {
       name: 'browser',
       transport: 'stdio',
       command: 'npx',
-      args: '-y @playwright/mcp@latest --headless --isolated',
+      // `--browser chromium` is not optional. Without it the server uses its
+      // own default, which is the *chrome channel* — a system Google Chrome
+      // at /opt/google/chrome/chrome, which nothing here installs. It
+      // connects happily and then fails on first use with "Chromium isn't
+      // installed at the expected path", which reads like a broken
+      // environment rather than a wrong flag.
+      args: '-y @playwright/mcp@latest --browser chromium --headless --isolated',
       url: '',
       // Matches where the "Browser tools" built-in environment installs
       // Chromium (see environments.py) — headless needs no DISPLAY, but it
@@ -605,12 +618,24 @@ export function McpEditor({ value, onChange }: SettingsProps) {
           <button
             key={template.label}
             className="ghost small"
+            // Said on the button rather than after the fact: a server that
+            // needs something this project does not have connects perfectly
+            // and fails on first use, which reads as a broken environment
+            // rather than the wrong choice here.
+            title={template.needs ? `Needs ${template.needs}` : undefined}
             onClick={() => update([...servers, { ...template.server }])}
           >
             + {template.label}
           </button>
         ))}
       </div>
+      {servers.some((server) => server.name === 'browser') && (
+        <p className="hint">
+          The browser server needs a browser to drive, and only the{' '}
+          <strong>Debian 12 + browser tools</strong> environment installs one.
+          On any other environment it will connect and then fail to launch.
+        </p>
+      )}
 
       <UnknownKeys doc={doc} known={['mcpServers']} />
     </div>
