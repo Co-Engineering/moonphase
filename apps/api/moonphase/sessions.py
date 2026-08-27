@@ -388,11 +388,7 @@ async def ensure_session(
     result = await docker_remote.exec_capture(
         conn, container, args, workdir=space.workdir, timeout=60
     )
-    if not result.ok:
-        raise SSHError(
-            f"Could not start tmux session {session!r}: "
-            f"{(result.stderr or result.stdout).strip()[:400]}"
-        )
+    result.check(f"Starting tmux session {session!r}")
 
     # Keep scrollback deep enough that reattaching after hours still shows
     # context, and let tmux clean up only when we say so.

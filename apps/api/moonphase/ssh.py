@@ -62,6 +62,17 @@ class CommandResult:
     def check(self, what: str) -> CommandResult:
         if not self.ok:
             detail = (self.stderr or self.stdout).strip()
+            if not detail:
+                # -1 is what `run()` reports when asyncssh saw no exit status at
+                # all — the process was killed by a signal rather than exiting,
+                # which is what an OOM kill looks like. Worth saying, since
+                # "failed: " with nothing after it is a dead end to debug from.
+                detail = (
+                    "(no output; the process was killed rather than exiting — "
+                    "possibly out of memory)"
+                    if self.exit_status == -1
+                    else "(no output)"
+                )
             raise SSHError(f"{what} failed (exit {self.exit_status}): {detail[:600]}")
         return self
 
