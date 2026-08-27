@@ -1,6 +1,6 @@
 [project]
 name = "moonphase-api"
-version = "0.8.1"
+version = "0.8.2"
 description = "Moonphase backend — SSH, Docker orchestration and PTY bridging"
 requires-python = ">=3.11"
 dependencies = [
