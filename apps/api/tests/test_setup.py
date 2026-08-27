@@ -148,6 +148,49 @@ def test_the_first_account_is_possible_even_with_signup_closed() -> None:
     assert "signup_open" in source
 
 
+async def test_needs_setup_survives_auth_users_emptying_out(monkeypatch) -> None:
+    """`auth.users` is not sticky: it can read zero for reasons that have
+    nothing to do with whether this instance was ever set up (an account
+    later removed, a direct DB change). `complete()` already refuses to
+    re-claim an instance that has an administrator, but that guard means
+    nothing if this unauthenticated screen reopens itself whenever the count
+    happens to be zero. setup_completed_at is set once and never cleared, so
+    it has to be what decides — not the count."""
+    from moonphase.routers import setup as setup_router
+
+    async def completed_but_userless() -> dict:
+        return {
+            "users": 0,
+            "public_url": "https://moonphase.example.com",
+            "signup_open": False,
+            "completed_at": "2026-01-01T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr(setup_router, "_state", completed_but_userless)
+
+    result = await setup_router.state()
+
+    assert result.needs_setup is False
+
+
+async def test_needs_setup_is_true_before_setup_has_ever_completed(monkeypatch) -> None:
+    from moonphase.routers import setup as setup_router
+
+    async def fresh_install() -> dict:
+        return {
+            "users": 0,
+            "public_url": None,
+            "signup_open": True,
+            "completed_at": None,
+        }
+
+    monkeypatch.setattr(setup_router, "_state", fresh_install)
+
+    result = await setup_router.state()
+
+    assert result.needs_setup is True
+
+
 def test_an_ip_address_is_not_a_domain() -> None:
     """Google and Microsoft both refuse to redirect to one, so a provider
     configured against an IP cannot work however complete its credentials."""
@@ -617,6 +660,27 @@ def test_the_auth_volume_is_writable_by_the_user_that_writes_it() -> None:
     assert dockerfile.index("chown moonphase:moonphase") < dockerfile.index(
         "USER moonphase"
     )
+
+
+def test_gotrue_uri_allow_list_does_not_default_to_everywhere() -> None:
+    """Until the "ways to sign in" screen is saved once, the API's own
+    dynamic rewrite of this value (authconfig.render) has never run, and
+    GoTrue boots with whatever docker-compose.yml gave it directly — `*`
+    there means every redirect_to on a magic-link or OAuth callback is
+    accepted, on a fresh install, before anyone has configured anything.
+    """
+    import yaml
+
+    compose = yaml.safe_load(
+        (Path(__file__).resolve().parents[3] / "docker-compose.yml").read_text()
+    )
+
+    allow_list = compose["services"]["auth"]["environment"]["GOTRUE_URI_ALLOW_LIST"]
+    assert allow_list.strip() != "*"
+    assert not allow_list.strip().endswith(":-*}")
+    # Scoped to the same fallback address the rest of the stack already uses
+    # when MOONPHASE_PUBLIC_URL is unset, not to everywhere.
+    assert "MOONPHASE_PUBLIC_URL" in allow_list
 
 
 def test_an_existing_install_has_its_volume_repaired() -> None:
