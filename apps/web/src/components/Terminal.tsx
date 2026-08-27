@@ -132,6 +132,16 @@ export function ProjectTerminal({
   const disposedRef = useRef(false)
 
   const [status, setStatus] = useState<Status>('connecting')
+  // Set briefly when a keystroke had nowhere to go — the socket wasn't open,
+  // for any reason short of the deliberate read-only refusal above. Without
+  // this, typing during a reconnect (the exact gap the heartbeat and backoff
+  // below exist to survive) just vanishes with no sign it never arrived.
+  const [inputDropped, setInputDropped] = useState(false)
+  // True for the stretch between a pasted image being detected and the
+  // staging message actually going out — a canvas re-encode plus an SSH
+  // write on the other end of the socket, easily the better part of a second
+  // for a large screenshot, with nothing on screen to say it's in progress.
+  const [pastingImage, setPastingImage] = useState(false)
 
   // Read through a ref inside the xterm callback: the terminal is rebuilt only
   // when the project or session changes, so a plain closure over the prop
@@ -235,10 +245,17 @@ export function ProjectTerminal({
 
     let reconnectTimer: number | undefined
     let heartbeatTimer: number | undefined
+    let dropTimer: number | undefined
     // Set when a ping has gone unanswered — the socket looks OPEN but the
     // peer has stopped responding, which is exactly the silent-drop case a
     // plain onclose/onerror listener misses.
     let awaitingPong = false
+
+    const flashDropped = () => {
+      setInputDropped(true)
+      window.clearTimeout(dropTimer)
+      dropTimer = window.setTimeout(() => setInputDropped(false), 900)
+    }
 
     const stopHeartbeat = () => {
       window.clearInterval(heartbeatTimer)
@@ -294,6 +311,12 @@ export function ProjectTerminal({
           if (message.type === 'error') {
             setStatus('error')
             term.writeln(`\r\n\x1b[31m[moonphase] ${message.message}\x1b[0m`)
+          }
+          // The paste itself worked and the connection is fine — only the
+          // image didn't land — so this says so without touching `status`,
+          // which would otherwise misreport a healthy connection as broken.
+          if (message.type === 'clipboard-image-error') {
+            term.writeln(`\r\n\x1b[33m[moonphase] ${message.message}\x1b[0m`)
           }
         } catch {
           term.write(event.data as string)
@@ -364,6 +387,8 @@ export function ProjectTerminal({
       const socket = socketRef.current
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(new TextEncoder().encode(data))
+      } else {
+        flashDropped()
       }
     })
 
@@ -386,6 +411,7 @@ export function ProjectTerminal({
         send: (bytes) => {
           const socket = socketRef.current
           if (socket?.readyState === WebSocket.OPEN) socket.send(bytes)
+          else flashDropped()
         },
       }),
     )
@@ -408,7 +434,49 @@ export function ProjectTerminal({
      * specifically and nothing else reaches it — `term.paste()` delivers
      * bracketed-paste text, which is a different thing even when the text
      * happens to be empty, so it was never going to ask the harness to look.
+     *
+     * Shared with drag-and-drop below: a file dropped onto the pane needs
+     * exactly the same staging trip, with no clipboard involved at all.
      */
+    const stageImage = (file: File, fallbackText: string) => {
+      if (socketRef.current?.readyState !== WebSocket.OPEN) {
+        // Nothing to encode toward — say so now rather than spending a
+        // moment re-encoding a screenshot only to find there was nowhere to
+        // send it.
+        flashDropped()
+        if (fallbackText) term.paste(fallbackText)
+        return
+      }
+
+      setPastingImage(true)
+      void (async () => {
+        let staged = false
+        try {
+          const base64 = await imageBlobToPngBase64(file)
+          const socket = socketRef.current
+          if (socket?.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'clipboard-image', data: base64 }))
+            staged = true
+          } else {
+            flashDropped()
+          }
+        } catch {
+          // Nothing sane to stage — the harness still gets whatever paste
+          // would otherwise have happened, below.
+        } finally {
+          const { pasteText, sendTrigger } = clipboardImagePasteFollowUp(staged, fallbackText)
+          if (pasteText) term.paste(pasteText)
+          if (sendTrigger) {
+            const socket = socketRef.current
+            if (socket?.readyState === WebSocket.OPEN) {
+              socket.send(new TextEncoder().encode(HARNESS_CLIPBOARD_PASTE_TRIGGER))
+            }
+          }
+          setPastingImage(false)
+        }
+      })()
+    }
+
     const onPaste = (event: ClipboardEvent) => {
       if (readOnlyRef.current) {
         event.preventDefault()
@@ -426,31 +494,31 @@ export function ProjectTerminal({
       event.stopImmediatePropagation()
       if (!file) return
 
-      void (async () => {
-        let staged = false
-        try {
-          const base64 = await imageBlobToPngBase64(file)
-          const socket = socketRef.current
-          if (socket?.readyState === WebSocket.OPEN) {
-            socket.send(JSON.stringify({ type: 'clipboard-image', data: base64 }))
-            staged = true
-          }
-        } catch {
-          // Nothing sane to stage — the harness still gets whatever paste
-          // would otherwise have happened, below.
-        } finally {
-          const { pasteText, sendTrigger } = clipboardImagePasteFollowUp(staged, fallbackText)
-          if (pasteText) term.paste(pasteText)
-          if (sendTrigger) {
-            const socket = socketRef.current
-            if (socket?.readyState === WebSocket.OPEN) {
-              socket.send(new TextEncoder().encode(HARNESS_CLIPBOARD_PASTE_TRIGGER))
-            }
-          }
-        }
-      })()
+      stageImage(file, fallbackText)
     }
     host.addEventListener('paste', onPaste, { capture: true })
+
+    // Dropping an image is the same destination as pasting one — the
+    // terminal itself has nothing to drop text or files onto, so any drop
+    // with an image in it is claimed here rather than left to the browser's
+    // default (which, over a bare div, is to navigate to the file).
+    const onDragOver = (event: DragEvent) => {
+      if (!readOnlyRef.current) event.preventDefault()
+    }
+    const onDrop = (event: DragEvent) => {
+      event.preventDefault()
+      if (readOnlyRef.current) {
+        refusedRef.current?.()
+        return
+      }
+      const file = Array.from(event.dataTransfer?.files ?? []).find((f) =>
+        f.type.startsWith('image/'),
+      )
+      if (!file) return
+      stageImage(file, '')
+    }
+    host.addEventListener('dragover', onDragOver)
+    host.addEventListener('drop', onDrop)
 
     // Fitting inside the observer callback resizes the element the observer
     // watches, which the browser reports as "loop completed with undelivered
@@ -467,12 +535,15 @@ export function ProjectTerminal({
     return () => {
       disposedRef.current = true
       window.clearTimeout(reconnectTimer)
+      window.clearTimeout(dropTimer)
       stopHeartbeat()
       window.removeEventListener('online', checkLiveness)
       document.removeEventListener('visibilitychange', onVisible)
       cancelAnimationFrame(fitFrame)
       observer.disconnect()
       host.removeEventListener('paste', onPaste, { capture: true })
+      host.removeEventListener('dragover', onDragOver)
+      host.removeEventListener('drop', onDrop)
       onData.dispose()
       onResize.dispose()
       clipboardHandler.dispose()
@@ -501,15 +572,19 @@ export function ProjectTerminal({
           read-only
         </div>
       )}
-      <div className={`terminal-status terminal-status--${status}`}>
+      <div
+        className={`terminal-status terminal-status--${status}${inputDropped ? ' input-dropped' : ''}`}
+      >
         <span className="dot" />
-        {status === 'attached'
-          ? 'attached'
-          : status === 'connecting'
-            ? 'attaching…'
-            : status === 'disconnected'
-              ? 'detached'
-              : 'error'}
+        {pastingImage
+          ? 'pasting image…'
+          : status === 'attached'
+            ? 'attached'
+            : status === 'connecting'
+              ? 'attaching…'
+              : status === 'disconnected'
+                ? 'detached'
+                : 'error'}
       </div>
       <div ref={hostRef} className="terminal-host" />
     </div>

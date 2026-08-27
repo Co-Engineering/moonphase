@@ -25,6 +25,14 @@ export function SessionWindow({ projectId, session }: Props) {
   const [view, setView] = useState<'terminal' | 'feed'>('terminal')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Set briefly when a keystroke is refused, so the explanation reacts to the
+  // attempt instead of sitting there having already been read and dismissed —
+  // same pattern as the main window's readonly-bar (App.tsx).
+  const [nudged, setNudged] = useState(false)
+  const nudge = useCallback(() => {
+    setNudged(true)
+    window.setTimeout(() => setNudged(false), 1200)
+  }, [])
 
   const project = useResource<Project>(() => api.project(projectId), [projectId], {
     pollMs: 15000,
@@ -119,14 +127,30 @@ export function SessionWindow({ projectId, session }: Props) {
         </div>
       ) : (
         <div className="content flush terminal-and-ports">
+          {watching && (
+            <div className={`readonly-bar${nudged ? ' nudged' : ''}`}>
+              <span className="readonly-chip">Read-only</span>
+              <span className="readonly-text">
+                This is <strong>{mine?.owner ?? 'someone else'}</strong>&rsquo;s session. It
+                runs on their Claude account, so only they can type into it — you can watch it
+                live.
+              </span>
+            </div>
+          )}
           {view === 'terminal' ? (
-            <ProjectTerminal projectId={projectId} session={session} readOnly={!drivable} />
+            <ProjectTerminal
+              projectId={projectId}
+              session={session}
+              readOnly={!drivable}
+              onRefusedInput={nudge}
+            />
           ) : (
             <Feed
               projectId={projectId}
               session={session}
               running={running}
               readOnly={!drivable}
+              onRefusedInput={nudge}
             />
           )}
         </div>
