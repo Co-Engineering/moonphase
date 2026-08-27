@@ -86,15 +86,24 @@ def fingerprint(key: asyncssh.SSHKey) -> str:
 class _PinnedHostKeyPolicy(asyncssh.SSHClient):
     """Captures the presented host key and enforces a pin when we have one."""
 
-    def __init__(self, expected_fp: str | None) -> None:
+    def __init__(self, expected_fp: str | None, *, require_pin: bool = False) -> None:
         self.expected_fp = expected_fp
+        # Whether trust-on-first-use is actually allowed. When it is not, a
+        # server with no pin yet has to be refused rather than silently
+        # trusting whatever answers — otherwise MOONPHASE_SSH_TRUST_ON_FIRST_USE
+        # names a setting nothing ever reads.
+        self.require_pin = require_pin
         self.observed_fp: str | None = None
         self.mismatch: str | None = None
+        self.refused_no_pin = False
 
     def validate_host_public_key(self, host: str, addr: str, port: int, key: Any) -> bool:
         del host, addr, port
         self.observed_fp = fingerprint(key)
         if self.expected_fp is None:
+            if self.require_pin:
+                self.refused_no_pin = True
+                return False
             return True
         if self.observed_fp != self.expected_fp:
             self.mismatch = (
@@ -292,7 +301,10 @@ async def connect(target: SSHTarget) -> tuple[asyncssh.SSHClientConnection, str]
     if not client_keys and not target.password:
         raise SSHError("No SSH credential available for this server.")
 
-    policy = _PinnedHostKeyPolicy(target.known_host_key_fp)
+    policy = _PinnedHostKeyPolicy(
+        target.known_host_key_fp,
+        require_pin=not settings.moonphase_ssh_trust_on_first_use,
+    )
 
     try:
         conn = await asyncio.wait_for(
@@ -330,6 +342,15 @@ async def connect(target: SSHTarget) -> tuple[asyncssh.SSHClientConnection, str]
                 f"Host key for {target.host} changed: {policy.mismatch}. "
                 "Moonphase refused to connect. If this was intentional, remove the "
                 "pinned fingerprint on the server before retrying."
+            ) from exc
+        if policy.refused_no_pin:
+            raise SSHError(
+                f"No host key is pinned for {target.host}, and "
+                "MOONPHASE_SSH_TRUST_ON_FIRST_USE is disabled, so Moonphase will "
+                f"not trust whatever answered on its own. The server presented "
+                f"{policy.observed_fp}; supply it as the expected fingerprint when "
+                "adding the server if that is correct, or re-enable trust-on-"
+                "first-use."
             ) from exc
         raise SSHError(f"Host key for {target.host} could not be verified.") from exc
     except (OSError, asyncssh.Error) as exc:
