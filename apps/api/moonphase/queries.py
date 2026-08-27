@@ -1402,12 +1402,12 @@ async def get_mcp_oauth_credentials_privileged(
     """Every connected MCP server for this org, as {server_name: credential_json}."""
     result = await conn.execute(
         text(
-            "select server_name, credential_json from private.mcp_oauth_credentials "
+            "select server_name, credential_json_enc from private.mcp_oauth_credentials "
             "where org_id = :org_id"
         ),
         {"org_id": org_id},
     )
-    return {str(row[0]): str(row[1]) for row in result}
+    return {str(row[0]): decrypt(row[1]) or "" for row in result}
 
 
 async def list_mcp_oauth_credentials_privileged(
@@ -1437,17 +1437,17 @@ async def upsert_mcp_oauth_credential_privileged(
         text(
             """
             insert into private.mcp_oauth_credentials
-              (org_id, server_name, credential_json, created_by)
+              (org_id, server_name, credential_json_enc, created_by)
             values (:org_id, :name, :cred, cast(:created_by as uuid))
             on conflict (org_id, server_name) do update set
-              credential_json = excluded.credential_json,
+              credential_json_enc = excluded.credential_json_enc,
               created_by      = excluded.created_by
             """
         ),
         {
             "org_id": org_id,
             "name": server_name,
-            "cred": credential_json,
+            "cred": encrypt(credential_json),
             "created_by": created_by,
         },
     )

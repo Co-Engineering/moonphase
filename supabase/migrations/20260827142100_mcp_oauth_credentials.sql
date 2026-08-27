@@ -23,9 +23,11 @@ create table private.mcp_oauth_credentials (
   id              uuid primary key default gen_random_uuid(),
   org_id          uuid not null references public.organizations (id) on delete cascade,
   server_name     text not null,
-  -- The raw {"<name>|<hash>": {...}} pair from Claude Code's own
-  -- credentials.json, round-tripped exactly as captured.
-  credential_json text not null,
+  -- The {"<name>|<hash>": {...}} pair from Claude Code's own
+  -- credentials.json, round-tripped exactly as captured — and encrypted, like
+  -- every other credential this system stores. A live OAuth token in a table
+  -- is a live OAuth token in every backup and every dump of it.
+  credential_json_enc text not null,
   created_by      uuid references auth.users (id) on delete set null,
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now(),
