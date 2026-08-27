@@ -78,6 +78,7 @@ export function Feed({
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const scrollerRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const messageRef = useRef<HTMLTextAreaElement | null>(null)
   // Only follow new output when the reader is already at the bottom; yanking
   // the view while someone is reading history is worse than a missed update.
   const pinnedRef = useRef(true)
@@ -268,6 +269,16 @@ export function Feed({
     pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
   }
 
+  // Grows with what's typed rather than scrolling internally at one line —
+  // resetting to 'auto' first is what lets it shrink back down again, since
+  // scrollHeight only ever reports a height at least as tall as the current one.
+  useEffect(() => {
+    const el = messageRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [message])
+
   const send = useCallback(
     async (text: string, withAttachments: Attachment[] = []) => {
       const paths = withAttachments.filter((a) => a.path).map((a) => a.path as string)
@@ -433,9 +444,25 @@ export function Feed({
           >
             +
           </button>
-          <input
+          <textarea
+            ref={messageRef}
+            className="feed-message"
+            rows={1}
             value={message}
             onChange={(e) => setMessage(e.target.value)}
+            onKeyDown={(e) => {
+              // Shift+Enter is left alone entirely — a plain textarea already
+              // inserts the newline on its own, nothing to intervene in here.
+              if (e.key !== 'Enter' || e.shiftKey) return
+              e.preventDefault()
+              if (readOnly) {
+                onRefusedInput?.()
+                return
+              }
+              if (!running || sending || attachments.some((a) => a.uploading)) return
+              if (!message.trim() && attachments.length === 0) return
+              void send(message, attachments)
+            }}
             onPaste={(e) => {
               if (readOnly) return
               const files = Array.from(e.clipboardData.files).filter((f) =>
