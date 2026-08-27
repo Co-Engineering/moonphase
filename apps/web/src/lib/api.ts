@@ -281,6 +281,13 @@ export type ClaudeConfigInput = ClaudeConfig
 
 export interface McpOAuthConnection {
   session_id: string
+  /**
+   * Which project's session the relay is actually running through. Connect
+   * offered from a project's or the org's own Configure dialog auto-picks
+   * one server-side, so this is not always known until the connection
+   * starts — read it back from here for every poll and paste call.
+   */
+  project_id: string
   state: 'starting' | 'awaiting_paste' | 'verifying' | 'complete' | 'error'
   url: string | null
   detail: string | null
@@ -574,6 +581,24 @@ export const api = {
       `/api/projects/${projectId}/sessions/${encodeURIComponent(session)}/mcp-oauth/start`,
       { method: 'POST', body: JSON.stringify({ server_name: serverName }) },
     ),
+  /**
+   * Same, offered from a project's own Configure dialog rather than one
+   * session's — there is a server to authenticate but no specific session in
+   * hand, so the backend picks any one of the caller's own running sessions
+   * in this project to carry the relay.
+   */
+  startMcpOAuthForProject: (projectId: string, serverName: string) =>
+    request<McpOAuthConnection>(`/api/projects/${projectId}/mcp-oauth/start`, {
+      method: 'POST',
+      body: JSON.stringify({ server_name: serverName }),
+    }),
+  /** Same again, offered from Settings — no project in hand at all, so this
+   * picks any one of the caller's own running sessions anywhere. */
+  startMcpOAuthForOrg: (serverName: string) =>
+    request<McpOAuthConnection>('/api/profile/mcp-oauth/start', {
+      method: 'POST',
+      body: JSON.stringify({ server_name: serverName }),
+    }),
   pollMcpOAuth: (projectId: string, sessionId: string) =>
     request<McpOAuthConnection>(`/api/projects/${projectId}/mcp-oauth/${sessionId}`),
   pasteMcpOAuth: (projectId: string, sessionId: string, redirectUrl: string) =>

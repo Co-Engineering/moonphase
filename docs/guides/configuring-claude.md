@@ -89,6 +89,22 @@ There are one-click templates for the common ones, because nobody should have to
     written. Anything secret belongs in **Settings → Workspace → Environment variables**,
     which is encrypted at rest.
 
+### Connecting a server that needs OAuth
+
+An HTTP or SSE server with no API key field to fill in usually authenticates with
+OAuth instead — Notion, Linear and similar connectors. Its own OAuth flow expects a
+browser on the same machine as the `claude` process, which is never true here, so a
+**Connect** button appears next to a named HTTP/SSE server and relays it instead: open
+the link it gives you, approve, then paste back wherever your browser lands (it will
+fail to load — that is expected, the address in the bar is what matters).
+
+Available at every scope — the org's own **Settings → Claude**, a project's or a
+session's own **Configure** — because the credential it produces is org-wide regardless
+of where you clicked Connect. A session's own dialog relays through that session
+directly; the org and project levels have no one session in hand, so they relay through
+any one of your own currently-running sessions instead, and ask you to start one first
+if you have none.
+
 ## Two things that make the forms safe
 
 **Unknown keys survive.** `hooks`, `statusLine`, a per-server `timeout` — anything the

@@ -3,6 +3,29 @@ import { api, type McpOAuthConnection } from '../lib/api'
 import { copyText } from '../lib/clipboard'
 
 /**
+ * Which running session carries the relay. The resulting credential is
+ * org-wide regardless of which one actually ran it, so "session" is the only
+ * scope that pins one down in advance — "project" and "org" hand that choice
+ * to the backend, which picks any one of the caller's own running sessions
+ * in reach and reports back which it used.
+ */
+export type McpConnectTarget =
+  | { scope: 'session'; projectId: string; session: string }
+  | { scope: 'project'; projectId: string }
+  | { scope: 'org' }
+
+function startFor(target: McpConnectTarget, serverName: string) {
+  switch (target.scope) {
+    case 'session':
+      return api.startMcpOAuth(target.projectId, target.session, serverName)
+    case 'project':
+      return api.startMcpOAuthForProject(target.projectId, serverName)
+    case 'org':
+      return api.startMcpOAuthForOrg(serverName)
+  }
+}
+
+/**
  * Relaying OAuth for one MCP server, inside a running session.
  *
  * Claude Code's own OAuth for an MCP server redirects to
@@ -15,14 +38,12 @@ import { copyText } from '../lib/clipboard'
  * signing in to Claude itself, one server at a time instead of the account.
  */
 export function McpConnectDialog({
-  projectId,
-  session,
+  target,
   serverName,
   onClose,
   onConnected,
 }: {
-  projectId: string
-  session: string
+  target: McpConnectTarget
   serverName: string
   onClose: () => void
   onConnected: () => void
@@ -41,13 +62,17 @@ export function McpConnectDialog({
     setWorking(true)
     setError(null)
     try {
-      const started = await api.startMcpOAuth(projectId, session, serverName)
+      const started = await startFor(target, serverName)
       setConnection(started)
       if (started.state === 'error') {
         setError(started.detail ?? 'Could not start.')
         setWorking(false)
         return
       }
+      // Whichever session actually carried it — settled by the backend for
+      // 'project'/'org' targets, so every poll and paste from here on uses
+      // this rather than any project id the caller happened to start with.
+      const projectId = started.project_id
       window.clearInterval(pollRef.current)
       pollRef.current = window.setInterval(async () => {
         try {
@@ -86,6 +111,7 @@ export function McpConnectDialog({
     setWorking(true)
     setError(null)
     try {
+      const projectId = connection.project_id
       const started = await api.pasteMcpOAuth(
         projectId,
         connection.session_id,
@@ -127,10 +153,13 @@ export function McpConnectDialog({
       <div className="card modal" onClick={(e) => e.stopPropagation()}>
         <h2>Connect {serverName}</h2>
         <p className="hint">
-          Runs the connection through this session — its own OAuth callback points
-          at a port on this container, which your browser cannot reach directly, so
-          this relays it the way signing in to Claude itself already works: open the
-          link, then paste back wherever your browser ends up.
+          {target.scope === 'session'
+            ? 'Runs the connection through this session'
+            : 'Runs the connection through one of your own running sessions'}{' '}
+          — its own OAuth callback points at a port on that container, which your
+          browser cannot reach directly, so this relays it the way signing in to
+          Claude itself already works: open the link, then paste back wherever your
+          browser ends up.
         </p>
 
         {error && <div className="banner error">{error}</div>}

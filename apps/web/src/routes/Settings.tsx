@@ -8,6 +8,7 @@ import {
 } from '../lib/notifications'
 import { InstallPrompt } from '../components/InstallPrompt'
 import { ClaudeConfigFields, type ClaudeConfigValue } from '../components/ClaudeConfig'
+import { McpConnectDialog } from '../components/McpConnectDialog'
 import { InstanceTab } from '../components/InstanceTab'
 import { PeopleTab } from '../components/PeopleTab'
 import {
@@ -601,6 +602,7 @@ function HarnessSettingsTab({
     mcp_json: profile.mcp_json,
     skills: profile.skills,
   })
+  const [connecting, setConnecting] = useState<string | null>(null)
 
   const save = () =>
     run(
@@ -623,6 +625,7 @@ function HarnessSettingsTab({
         value={config}
         onChange={setConfig}
         claudeMdHint="Written to ~/.claude/CLAUDE.md, so it applies to every project"
+        onConnectMcp={(name) => setConnecting(name)}
       />
 
       <div className="actions">
@@ -632,6 +635,17 @@ function HarnessSettingsTab({
       </div>
 
       <ConnectedMcpServers />
+
+      {connecting && (
+        // No project or session in hand here at all — relays through any one
+        // of the caller's own running sessions anywhere, the backend's pick.
+        <McpConnectDialog
+          target={{ scope: 'org' }}
+          serverName={connecting}
+          onClose={() => setConnecting(null)}
+          onConnected={() => setConnecting(null)}
+        />
+      )}
     </>
   )
 }
