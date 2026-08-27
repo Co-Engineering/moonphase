@@ -36,7 +36,21 @@ log = logging.getLogger(__name__)
 # v5 added the xclip shim: an image built before it has no bridge for the
 # browser's clipboard, so pasting an image into the harness silently does
 # nothing instead of attaching it.
-RECIPE_VERSION = "6"
+# Every change to what this builds has to move this number, because the image
+# tag is derived from it and a container keeps the image it was built with. Two
+# such changes landed in the same release, and both had independently called
+# themselves v6:
+#
+#   v6  the browser environment installs the Chromium its pinned MCP server
+#       expects, rather than whatever npm resolved on build day
+#   v7  tmux's allow-passthrough, without which the harness's own
+#       clipboard-copy — a DCS-wrapped OSC 52, since there is no OS clipboard
+#       in here — is swallowed by tmux with nothing said about it
+#
+# Leaving both at 6 would have meant every container built since the first
+# change already looked current, and the second would have reached none of
+# them.
+RECIPE_VERSION = "7"
 
 NODE_VERSION = "22.20.0"
 
@@ -65,6 +79,7 @@ set  -g  focus-events on
 set  -g  mouse on
 set  -g  base-index 1
 setw -g  pane-base-index 1
+set  -g  allow-passthrough on
 set  -g  status-style "bg=#1a1b26,fg=#a9b1d6"
 set  -g  status-left  " #[bold]moonphase#[default] "
 set  -g  status-right " #{session_name} \\u00b7 %H:%M "
