@@ -98,6 +98,7 @@ async def resolve_org(conn: AsyncConnection, org_id: UUID | None) -> UUID:
 SERVER_COLUMNS = """
     s.id, s.org_id, s.name, s.host, s.port, s.ssh_user, s.ssh_auth_mode,
     s.status, s.status_detail, s.host_key_fingerprint, s.docker_version,
+    s.sysbox_version, s.sysbox_status_detail,
     s.managed_public_key, s.last_seen_at, s.created_at,
     public.server_access(s.id) as access,
     not public.is_org_member(s.org_id) as shared,
@@ -158,7 +159,8 @@ async def insert_server(
                'bootstrapping', :created_by, :host_key_fingerprint)
             returning id, org_id, name, host, port, ssh_user, ssh_auth_mode, status,
                       status_detail, host_key_fingerprint, docker_version,
-                      managed_public_key, last_seen_at, created_at
+                      managed_public_key, last_seen_at, created_at,
+                      sysbox_version, sysbox_status_detail
             """
         ),
         {
@@ -188,6 +190,9 @@ async def update_server_state(
     docker_version: str | None = None,
     managed_public_key: str | None = None,
     touch_last_seen: bool = False,
+    sysbox_checked: bool = False,
+    sysbox_version: str | None = None,
+    sysbox_status_detail: str | None = None,
 ) -> None:
     sets: list[str] = []
     params: dict[str, Any] = {"id": server_id}
@@ -211,6 +216,16 @@ async def update_server_state(
         params["mpk"] = managed_public_key
     if touch_last_seen:
         sets.append("last_seen_at = now()")
+    # Same reasoning as status/status_detail above: sysbox_checked is the
+    # caller's signal that a probe/install actually ran this call, so a
+    # successful install can clear a previous "kernel too old" detail back
+    # to null in the same statement, rather than sysbox_status_detail being
+    # is-not-None-to-write like every other field here.
+    if sysbox_checked:
+        sets.append("sysbox_version = :sv")
+        params["sv"] = sysbox_version
+        sets.append("sysbox_status_detail = :ssd")
+        params["ssd"] = sysbox_status_detail
     if not sets:
         return
     await conn.execute(

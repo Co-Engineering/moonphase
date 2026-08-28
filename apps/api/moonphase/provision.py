@@ -22,7 +22,7 @@ from dataclasses import dataclass
 
 import asyncssh
 
-from . import docker_remote, ssh
+from . import docker_remote, ssh, sysbox_remote
 from .ssh import SSHError, SSHTarget
 
 log = logging.getLogger(__name__)
@@ -43,6 +43,12 @@ class BootstrapResult:
     generated_public_key: str | None = None
     # True once key-only login is confirmed, so the password may be destroyed.
     password_can_be_discarded: bool = False
+    # True whenever Sysbox was actually probed/installed this call, so the
+    # caller can tell "we checked and it's absent" from "we never asked" —
+    # see queries.update_server_state's sysbox_checked param.
+    sysbox_checked: bool = False
+    sysbox_version: str | None = None
+    sysbox_status_detail: str | None = None
 
 
 def authorized_keys_line(public_key: str, server_name: str) -> str:
@@ -137,6 +143,30 @@ async def ensure_docker(
     return info
 
 
+async def ensure_sysbox(
+    conn: asyncssh.SSHClientConnection,
+    ssh_user: str,
+    *,
+    auto_install: bool,
+) -> sysbox_remote.SysboxInfo:
+    """Probe Sysbox, optionally installing it.
+
+    Never raises for an incompatible host — that is reported through
+    SysboxInfo.detail, the same as any other probe outcome, since it is
+    optional extra capability rather than something a server needs to be
+    considered online.
+    """
+    compat = await sysbox_remote.probe_compatibility(conn)
+    if not compat.compatible:
+        return sysbox_remote.SysboxInfo(installed=False, detail=compat.detail)
+    info = await sysbox_remote.probe(conn)
+    if info.installed and info.registered_as_runtime:
+        return info
+    if not info.installed and auto_install:
+        return await sysbox_remote.install(conn, ssh_user)
+    return info
+
+
 async def bootstrap(
     *,
     server_id: str,
@@ -152,6 +182,7 @@ async def bootstrap(
     existing_public_key: str | None = None,
     known_host_key_fp: str | None = None,
     auto_install_docker: bool = True,
+    install_sysbox: bool = False,
 ) -> BootstrapResult:
     """Take a server from "user filled in a form" to "ready to run projects".
 
@@ -230,6 +261,12 @@ async def bootstrap(
             generated_public_key=generated_public,
         )
 
+    # Which connection actually has confirmed, usable Docker access —
+    # reassigned below if a fresh-install retry opens a new one. Bound here,
+    # before the try, so `finally` can always safely reference it even on an
+    # early return.
+    working_conn = conn
+
     try:
         # --- password bootstrap: install our own key and prove it works -----
         if auth_mode == "password_bootstrap":
@@ -282,13 +319,32 @@ async def bootstrap(
                 retry_conn, _ = await ssh.connect(retry_target)
                 try:
                     docker_info = await docker_remote.probe(retry_conn)
-                finally:
+                except Exception:
+                    retry_conn.close()
+                    raise
+                if docker_info.usable_by_user:
+                    # This is now the connection with the group membership
+                    # that actually works — keep it open for Sysbox below,
+                    # and close it (instead of `conn`) once we're done.
+                    working_conn = retry_conn
+                else:
                     retry_conn.close()
             except SSHError:
                 pass
 
+        # --- sysbox -----------------------------------------------------------
+        # Optional, and never fatal to the bootstrap: a server that is
+        # otherwise online and Docker-healthy stays online even when Sysbox
+        # can't be installed. Requires a working Docker connection, since
+        # Sysbox registers itself as a Docker runtime.
+        sysbox_info: sysbox_remote.SysboxInfo | None = None
+        if install_sysbox and docker_info.installed and docker_info.usable_by_user:
+            sysbox_info = await ensure_sysbox(working_conn, ssh_user, auto_install=True)
+
     finally:
         conn.close()
+        if working_conn is not conn:
+            working_conn.close()
 
     if not docker_info.installed:
         return BootstrapResult(
@@ -325,4 +381,7 @@ async def bootstrap(
         generated_private_key=generated_private,
         generated_public_key=generated_public,
         password_can_be_discarded=auth_mode == "password_bootstrap",
+        sysbox_checked=sysbox_info is not None,
+        sysbox_version=sysbox_info.version if sysbox_info else None,
+        sysbox_status_detail=sysbox_info.detail if sysbox_info else None,
     )
