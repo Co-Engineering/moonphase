@@ -122,12 +122,27 @@ async def test_two_devices_share_one_session(fake_server: str) -> None:
             )
             buffer = b""
             deadline = time.time() + 10
-            while sessions.TTY_MARKER.encode() not in buffer and time.time() < deadline:
-                buffer += await asyncio.wait_for(process.stdout.read(512), timeout=5)
             marker = sessions.TTY_MARKER.encode()
+
+            # Wait for the newline that *ends* the tty, not just the marker
+            # that starts it. A read can land mid-token, and then `find` for
+            # the newline returns -1 — which slices to the last byte instead
+            # of the end of the value, handing back a truncated "/dev/pts/".
+            # That passed the checks below (it is still != the other tty) and
+            # only blew up 40 lines later, as a phantom-client assertion that
+            # looked like a product regression.
+            def complete(buf: bytes) -> bool:
+                index = buf.find(marker)
+                return index != -1 and buf.find(b"\n", index) != -1
+
+            while not complete(buffer) and time.time() < deadline:
+                buffer += await asyncio.wait_for(process.stdout.read(512), timeout=5)
             index = buffer.find(marker)
             assert index != -1, f"attach wrapper printed no tty marker: {buffer[:200]!r}"
-            tty = buffer[index + len(marker) : buffer.find(b"\n", index)].decode().strip()
+            end = buffer.find(b"\n", index)
+            assert end != -1, f"tty marker never terminated: {buffer[index:index + 80]!r}"
+            tty = buffer[index + len(marker) : end].decode().strip()
+            assert tty.startswith("/dev/pts/") and tty != "/dev/pts/", f"bad tty: {tty!r}"
             return process, tty
 
         # Device one: a desktop.
