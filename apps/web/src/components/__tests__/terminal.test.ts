@@ -4,8 +4,15 @@ import {
   SHIFT_ENTER_SEQUENCE,
   clipboardImagePasteFollowUp,
   handleShiftEnterKeydown,
+  isPlainPasteCombo,
   isShiftEnter,
 } from '../Terminal'
+
+function pasteCombo(
+  overrides: Partial<{ key: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }> = {},
+) {
+  return { key: 'v', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false, ...overrides }
+}
 
 function fakeEvent(overrides: Partial<{ key: string; shiftKey: boolean; type: string }> = {}) {
   return {
@@ -105,6 +112,42 @@ describe('handleShiftEnterKeydown', () => {
 describe('HARNESS_CLIPBOARD_PASTE_TRIGGER', () => {
   it('is Ctrl+V (0x16) — the only thing the harness’s own clipboard-image check listens for', () => {
     expect(HARNESS_CLIPBOARD_PASTE_TRIGGER).toBe('\x16')
+  })
+})
+
+/**
+ * The shipped regression this guards: pasting an image only worked via a
+ * right-click paste or a drop, never the single most obvious gesture —
+ * plain Ctrl+V (or Cmd+V) — because no browser paste event ever fires for
+ * that specific, unshifted combo in this app's tested environments, and
+ * xterm has no idea it should mean anything but the literal control
+ * character it already sends on. Getting this predicate wrong either misses
+ * the fix (plain Ctrl+V still does nothing) or, worse, hijacks a shifted or
+ * plain-alt combo that was never broken to begin with.
+ */
+describe('isPlainPasteCombo', () => {
+  it('is true for Ctrl+V', () => {
+    expect(isPlainPasteCombo(pasteCombo({ ctrlKey: true }))).toBe(true)
+  })
+
+  it('is true for Cmd+V (metaKey, e.g. on macOS)', () => {
+    expect(isPlainPasteCombo(pasteCombo({ ctrlKey: false, metaKey: true }))).toBe(true)
+  })
+
+  it('is false for Ctrl+Shift+V — already works via the browser’s own paste event', () => {
+    expect(isPlainPasteCombo(pasteCombo({ shiftKey: true }))).toBe(false)
+  })
+
+  it('is false for Ctrl+Alt+V', () => {
+    expect(isPlainPasteCombo(pasteCombo({ altKey: true }))).toBe(false)
+  })
+
+  it('is false for a bare V with no modifier', () => {
+    expect(isPlainPasteCombo(pasteCombo({ ctrlKey: false }))).toBe(false)
+  })
+
+  it('is false for Ctrl+anything-else', () => {
+    expect(isPlainPasteCombo(pasteCombo({ key: 'c' }))).toBe(false)
   })
 })
 
