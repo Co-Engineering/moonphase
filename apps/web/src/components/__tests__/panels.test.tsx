@@ -259,7 +259,7 @@ describe('SkillsEditor', () => {
 })
 
 describe('ClaudeConfigFields', () => {
-  it('switches between the four scopes and edits each independently', () => {
+  it('switches between scopes and edits each independently', () => {
     const onChange = vi.fn()
     render(
       <ClaudeConfigFields
@@ -268,6 +268,7 @@ describe('ClaudeConfigFields', () => {
           claude_md: 'Some instructions',
           mcp_json: null,
           skills: {},
+          env_vars: {},
         }}
         onChange={onChange}
         claudeMdHint="applies here"
@@ -283,5 +284,27 @@ describe('ClaudeConfigFields', () => {
 
     fireEvent.click(screen.getByText('Skills'))
     expect(screen.getByText('+ Add skill')).toBeTruthy()
+
+    fireEvent.click(screen.getByText('Environment variables'))
+    expect(screen.getByText('+ Add')).toBeTruthy()
+  })
+
+  it('hides the environment tab when told to, for the org scope', () => {
+    render(
+      <ClaudeConfigFields
+        value={{
+          claude_settings_json: null,
+          claude_md: null,
+          mcp_json: null,
+          skills: {},
+          env_vars: {},
+        }}
+        onChange={vi.fn()}
+        claudeMdHint="applies here"
+        showEnvVars={false}
+      />,
+    )
+
+    expect(screen.queryByText('Environment variables')).toBeNull()
   })
 })

@@ -10,6 +10,7 @@ const CONFIG_WITH_AN_MCP_SERVER: ClaudeConfig = {
   claude_md: null,
   mcp_json: JSON.stringify({ mcpServers: { sentry: { url: 'https://example.com/mcp' } } }),
   skills: {},
+  env_vars: {},
 }
 
 async function renderAndClickConnect(save: (input: ClaudeConfig) => Promise<unknown>) {
