@@ -34,26 +34,80 @@ export const SHIFT_ENTER_SEQUENCE = '\x1b\r'
 export const HARNESS_CLIPBOARD_PASTE_TRIGGER = '\x16'
 
 /**
- * Ctrl+V or Cmd+V, unshifted — the one combo the harness's own
- * clipboard-image check is bound to. xterm treats it as nothing but the
- * literal control character this sends on to the harness (0x16, the same
- * byte as HARNESS_CLIPBOARD_PASTE_TRIGGER above) and never fires a browser
- * paste event for it: no platform we've found binds *plain* Ctrl/Cmd+V to
- * paste at the OS level the way it binds Ctrl/Cmd+Shift+V, or a right-click
- * paste, or this app's own image-paste-via-drop. That gap is why a pasted
- * image only ever reached the harness through one of those other paths —
- * the most expected one, a plain Ctrl+V, went straight through as a
- * keystroke and never triggered a clipboard read at all.
+ * Plain Ctrl+V — the paste gesture the browser never tells us about.
+ *
+ * xterm's own key handling turns Ctrl+letter into the matching control
+ * character and cancels the event (`evaluateKeyboardEvent`, the
+ * `ev.ctrlKey && !ev.shiftKey && !ev.altKey && !ev.metaKey` branch), so
+ * Ctrl+V arrives at the harness as 0x16 — the same byte as
+ * HARNESS_CLIPBOARD_PASTE_TRIGGER above — and no `paste` event is ever
+ * fired. That is the gap: an image on the clipboard only reached the
+ * harness through a right-click paste, Ctrl+Shift+V, or a drop, never
+ * through the most obvious gesture of all.
+ *
+ * Cmd+V is deliberately NOT included, and the distinction is not cosmetic.
+ * xterm claims only Cmd+A on macOS; every other Cmd chord falls through
+ * `if (!result.key) return true`, uncancelled, so the browser goes on to
+ * fire its own `paste` event — which the onPaste handler below already
+ * turns into a staged image. Intercepting Cmd+V here would call
+ * preventDefault on the one combo that does work, suppressing that event:
+ * an image would still arrive, but pasted *text* would stop arriving
+ * entirely and land as a stray 0x16 instead. Verified against xterm's
+ * sources rather than assumed, after a real Ctrl+V in a real browser was
+ * observed producing `onData 0x16` and no paste event at all.
  */
 export function isPlainPasteCombo(
   event: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'shiftKey' | 'altKey'>,
 ): boolean {
   return (
     event.key.toLowerCase() === 'v' &&
-    (event.ctrlKey || event.metaKey) &&
+    event.ctrlKey &&
+    !event.metaKey &&
     !event.shiftKey &&
     !event.altKey
   )
+}
+
+/**
+ * How long to wait on the browser for a clipboard image before giving up and
+ * letting the keystroke through as itself.
+ *
+ * `navigator.clipboard.read()` needs the `clipboard-read` permission, and
+ * until the viewer answers that prompt the promise simply stays pending —
+ * it does not reject. Awaiting it unbounded means Ctrl+V does *nothing at
+ * all* while a prompt the viewer may never have noticed sits open, because
+ * the keystroke was already swallowed by preventDefault. Half a second is
+ * far longer than a granted read takes and far shorter than a person takes
+ * to answer a prompt.
+ */
+export const CLIPBOARD_READ_TIMEOUT_MS = 500
+
+/**
+ * The clipboard's image, or null if there isn't one, we aren't allowed to
+ * look, or looking is taking long enough that it must be waiting on a
+ * person. Never rejects: every one of those is the same answer here — carry
+ * on and let Ctrl+V mean what it has always meant.
+ */
+export async function readClipboardImage(
+  clipboard: Clipboard | undefined = navigator.clipboard,
+  timeoutMs: number = CLIPBOARD_READ_TIMEOUT_MS,
+): Promise<Blob | null> {
+  if (!clipboard?.read) return null
+  const read = (async () => {
+    try {
+      for (const item of await clipboard.read()) {
+        const type = item.types.find((t) => t.startsWith('image/'))
+        if (type) return await item.getType(type)
+      }
+    } catch {
+      // Refused, unsupported, or nothing readable this way.
+    }
+    return null
+  })()
+  return Promise.race([
+    read,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+  ])
 }
 
 /**
@@ -533,13 +587,15 @@ export function ProjectTerminal({
     // instead (see handleShiftEnterKeydown for what the harness expects, and
     // why this cannot just return `false` and stop there).
     //
-    // Ctrl/Cmd+V is intercepted for the same reason `onPaste` exists at all:
+    // Ctrl+V is intercepted for the same reason `onPaste` exists at all:
     // nothing else asks the browser to read an image off the clipboard for
     // this specific, otherwise-unremarkable keystroke (see
-    // isPlainPasteCombo for why). Reading it here directly, rather than
-    // waiting on a browser paste event that this combo never generates, is
-    // what makes the single most obvious way to paste an image — Ctrl/Cmd+V
-    // — actually work, rather than only a right-click paste or a drop.
+    // isPlainPasteCombo for why, and for why Cmd+V is left alone — the
+    // browser does fire a paste event for that one, and onPaste below
+    // already handles it). Reading the clipboard here directly, rather than
+    // waiting on a paste event this combo never generates, is what makes
+    // the most obvious way to paste an image actually work, rather than
+    // only a right-click paste or a drop.
     term.attachCustomKeyEventHandler((event) => {
       const shiftEnterResult = handleShiftEnterKeydown(event, {
         readOnly: readOnlyRef.current,
@@ -560,30 +616,22 @@ export function ProjectTerminal({
         return false
       }
 
-      void (async () => {
-        const clipboard = navigator.clipboard
-        if (clipboard?.read) {
-          try {
-            const items = await clipboard.read()
-            for (const item of items) {
-              const type = item.types.find((t) => t.startsWith('image/'))
-              if (type) {
-                stageImage(await item.getType(type), '')
-                return
-              }
-            }
-          } catch {
-            // Permission refused, or nothing readable this way — fall
-            // through to the literal keystroke, which is what Ctrl+V has
-            // always meant here for anything that isn't an image.
-          }
-        }
+      const sendTrigger = () => {
         const socket = socketRef.current
         if (socket?.readyState === WebSocket.OPEN) {
           socket.send(new TextEncoder().encode(HARNESS_CLIPBOARD_PASTE_TRIGGER))
         } else {
           flashDropped()
         }
+      }
+
+      void (async () => {
+        const image = await readClipboardImage()
+        if (image) stageImage(image, '')
+        // Whether or not an image turned up, the harness still has to be
+        // told to look — staging alone puts the file where xclip-shim will
+        // find it, and this keystroke is what sends it looking.
+        else sendTrigger()
       })()
       return false
     })

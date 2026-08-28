@@ -5,6 +5,7 @@ import {
   clipboardImagePasteFollowUp,
   handleShiftEnterKeydown,
   isPlainPasteCombo,
+  readClipboardImage,
   isShiftEnter,
 } from '../Terminal'
 
@@ -130,8 +131,19 @@ describe('isPlainPasteCombo', () => {
     expect(isPlainPasteCombo(pasteCombo({ ctrlKey: true }))).toBe(true)
   })
 
-  it('is true for Cmd+V (metaKey, e.g. on macOS)', () => {
-    expect(isPlainPasteCombo(pasteCombo({ ctrlKey: false, metaKey: true }))).toBe(true)
+  /**
+   * The one that has to stay false. xterm claims only Cmd+A on macOS and
+   * leaves every other Cmd chord uncancelled, so the browser fires its own
+   * paste event for Cmd+V and the onPaste handler already stages the image.
+   * Intercepting it would preventDefault that event: the image would still
+   * arrive, but pasted text would stop arriving and land as a stray 0x16.
+   */
+  it('is false for Cmd+V — macOS pastes it natively, and text would break', () => {
+    expect(isPlainPasteCombo(pasteCombo({ ctrlKey: false, metaKey: true }))).toBe(false)
+  })
+
+  it('is false for Ctrl+Cmd+V', () => {
+    expect(isPlainPasteCombo(pasteCombo({ ctrlKey: true, metaKey: true }))).toBe(false)
   })
 
   it('is false for Ctrl+Shift+V — already works via the browser’s own paste event', () => {
@@ -176,5 +188,48 @@ describe('clipboardImagePasteFollowUp', () => {
 
   it('has nothing to paste for a pure image with no text', () => {
     expect(clipboardImagePasteFollowUp(true, '').pasteText).toBeNull()
+  })
+})
+
+/**
+ * A clipboard read that never settles.
+ *
+ * `navigator.clipboard.read()` stays *pending* while the browser's
+ * clipboard-read prompt is open — it does not reject. Ctrl+V has already
+ * been swallowed by preventDefault at that point, so awaiting it unbounded
+ * means the keystroke does nothing at all until someone answers a prompt
+ * they may not have noticed. It has to time out and let the keystroke
+ * through as itself.
+ */
+describe('reading an image off the clipboard for Ctrl+V', () => {
+  it('gives up rather than hanging on an unanswered permission prompt', async () => {
+    const neverSettles = { read: () => new Promise<ClipboardItem[]>(() => {}) }
+    const started = Date.now()
+    const result = await readClipboardImage(neverSettles as unknown as Clipboard, 20)
+
+    expect(result).toBeNull()
+    expect(Date.now() - started).toBeLessThan(1000)
+  })
+
+  it('gives up when the read is refused outright', async () => {
+    const refuses = { read: () => Promise.reject(new Error('NotAllowedError')) }
+    expect(await readClipboardImage(refuses as unknown as Clipboard, 50)).toBeNull()
+  })
+
+  it('returns nothing when the clipboard holds no image', async () => {
+    const textOnly = { read: async () => [{ types: ['text/plain'] }] }
+    expect(await readClipboardImage(textOnly as unknown as Clipboard, 50)).toBeNull()
+  })
+
+  it('returns the image when there is one', async () => {
+    const png = new Blob(['x'], { type: 'image/png' })
+    const withImage = {
+      read: async () => [{ types: ['image/png'], getType: async () => png }],
+    }
+    expect(await readClipboardImage(withImage as unknown as Clipboard, 50)).toBe(png)
+  })
+
+  it('is not defeated by a clipboard API the browser does not implement', async () => {
+    expect(await readClipboardImage(undefined, 50)).toBeNull()
   })
 })
