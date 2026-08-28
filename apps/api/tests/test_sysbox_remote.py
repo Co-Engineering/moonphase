@@ -247,9 +247,40 @@ async def test_install_happy_path_downloads_dpkgs_and_reprobes(monkeypatch) -> N
     assert info.registered_as_runtime is True
 
     # The .deb filename is arch-substituted, and every step ran in order.
-    assert any("sysbox-ce_" in c and "linux_amd64.deb" in c for c in fake.calls)
+    #
+    # Pinned to the whole name, not just its ends: this assertion used to
+    # check only that "sysbox-ce_" and "linux_amd64.deb" both appeared
+    # somewhere in the command, which a wrong middle passes happily. The
+    # name we shipped carried a "-0" revision suffix that Sysbox's releases
+    # do not use, so every install 404'd on download, and the test said
+    # nothing.
+    assert any(
+        f"sysbox-ce_{sysbox_remote.SYSBOX_VERSION}.linux_amd64.deb" in c
+        for c in fake.calls
+    ), f"unexpected package name in: {fake.calls}"
     ordered = [c for c in fake.calls if c.split()[0] in ("curl", "sudo")]
     assert any(c.startswith("curl") for c in ordered)
     dpkg_index = next(i for i, c in enumerate(fake.calls) if "dpkg -i" in c)
     curl_index = next(i for i, c in enumerate(fake.calls) if c.startswith("curl"))
     assert curl_index < dpkg_index
+
+
+def test_the_package_url_matches_sysbox_s_published_asset_naming() -> None:
+    """The one detail no amount of mocking can get right by itself.
+
+    Sysbox publishes exactly two assets per release,
+    `sysbox-ce_<version>.linux_{amd64,arch64}.deb`, with no packaging
+    revision between the version and `.linux`. An invented suffix here is
+    invisible until a real install runs and `curl -f` returns a 404 that
+    reads like a broken network rather than a filename we made up.
+
+    Checked as a shape rather than against the network, so it holds in CI
+    without egress — the version bump is the moment to re-check the real
+    releases page.
+    """
+    import re
+
+    for arch in ("amd64", "arm64"):
+        name = f"sysbox-ce_{sysbox_remote.SYSBOX_VERSION}.linux_{arch}.deb"
+        assert re.fullmatch(r"sysbox-ce_\d+\.\d+\.\d+\.linux_(amd64|arm64)\.deb", name), name
+        assert "-0." not in name

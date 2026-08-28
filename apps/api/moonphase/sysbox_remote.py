@@ -31,10 +31,12 @@ log = logging.getLogger(__name__)
 # target that can change under us is not reproducible and not rollback-safe.
 # Bump by hand, and re-verify the asset name below against
 # https://github.com/nestybox/sysbox/releases at the same time — Sysbox has
-# no get.docker.com-style convenience script, and this is a hand-maintained
-# guess at their current release layout that this sandbox has no network
-# egress to verify.
-SYSBOX_VERSION = "0.6.7"
+# no get.docker.com-style convenience script.
+#
+# Verified against the real releases on 2026-08-28: v0.7.1 is current, and
+# every release from 0.6.7 through 0.7.1 publishes exactly two assets,
+# `sysbox-ce_<version>.linux_amd64.deb` and `…_arm64.deb`.
+SYSBOX_VERSION = "0.7.1"
 
 # Ubuntu/Debian ID-mapped mounts (a mainline kernel feature) work without
 # shiftfs from this version on; below it, Sysbox falls back to the
@@ -179,12 +181,12 @@ async def install(conn: asyncssh.SSHClientConnection, ssh_user: str) -> SysboxIn
     if not docker_check.ok:
         raise SSHError("Docker must be installed before Sysbox.")
 
-    # Community Edition asset naming, per Sysbox's GitHub releases page:
-    # sysbox-ce_<version>-0.linux_<arch>.deb — VERIFY AGAINST SYSBOX'S CURRENT
-    # RELEASE ASSETS AT IMPLEMENTATION TIME. The download host and exact
-    # asset name have moved before (nestybox.com-hosted downloads to GitHub
-    # Releases), and this sandbox has no network egress to check it.
-    filename = f"sysbox-ce_{SYSBOX_VERSION}-0.linux_{compat.arch}.deb"
+    # Community Edition asset naming, checked against the release assets
+    # themselves rather than the releases page's prose: there is no `-0`
+    # revision suffix. Getting this wrong is silent until the install runs —
+    # the URL simply 404s, and a 404 from `curl -f` on a fresh server reads
+    # like a network problem rather than a name we made up.
+    filename = f"sysbox-ce_{SYSBOX_VERSION}.linux_{compat.arch}.deb"
     url = f"https://github.com/nestybox/sysbox/releases/download/v{SYSBOX_VERSION}/{filename}"
 
     log.info("installing sysbox on remote host (%s)", filename)
