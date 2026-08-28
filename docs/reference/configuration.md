@@ -1,8 +1,8 @@
 # Configuration
 
 Everything is read from the environment. `cp .env.example .env` gives you a working set of
-development defaults; only `MOONPHASE_SECRET_KEY` has no default, because it has to be
-generated.
+development defaults; `MOONPHASE_SECRET_KEY` and `SUPABASE_JWT_SECRET` have no default,
+because both have to be generated.
 
 ## Secrets
 
@@ -28,7 +28,7 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 | `DATABASE_URL`        | `postgresql+asyncpg://postgres:postgres@127.0.0.1:54722/postgres`   | Must be the asyncpg driver |
 | `SUPABASE_URL`        | `http://127.0.0.1:54721`                                           | The API fetches JWKS from here |
 | `SUPABASE_ANON_KEY`   | —                                                                  | Printed by `supabase start` |
-| `SUPABASE_JWT_SECRET` | `super-secret-jwt-token-…`                                         | Change it for anything real |
+| `SUPABASE_JWT_SECRET` | —                                                                  | Required. `supabase start`'s printed value is public — startup refuses it |
 | `MOONPHASE_AUTH_URL`  | —                                                                  | Where GoTrue answers, for the admin calls that create and delete accounts |
 
 `SUPABASE_URL` must point at the auth service the *client* is using. A mismatch produces

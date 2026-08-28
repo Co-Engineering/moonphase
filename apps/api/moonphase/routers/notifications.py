@@ -71,12 +71,17 @@ async def unsubscribe(
 @router.post("/test", status_code=status.HTTP_202_ACCEPTED)
 async def send_test(
     principal: Principal = Depends(current_principal),
-) -> dict[str, int]:
+) -> dict[str, object]:
     """Send a notification to this user's devices.
 
     Worth having: push depends on service worker registration, browser
-    permission and a reachable endpoint, and a silent failure in any of them is
-    otherwise only discovered when a real notification does not arrive.
+    permission and a reachable endpoint, and a silent failure in any of them
+    is otherwise only discovered when a real notification does not arrive —
+    which is exactly the failure mode this has to not itself have. A push
+    the service rejected (a bad VAPID key, a timeout reaching it) used to
+    still count as "delivered" here, so this button could say everything
+    was fine while nothing arrived. `delivered` now only counts a push the
+    service actually accepted; anything else is named in `errors`.
     """
     if not push.configured():
         raise HTTPException(status_code=409, detail="Push is not configured.")
@@ -85,8 +90,9 @@ async def send_test(
         subs = await queries.list_own_push_subscriptions(conn)
 
     delivered = 0
+    errors: list[str] = []
     for sub in subs:
-        alive = await push.send(
+        result = await push.send(
             push.Subscription(
                 endpoint=sub["endpoint"], p256dh=sub["p256dh"], auth=sub["auth"]
             ),
@@ -94,6 +100,8 @@ async def send_test(
             body="Notifications are working. You can close the app now.",
             tag="moonphase-test",
         )
-        if alive:
+        if result.delivered:
             delivered += 1
-    return {"delivered": delivered, "subscriptions": len(subs)}
+        elif result.error:
+            errors.append(result.error)
+    return {"delivered": delivered, "subscriptions": len(subs), "errors": errors}

@@ -62,3 +62,24 @@ describe('a result event with no image', () => {
     expect(screen.getByText('No such file or directory')).toBeInTheDocument()
   })
 })
+
+/**
+ * The agent's reply is real markdown and reads better rendered as such; a
+ * message you typed yourself is shown exactly as typed, since reinterpreting
+ * a stray `*` in your own words as formatting would make it look different
+ * from what you actually sent.
+ */
+describe('markdown in a chat-style row', () => {
+  it("renders the agent's reply as markdown", () => {
+    render(<FeedRow event={event({ kind: 'assistant', text: 'Here is **bold** text.' })} />)
+    expect(screen.getByText('bold').tagName).toBe('STRONG')
+  })
+
+  it('shows a typed message exactly as typed, markdown syntax and all', () => {
+    const { container } = render(
+      <FeedRow event={event({ kind: 'user', text: 'is *this* italic?' })} />,
+    )
+    expect(container.querySelector('em')).toBeNull()
+    expect(screen.getByText('is *this* italic?')).toBeInTheDocument()
+  })
+})

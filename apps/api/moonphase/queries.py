@@ -173,15 +173,17 @@ async def insert_server(
     ssh_user: str,
     auth_mode: str,
     created_by: str,
+    host_key_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     result = await conn.execute(
         text(
             """
             insert into servers
-              (org_id, name, host, port, ssh_user, ssh_auth_mode, status, created_by)
+              (org_id, name, host, port, ssh_user, ssh_auth_mode, status, created_by,
+               host_key_fingerprint)
             values
               (:org_id, :name, :host, :port, :ssh_user, cast(:auth_mode as ssh_auth_mode),
-               'bootstrapping', :created_by)
+               'bootstrapping', :created_by, :host_key_fingerprint)
             returning id, org_id, name, host, port, ssh_user, ssh_auth_mode, status,
                       status_detail, host_key_fingerprint, docker_version,
                       managed_public_key, last_seen_at, created_at
@@ -195,6 +197,7 @@ async def insert_server(
             "ssh_user": ssh_user,
             "auth_mode": auth_mode,
             "created_by": created_by,
+            "host_key_fingerprint": host_key_fingerprint,
         },
     )
     row = result.first()
@@ -1863,7 +1866,7 @@ async def get_auth_methods_privileged(conn: AsyncConnection) -> dict[str, Any]:
             text(
                 """
                 select m.*, s.google_client_secret, s.microsoft_client_secret,
-                       s.smtp_password, i.public_url
+                       s.smtp_password, i.public_url, i.signup_open
                   from auth_methods m
                   cross join private.auth_secrets s
                   cross join instance_settings i

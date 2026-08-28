@@ -42,6 +42,18 @@ MAX_BACKOFF_SECONDS = 600.0
 # question here into the most expensive one.
 USAGE_INTERVAL_SECONDS = 120.0
 
+# How long to leave a container alone after an auto-resume attempt that could
+# not bring everything back.
+#
+# The trigger for auto-resume — running container, session rows, no panes —
+# stays true for exactly the sessions that failed to resume, so without this
+# the monitor retries them every sweep, forever. A session whose owner
+# revoked their harness credential is not going to start on the next attempt
+# either, and 20-second retries turn one unresumable session into a few
+# thousand SSH round-trips a day against a server that has nothing to gain
+# from them.
+RESUME_RETRY_INTERVAL_SECONDS = 600.0
+
 
 class SessionMonitor:
     def __init__(self) -> None:
@@ -58,6 +70,9 @@ class SessionMonitor:
         self._retry_after: dict[str, float] = {}
         # When each container's transcripts were last read for usage.
         self._usage_checked: dict[str, float] = {}
+        # When we last tried to bring a container's sessions back, so a
+        # container that cannot resume is not retried every sweep.
+        self._resume_attempted: dict[str, float] = {}
 
     def start(self) -> None:
         settings = get_settings()
@@ -178,8 +193,15 @@ class SessionMonitor:
         # are gone. Bring each session back with `--continue` the same way the
         # "Resume" button would, so a reboot is invisible rather than an errand
         # to run once per session.
-        if not panes and group:
+        if not panes and group and self._resume_due(container):
             resumed, failed = await self._auto_resume(conn_ssh, container, group)
+            # Only a failure starts the clock. Clearing it on a clean resume
+            # keeps the *next* reboot immediate rather than making it serve
+            # out the backoff earned by an unrelated earlier one.
+            if failed:
+                self._resume_attempted[container] = time.monotonic()
+            else:
+                self._resume_attempted.pop(container, None)
             if resumed:
                 # What got resumed is now actually running; re-read rather than
                 # let the per-session loop below judge against the pre-resume
@@ -230,6 +252,16 @@ class SessionMonitor:
             await self._settle(row, snapshot)
 
         return len(group)
+
+    def _resume_due(self, container: str) -> bool:
+        """Whether enough time has passed to try resuming this container again.
+
+        A first sight of an empty container always tries immediately — a
+        reboot should be invisible, not delayed ten minutes. It is only the
+        retry after a failure that waits.
+        """
+        last = self._resume_attempted.get(container)
+        return last is None or time.monotonic() - last >= RESUME_RETRY_INTERVAL_SECONDS
 
     async def _auto_resume(
         self, conn_ssh: Any, container: str, group: list[dict[str, Any]]
@@ -500,7 +532,7 @@ class SessionMonitor:
 
         dead: list[str] = []
         for sub in subscriptions:
-            alive = await push.send(
+            result = await push.send(
                 push.Subscription(
                     endpoint=sub["endpoint"], p256dh=sub["p256dh"], auth=sub["auth"]
                 ),
@@ -517,8 +549,14 @@ class SessionMonitor:
                 # Collapse repeats for the same project rather than stacking.
                 tag=f"moonphase-{row['id']}",
             )
-            if not alive:
+            if not result.alive:
                 dead.append(sub["endpoint"])
+            elif not result.delivered:
+                log.warning(
+                    "push to a live subscription failed for project %s: %s",
+                    row["id"],
+                    result.error,
+                )
 
         if dead:
             async with service_session() as conn:

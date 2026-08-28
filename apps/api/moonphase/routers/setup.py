@@ -48,6 +48,29 @@ def host_of(url: str) -> str:
     return host.split("/")[0].split(":")[0].strip()
 
 
+async def _require_instance_admin(principal: Principal) -> None:
+    """Defense in depth alongside the `auth_methods_write` RLS policy.
+
+    That policy is the real gate — every org's owner is `owner`/`admin` of
+    their own personal org from the moment they sign up, which is not the
+    same thing as administering this instance, and a prior version of this
+    policy conflated the two. Checking again here means a future regression
+    in the DB policy fails closed at this layer too, rather than silently
+    reopening "any signed-in user can rewrite the instance's SMTP relay and
+    OAuth secrets."
+    """
+    async with service_session() as conn:
+        found = await conn.execute(
+            text("select 1 from instance_admins where user_id = cast(:id as uuid)"),
+            {"id": str(principal.user_id)},
+        )
+    if found.first() is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Only an administrator of this Moonphase can change how people sign in.",
+        )
+
+
 async def _state() -> dict:
     """Whether anyone has signed up yet, and what the instance is set to.
 
@@ -81,10 +104,17 @@ async def state() -> SetupStateOut:
     screen or a sign-in form, and before the first account exists there is
     nobody who could authenticate. It discloses only that — not the address,
     not anything configured.
+
+    Driven by `setup_completed_at`, not `auth.users` count. Count is not
+    sticky: complete() already guards against re-claiming an instance once
+    it has an administrator, but that guard means nothing if this screen —
+    which needs no authentication at all — reopens itself the moment
+    `auth.users` is ever empty for any other reason. `setup_completed_at` is
+    set once and never cleared, so a completed instance stays completed.
     """
     found = await _state()
     return SetupStateOut(
-        needs_setup=found["users"] == 0,
+        needs_setup=found["completed_at"] is None,
         signup_open=found["signup_open"],
     )
 
@@ -149,6 +179,11 @@ async def complete(
     log.info(
         "setup completed: public_url=%s signup_open=%s", row.public_url, row.signup_open
     )
+    # Otherwise GoTrue keeps its bootstrap defaults — the site URL, the
+    # signup-allowed OTP/OAuth endpoints — until someone separately saves the
+    # "ways to sign in" screen, even though this is the point where an
+    # administrator has just decided both.
+    await publish_auth_config()
     return SetupStateOut(
         needs_setup=False,
         signup_open=bool(row.signup_open),
@@ -232,6 +267,7 @@ def _methods_from(row: dict) -> authconfig.AuthMethods:
         microsoft_client_secret=row.get("microsoft_client_secret") or "",
         microsoft_tenant=row.get("microsoft_tenant") or "common",
         public_url=row.get("public_url") or "",
+        signup_open=bool(row.get("signup_open", True)),
     )
 
 
@@ -323,6 +359,7 @@ async def write_methods(
     payload: AuthMethodsIn, principal: Principal = Depends(current_principal)
 ) -> AuthMethodsOut:
     """Change how people sign in, and hand the result to the auth service."""
+    await _require_instance_admin(principal)
     async with user_session(principal.claims) as conn:
         try:
             await queries.set_auth_methods(

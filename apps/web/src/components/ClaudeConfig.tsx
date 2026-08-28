@@ -491,9 +491,10 @@ export function McpEditor({
   onConnect,
 }: SettingsProps & {
   /**
-   * Relay this server's OAuth through a running session. Omitted at the org
-   * and project scope, where there is no specific session to run it in —
-   * offered only from a session's own Configure dialog.
+   * Relay this server's OAuth through a running session. At session scope
+   * that's this specific session; at project or org scope there is no one
+   * session in hand, so the backend picks any one of the caller's own
+   * running sessions in the right place to carry it.
    */
   onConnect?: (serverName: string) => void
 }) {

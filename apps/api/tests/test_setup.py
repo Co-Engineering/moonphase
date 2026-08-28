@@ -115,6 +115,58 @@ def test_the_rendered_config_is_shell_safe() -> None:
     assert "'it'\\''s; rm -rf /'" in rendered
 
 
+def test_closed_signup_is_carried_all_the_way_to_gotrue_itself() -> None:
+    """Caddy's forward_auth only gates /auth/v1/signup, per request. GoTrue's
+    own switch is what also closes /otp and any other implicit-signup path —
+    and unlike the per-request check, it needs the file rewritten and the
+    container restarted before it takes effect at all."""
+    assert "GOTRUE_DISABLE_SIGNUP='false'" in render(AuthMethods(signup_open=True))
+    assert "GOTRUE_DISABLE_SIGNUP='true'" in render(AuthMethods(signup_open=False))
+
+
+def test_signup_open_defaults_to_open_in_code_same_as_the_column() -> None:
+    """`instance_settings.signup_open` defaults open too (closed-by-default is
+    the setup screen's own choice, made explicit at setup time) — mismatched
+    defaults here would make an unconfigured field render as the wrong side."""
+    assert AuthMethods().signup_open is True
+
+
+def test_the_row_that_feeds_render_carries_signup_open() -> None:
+    """`_methods_from` is the only place a database row becomes what `render`
+    reads, so a column missing from that translation renders as if it were
+    never there — this used to be true of signup_open specifically."""
+    from moonphase.routers.setup import _methods_from
+
+    assert _methods_from({"signup_open": False}).signup_open is False
+    assert _methods_from({"signup_open": True}).signup_open is True
+    # Absent, as a row from before this column mattered here would be: open,
+    # matching the column's own default rather than silently closing signup.
+    assert _methods_from({}).signup_open is True
+
+
+def test_finishing_setup_publishes_the_gate_it_just_set() -> None:
+    """Otherwise an administrator closes signup during setup, the screen says
+    saved, and GoTrue answers requests with whatever it booted with until
+    someone unrelated later saves the sign-in methods screen."""
+    import inspect
+
+    from moonphase.routers import setup as setup_router
+
+    source = inspect.getsource(setup_router.complete)
+    assert "publish_auth_config" in source
+
+
+def test_changing_instance_settings_publishes_the_gate_too() -> None:
+    """The settings screen is the only place signup_open changes after first
+    run, and is exactly where this was missing."""
+    import inspect
+
+    from moonphase.routers import people
+
+    source = inspect.getsource(people.write_settings)
+    assert "publish_auth_config" in source
+
+
 def test_autoconfirm_follows_whether_mail_can_be_sent() -> None:
     """Confirmation on an instance with no SMTP locks out password signup,
     because GoTrue insists on confirming an address it cannot email."""
@@ -146,6 +198,49 @@ def test_the_first_account_is_possible_even_with_signup_closed() -> None:
 
     assert 'found["users"] == 0' in source
     assert "signup_open" in source
+
+
+async def test_needs_setup_survives_auth_users_emptying_out(monkeypatch) -> None:
+    """`auth.users` is not sticky: it can read zero for reasons that have
+    nothing to do with whether this instance was ever set up (an account
+    later removed, a direct DB change). `complete()` already refuses to
+    re-claim an instance that has an administrator, but that guard means
+    nothing if this unauthenticated screen reopens itself whenever the count
+    happens to be zero. setup_completed_at is set once and never cleared, so
+    it has to be what decides — not the count."""
+    from moonphase.routers import setup as setup_router
+
+    async def completed_but_userless() -> dict:
+        return {
+            "users": 0,
+            "public_url": "https://moonphase.example.com",
+            "signup_open": False,
+            "completed_at": "2026-01-01T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr(setup_router, "_state", completed_but_userless)
+
+    result = await setup_router.state()
+
+    assert result.needs_setup is False
+
+
+async def test_needs_setup_is_true_before_setup_has_ever_completed(monkeypatch) -> None:
+    from moonphase.routers import setup as setup_router
+
+    async def fresh_install() -> dict:
+        return {
+            "users": 0,
+            "public_url": None,
+            "signup_open": True,
+            "completed_at": None,
+        }
+
+    monkeypatch.setattr(setup_router, "_state", fresh_install)
+
+    result = await setup_router.state()
+
+    assert result.needs_setup is True
 
 
 def test_an_ip_address_is_not_a_domain() -> None:
@@ -251,6 +346,25 @@ def test_administering_the_instance_is_not_the_same_as_owning_an_org() -> None:
     # which is where the "not the last one" rule lives.
     assert "grant select on public.instance_admins to authenticated" in migration
     assert "grant insert" not in migration
+
+
+def test_auth_methods_write_requires_instance_administration_too() -> None:
+    """`auth_methods_write` was the sibling of `instance_settings_write` and
+    had the exact same bug — 'owner'/'admin' of any organization, which every
+    account is of its own personal one — but the earlier fix was never
+    ported to it. Any signed-in user could repoint the instance's SMTP relay
+    or OAuth client secrets, or turn password auth off instance-wide.
+    """
+    migration = (
+        Path(__file__).resolve().parents[3]
+        / "supabase/migrations/20260827190000_fix_auth_methods_write_policy.sql"
+    ).read_text()
+
+    assert "drop policy if exists auth_methods_write" in migration
+    assert "from public.instance_admins a where a.user_id = auth.uid()" in migration
+    # The org-role check this replaces must not still be present anywhere in
+    # the new policy body — a stray `or` would silently keep the old hole.
+    assert "org_members" not in migration
 
 
 def test_an_existing_install_keeps_an_administrator() -> None:
@@ -617,6 +731,27 @@ def test_the_auth_volume_is_writable_by_the_user_that_writes_it() -> None:
     assert dockerfile.index("chown moonphase:moonphase") < dockerfile.index(
         "USER moonphase"
     )
+
+
+def test_gotrue_uri_allow_list_does_not_default_to_everywhere() -> None:
+    """Until the "ways to sign in" screen is saved once, the API's own
+    dynamic rewrite of this value (authconfig.render) has never run, and
+    GoTrue boots with whatever docker-compose.yml gave it directly — `*`
+    there means every redirect_to on a magic-link or OAuth callback is
+    accepted, on a fresh install, before anyone has configured anything.
+    """
+    import yaml
+
+    compose = yaml.safe_load(
+        (Path(__file__).resolve().parents[3] / "docker-compose.yml").read_text()
+    )
+
+    allow_list = compose["services"]["auth"]["environment"]["GOTRUE_URI_ALLOW_LIST"]
+    assert allow_list.strip() != "*"
+    assert not allow_list.strip().endswith(":-*}")
+    # Scoped to the same fallback address the rest of the stack already uses
+    # when MOONPHASE_PUBLIC_URL is unset, not to everywhere.
+    assert "MOONPHASE_PUBLIC_URL" in allow_list
 
 
 def test_an_existing_install_has_its_volume_repaired() -> None:

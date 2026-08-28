@@ -9,6 +9,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .push import InvalidPushEndpoint
+from .push import validate_endpoint as _validate_push_endpoint
+
 SshAuthMode = Literal["password_bootstrap", "managed_key", "provided_key"]
 HarnessKindStr = Literal["claude_code", "opencode", "pydantic_ai"]
 HarnessAuthModeStr = Literal["oauth", "api_key"]
@@ -61,12 +64,33 @@ class ServerCreate(BaseModel):
 
     auto_install_docker: bool = True
 
+    # Required to add a server at all when MOONPHASE_SSH_TRUST_ON_FIRST_USE is
+    # disabled — otherwise there is nothing for the first connection's host
+    # key to be checked against. Optional otherwise: the connection pins
+    # whatever it first sees, same as before this existed.
+    expected_host_key_fingerprint: str | None = Field(default=None, max_length=128)
+
     @field_validator("host")
     @classmethod
     def _clean_host(cls, v: str) -> str:
         v = v.strip()
         if not v or " " in v:
             raise ValueError("Host must be a hostname or IP address with no spaces.")
+        return v
+
+    @field_validator("expected_host_key_fingerprint")
+    @classmethod
+    def _clean_fingerprint(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        if not v.startswith("SHA256:"):
+            raise ValueError(
+                "Expected a SHA256 host key fingerprint, the form `ssh-keyscan` "
+                "and most SSH clients print (starting with 'SHA256:')."
+            )
         return v
 
     def validate_credentials(self) -> None:
@@ -200,6 +224,17 @@ class PushSubscriptionIn(BaseModel):
     p256dh: str = Field(min_length=8, max_length=512)
     auth: str = Field(min_length=8, max_length=512)
     user_agent: str | None = None
+
+    @field_validator("endpoint")
+    @classmethod
+    def _real_push_service(cls, v: str) -> str:
+        # Otherwise this is a way to make the server POST to any URL of an
+        # authenticated caller's choosing — see push.validate_endpoint.
+        try:
+            _validate_push_endpoint(v)
+        except InvalidPushEndpoint as exc:
+            raise ValueError(str(exc)) from exc
+        return v
 
 
 class PushStatusOut(BaseModel):

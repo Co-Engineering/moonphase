@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { GitHubRepo } from '../lib/api'
 
 interface Props {
@@ -36,11 +36,7 @@ export function RepoPicker({ value, onChange, repos, loading, error }: Props) {
     bottom?: number
   } | null>(null)
 
-  useLayoutEffect(() => {
-    if (!open) {
-      setPlace(null)
-      return
-    }
+  const reposition = useCallback(() => {
     const anchor = field.current?.getBoundingClientRect()
     if (!anchor) return
     const gap = 8
@@ -55,20 +51,36 @@ export function RepoPicker({ value, onChange, repos, loading, error }: Props) {
         ? { bottom: window.innerHeight - anchor.top + 4 }
         : { top: anchor.bottom + 4 }),
     })
-  }, [open, query])
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPlace(null)
+      return
+    }
+    reposition()
+  }, [open, query, reposition])
 
   useEffect(() => {
     if (!open) return
-    // Fixed to the viewport, so scrolling the dialog would leave the list
-    // beside a field that has moved.
-    const leave = () => setOpen(false)
-    window.addEventListener('scroll', leave, true)
-    window.addEventListener('resize', leave)
+    // Fixed to the viewport, so it has to track the field rather than sit
+    // where it was measured — both a scroll and a resize can move or resize
+    // the field without the list following on its own.
+    //
+    // This used to close the list outright instead of tracking it, which
+    // broke picking a repo on a phone entirely: focusing this field (the
+    // last one in a dialog that scrolls) makes the browser scroll it above
+    // the keyboard, and the keyboard opening resizes the viewport — both
+    // fire right as the picker opens, closing it before a single character
+    // could be typed. The field's own displayed value depends on `open`, so
+    // from there every keystroke looked like it did nothing.
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('resize', reposition)
     return () => {
-      window.removeEventListener('scroll', leave, true)
-      window.removeEventListener('resize', leave)
+      window.removeEventListener('scroll', reposition, true)
+      window.removeEventListener('resize', reposition)
     }
-  }, [open])
+  }, [open, reposition])
 
   useEffect(() => {
     if (!open) return

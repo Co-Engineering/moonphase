@@ -34,7 +34,7 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
 from .. import runtime, socks
 from ..auth import Principal, websocket_principal
-from ..runtime import CAN_OBSERVE, Forbidden, NotFound
+from ..runtime import CAN_CONTROL, Forbidden, NotFound
 
 log = logging.getLogger(__name__)
 
@@ -134,8 +134,10 @@ async def preview_socks(
     await websocket.accept()
 
     try:
+        # This is a live, unauthenticated network path *as the container* —
+        # a read-only ("observe") share must not get one, only CAN_CONTROL.
         ctx = await runtime.load_project_context(
-            principal.claims, project_id, require=CAN_OBSERVE
+            principal.claims, project_id, require=CAN_CONTROL
         )
     except (NotFound, Forbidden):
         # 1008 is "policy violation", which is the closest thing WebSocket has

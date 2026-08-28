@@ -182,6 +182,23 @@ async def test_an_unreachable_auth_service_is_a_warning_without_a_secret(
     assert "JWKS" in finding.fix
 
 
+async def test_the_well_known_local_dev_jwt_secret_is_refused(monkeypatch) -> None:
+    """`supabase start` prints this exact string on every machine — a
+    deployment still using it can have its auth tokens forged by anyone who
+    has read the Supabase CLI source."""
+    _set(
+        monkeypatch,
+        SUPABASE_URL="http://127.0.0.1:54721",
+        SUPABASE_JWT_SECRET=preflight.KNOWN_DEFAULT_JWT_SECRET,
+    )
+    finding = await preflight.check_auth()
+
+    assert finding is not None
+    assert finding.fatal is True
+    assert "SUPABASE_JWT_SECRET" in finding.summary
+    assert "openssl rand" in finding.fix
+
+
 # --- reporting ----------------------------------------------------------------
 
 

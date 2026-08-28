@@ -1,6 +1,6 @@
 {
   "name": "@moonphase/desktop",
-  "version": "0.8.2",
+  "version": "0.9.2",
   "private": true,
   "description": "Moonphase desktop app",
   "main": "dist/main.js",
@@ -78,8 +78,9 @@
         }
       ],
       "category": "public.app-category.developer-tools",
-      "hardenedRuntime": false,
-      "gatekeeperAssess": false
+      "hardenedRuntime": true,
+      "entitlements": "packaging/entitlements.mac.plist",
+      "entitlementsInherit": "packaging/entitlements.mac.plist"
     },
     "win": {
       "target": [

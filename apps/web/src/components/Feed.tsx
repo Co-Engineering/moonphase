@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, feedUrl, type DiffLine, type FeedEvent, type Prompt } from '../lib/api'
+import { Markdown } from './Markdown'
+
+// Mirrors the backend's own limit (feed.py's _MAX_UPLOAD_BYTES) so an
+// oversized file is refused here — instantly, before it ever leaves the
+// device — rather than after however long a phone upload takes to fail.
+const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024
+const MAX_ATTACHMENT_MESSAGE = 'Images are limited to 15 MB.'
 
 interface Attachment {
   id: string
@@ -70,6 +77,10 @@ export function Feed({
   const [activity, setActivity] = useState('unknown')
   const [available, setAvailable] = useState(true)
   const [live, setLive] = useState(false)
+  // Briefly true right after falling back to polling, so the change is
+  // visible rather than only ever knowable from a hover title — which is
+  // never available on the phone this view is mainly built for.
+  const [justWentQuiet, setJustWentQuiet] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState('')
   const [sending, setSending] = useState(false)
@@ -100,16 +111,20 @@ export function Feed({
     (files: Iterable<File>) => {
       const images = Array.from(files).filter((f) => f.type.startsWith('image/'))
       if (!images.length) return
-      const next: Attachment[] = images.map((file) => ({
-        id: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2)}`,
-        file,
-        previewUrl: URL.createObjectURL(file),
-        path: null,
-        uploading: true,
-        error: null,
-      }))
+      const next: Attachment[] = images.map((file) => {
+        const tooLarge = file.size > MAX_ATTACHMENT_BYTES
+        return {
+          id: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2)}`,
+          file,
+          previewUrl: URL.createObjectURL(file),
+          path: null,
+          uploading: !tooLarge,
+          error: tooLarge ? MAX_ATTACHMENT_MESSAGE : null,
+        }
+      })
       setAttachments((current) => [...current, ...next])
       for (const attachment of next) {
+        if (attachment.error) continue // too large — nothing to upload
         api
           .uploadFeedImage(projectId, attachment.file, session)
           .then((res) =>
@@ -161,6 +176,7 @@ export function Feed({
 
     let pollTimer: number | undefined
     let reconnectTimer: number | undefined
+    let quietTimer: number | undefined
     let attempts = 0
     let cursor = ''
 
@@ -171,6 +187,9 @@ export function Feed({
      */
     const startPolling = () => {
       setLive(false)
+      setJustWentQuiet(true)
+      window.clearTimeout(quietTimer)
+      quietTimer = window.setTimeout(() => setJustWentQuiet(false), 4000)
       const tick = async () => {
         if (disposedRef.current) return
         try {
@@ -254,6 +273,7 @@ export function Feed({
       disposedRef.current = true
       window.clearTimeout(pollTimer)
       window.clearTimeout(reconnectTimer)
+      window.clearTimeout(quietTimer)
       socketRef.current?.close()
       socketRef.current = null
     }
@@ -493,10 +513,21 @@ export function Feed({
           >
             Send
           </button>
-          <span
-            className={`feed-live${live ? ' on' : ''}`}
-            title={live ? 'Streaming live' : 'Polling — the live connection is unavailable'}
-          />
+          <span className="feed-live-wrap" role="status" aria-live="polite">
+            <span
+              className={`feed-live${live ? ' on' : ''}`}
+              aria-hidden="true"
+              title={live ? 'Streaming live' : 'Polling — the live connection is unavailable'}
+            />
+            <span className="sr-only">
+              {live ? 'Live' : 'Not live — checking for updates every few seconds'}
+            </span>
+            {justWentQuiet && (
+              <span className="feed-live-notice" aria-hidden="true">
+                Live updates unavailable
+              </span>
+            )}
+          </span>
         </div>
       </form>
     </div>
@@ -681,10 +712,15 @@ export function FeedRow({ event }: { event: FeedEvent }) {
     return <Thinking text={event.text} dim={dim} />
   }
 
+  // Your own typed message is shown exactly as typed — it is input, not a
+  // reply, and re-interpreting a stray `*` or `_` in it as formatting would
+  // make it look different from what was actually sent. The agent's side is
+  // real markdown and reads far better rendered as such.
+  const isUser = event.kind === 'user'
   return (
     <div className={`feed-row feed-${event.kind}${dim}`}>
-      <div className="feed-who">{event.kind === 'user' ? 'You' : 'Claude'}</div>
-      <div className="feed-body">{event.text}</div>
+      <div className="feed-who">{isUser ? 'You' : 'Claude'}</div>
+      <div className="feed-body">{isUser ? event.text : <Markdown text={event.text} />}</div>
     </div>
   )
 }

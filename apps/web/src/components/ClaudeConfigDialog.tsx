@@ -85,6 +85,31 @@ export function ClaudeConfigDialog({
     }
   }
 
+  /**
+   * The relay looks the server up in the *saved* config — `claude mcp login`
+   * runs inside the container against whatever `sessions.ensure_session`
+   * last wrote there from the database, not whatever is still sitting in
+   * this dialog's own state. Typing a new server and pressing Connect before
+   * Save used to relay against a server that, as far as the container was
+   * concerned, did not exist yet — no authorization link ever showed up, and
+   * the eventual timeout blamed the wrong thing ("may not need OAuth at
+   * all"). Saving first closes that gap.
+   */
+  const onConnectMcp = mcpConnect
+    ? async (name: string) => {
+        setBusy(true)
+        setError(null)
+        try {
+          await save(value)
+          setConnecting(name)
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err))
+        } finally {
+          setBusy(false)
+        }
+      }
+    : undefined
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="card modal modal--wide" onClick={(e) => e.stopPropagation()}>
@@ -101,7 +126,7 @@ export function ClaudeConfigDialog({
             value={value}
             onChange={setValue}
             claudeMdHint="Added to CLAUDE.md for this scope, alongside anything set above it"
-            onConnectMcp={mcpConnect ? (name) => setConnecting(name) : undefined}
+            onConnectMcp={onConnectMcp}
           />
         )}
 

@@ -9,10 +9,12 @@ time, so a reboot is invisible rather than an errand per session.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import pytest
 
+from moonphase import monitor as monitor_module
 from moonphase.monitor import SessionMonitor
 from moonphase.profile import WorkspaceProfile
 
@@ -222,3 +224,77 @@ async def test_full_recovery_clears_the_status_detail(monitor, monkeypatch) -> N
 
     assert recorded["status"] == "running"
     assert recorded["detail"] is None
+
+
+# ---------------------------------------------------------------------------
+# Not retrying forever
+#
+# The condition that triggers auto-resume — running container, session rows,
+# no panes — stays true for precisely the sessions that failed to come back.
+# Without a backoff the monitor retries them every sweep: at a 20-second
+# interval, one session whose owner revoked their credential becomes a few
+# thousand pointless SSH round-trips a day, each one logged as a fresh
+# failure.
+# ---------------------------------------------------------------------------
+
+
+def test_a_failed_resume_is_not_retried_on_the_very_next_sweep(monitor) -> None:
+    assert monitor._resume_due("c-alpha") is True
+
+    monitor._resume_attempted["c-alpha"] = time.monotonic()
+    assert monitor._resume_due("c-alpha") is False
+
+
+def test_the_backoff_expires(monitor) -> None:
+    monitor._resume_attempted["c-alpha"] = (
+        time.monotonic() - monitor_module.RESUME_RETRY_INTERVAL_SECONDS - 1
+    )
+    assert monitor._resume_due("c-alpha") is True
+
+
+def test_a_container_that_never_failed_resumes_immediately(monitor) -> None:
+    """A reboot has to be invisible, so a first attempt never waits."""
+    assert monitor._resume_due("never-seen-before") is True
+
+
+async def test_a_clean_resume_leaves_the_next_reboot_immediate(
+    monitor, monkeypatch
+) -> None:
+    """Backoff is earned by failure, and must not outlive it.
+
+    A container that failed once, waited out the backoff, then came back
+    cleanly must not carry the old failure's clock into the next reboot.
+    """
+    monitor._resume_attempted["c-alpha"] = (
+        time.monotonic() - monitor_module.RESUME_RETRY_INTERVAL_SECONDS - 1
+    )
+
+    async def fake_reconcile(_self, _row, *, status, detail):
+        return None
+
+    async def fake_auto_resume(_self, _conn, _container, _group):
+        return (2, 0)
+
+    monkeypatch.setattr(SessionMonitor, "_reconcile_project", fake_reconcile)
+    monkeypatch.setattr(SessionMonitor, "_auto_resume", fake_auto_resume)
+
+    await monitor._check_container(object(), "c-alpha", [_row("one")])
+
+    assert monitor._resume_due("c-alpha") is True
+
+
+async def test_a_failed_resume_starts_the_clock_through_a_real_sweep(
+    monitor, monkeypatch
+) -> None:
+    async def fake_reconcile(_self, _row, *, status, detail):
+        return None
+
+    async def fake_auto_resume(_self, _conn, _container, _group):
+        return (0, 1)
+
+    monkeypatch.setattr(SessionMonitor, "_reconcile_project", fake_reconcile)
+    monkeypatch.setattr(SessionMonitor, "_auto_resume", fake_auto_resume)
+
+    await monitor._check_container(object(), "c-alpha", [_row("one")])
+
+    assert monitor._resume_due("c-alpha") is False

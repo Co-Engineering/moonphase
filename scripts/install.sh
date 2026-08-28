@@ -176,7 +176,15 @@ fi
 SECRET_KEY=$(existing MOONPHASE_SECRET_KEY)
 [ -n "${SECRET_KEY:-}" ] || SECRET_KEY=$(fernet_key)
 
+# `supabase start` prints this exact string on every machine — it ships in the
+# CLI itself, not generated per-project. Treating it as "already set" would
+# carry a publicly known secret straight into a real deployment.
+KNOWN_DEFAULT_JWT_SECRET="super-secret-jwt-token-with-at-least-32-characters-long"
 JWT_SECRET=$(existing SUPABASE_JWT_SECRET)
+if [ "${JWT_SECRET:-}" = "$KNOWN_DEFAULT_JWT_SECRET" ]; then
+  warn "SUPABASE_JWT_SECRET in .env is the well-known supabase-start default; generating a real one"
+  JWT_SECRET=""
+fi
 [ -n "${JWT_SECRET:-}" ] || JWT_SECRET=$(openssl rand -hex 32)
 
 PG_PASSWORD=$(existing POSTGRES_PASSWORD)
