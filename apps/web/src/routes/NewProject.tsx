@@ -50,6 +50,7 @@ export function NewProject({
   const [harness, setHarness] = useState(usable[0]?.kind ?? '')
   const [environment, setEnvironment] = useState(environments[0]?.key ?? 'debian')
   const [repoUrl, setRepoUrl] = useState('')
+  const [dockerAccess, setDockerAccess] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState<string | null>(null)
@@ -61,6 +62,16 @@ export function NewProject({
   const [repos, setRepos] = useState<GitHubRepo[] | null>(null)
   const [reposLoading, setReposLoading] = useState(false)
   const [reposError, setReposError] = useState<string | null>(null)
+
+  const selectedServer = online.find((s) => s.id === serverId)
+  const sysboxAvailable = !!selectedServer?.sysbox_version
+
+  // Guards against submitting a combination the backend would 422 on: the
+  // server picker and this checkbox are independent controls, and switching
+  // to a server without Sysbox must not silently carry the toggle over.
+  useEffect(() => {
+    if (!sysboxAvailable) setDockerAccess(false)
+  }, [sysboxAvailable])
 
   useEffect(() => {
     if (!profile?.github_connected) return
@@ -124,6 +135,7 @@ export function NewProject({
         harness: harness as HarnessKind,
         environment,
         repo_url: repoUrl.trim() || null,
+        docker_access: dockerAccess,
       })
       setProgress(created.status_detail ?? null)
 
@@ -270,6 +282,25 @@ export function NewProject({
             {profile?.github_connected
               ? "Pick a repo you're connected to, or choose \"Other\" to paste a URL for a public one you don't own."
               : 'Private repositories work once GitHub is connected in Settings.'}
+          </p>
+
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              type="checkbox"
+              checked={dockerAccess}
+              disabled={!sysboxAvailable}
+              onChange={(e) => setDockerAccess(e.target.checked)}
+              style={{ width: 'auto' }}
+            />
+            <span style={{ margin: 0 }}>Docker access (runs under Sysbox)</span>
+          </label>
+          <p className="hint" style={{ marginTop: -6 }}>
+            {sysboxAvailable
+              ? 'The container starts under Sysbox so it can safely run its own Docker ' +
+                "daemon. You still install Docker yourself inside the project once it's " +
+                'running.'
+              : 'This server does not have Sysbox installed. Install it from the server ' +
+                'page first.'}
           </p>
 
           <div className="actions">

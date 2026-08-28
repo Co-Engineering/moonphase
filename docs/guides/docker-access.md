@@ -42,10 +42,15 @@ An incompatible or already-covered server says so — installing Sysbox never
 fails deep into a broken state, and never affects whether the server itself
 is considered online.
 
-**2. Turn on Docker access for a project.** *(Coming in a follow-up — this
-half is not available yet.)* Once it lands: a checkbox at project creation,
-available only on a server that has Sysbox installed, starts that project's
-container under `sysbox-runc` instead of the default runtime.
+**2. Turn on Docker access for a project.** A checkbox at project creation,
+**Docker access (runs under Sysbox)**, available only when the server you
+picked has Sysbox installed — disabled with an explanation otherwise, so
+there is always a way to see why and what to do about it. It starts that
+project's container under `sysbox-runc` instead of the default runtime.
+
+It can only be set when the project is created, the same as its environment
+— changing it means recreating the container, which Moonphase does not
+currently offer a way to do without losing the workspace.
 
 ## What it does not do
 

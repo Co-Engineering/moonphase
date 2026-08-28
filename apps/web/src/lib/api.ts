@@ -150,6 +150,8 @@ export interface Project {
   access: Access
   shared: boolean
   share_count: number
+  /** Runs under Sysbox, so it can safely install and run its own Docker. */
+  docker_access: boolean
 }
 
 export interface Session {
@@ -221,6 +223,7 @@ export interface CreateProjectInput {
   harness: HarnessKind
   environment: string
   repo_url?: string | null
+  docker_access?: boolean
 }
 
 export interface Environment {

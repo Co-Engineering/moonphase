@@ -356,6 +356,7 @@ PROJECT_COLUMNS = """
     p.id, p.org_id, p.server_id, p.name, p.slug, p.harness, p.environment, p.repo_url,
     p.container_name, p.container_id, p.workspace_volume, p.home_volume,
     p.status, p.status_detail, p.preview_port, p.preview_url, p.created_at,
+    p.docker_access,
     -- Scoped to the caller's own sessions. In a shared project "waiting for
     -- you" must mean you: someone else's agent needing its owner is not a
     -- thing you can act on, and a sidebar dot you cannot clear is noise.
@@ -599,6 +600,7 @@ async def insert_project(
     home_volume: str,
     preview_port: int | None,
     created_by: str,
+    docker_access: bool = False,
 ) -> dict[str, Any]:
     result = await conn.execute(
         text(
@@ -606,15 +608,15 @@ async def insert_project(
             insert into projects
               (org_id, server_id, name, slug, harness, environment, repo_url,
                container_name, workspace_volume, home_volume, preview_port,
-               status, created_by)
+               status, created_by, docker_access)
             values
               (:org_id, :server_id, :name, :slug, cast(:harness as harness_kind),
                :environment, :repo_url, :container_name, :workspace_volume,
-               :home_volume, :preview_port, 'creating', :created_by)
+               :home_volume, :preview_port, 'creating', :created_by, :docker_access)
             returning id, org_id, server_id, name, slug, harness, environment,
                       repo_url, container_name, container_id, workspace_volume,
                       home_volume, status, status_detail, preview_port,
-                      preview_url, created_at
+                      preview_url, created_at, docker_access
             """
         ),
         {
@@ -630,6 +632,7 @@ async def insert_project(
             "home_volume": home_volume,
             "preview_port": preview_port,
             "created_by": created_by,
+            "docker_access": docker_access,
         },
     )
     row = result.first()

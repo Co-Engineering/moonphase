@@ -152,6 +152,12 @@ class ProjectCreate(BaseModel):
     repo_url: str | None = None
     cpus: str | None = None
     memory: str | None = None
+    # Off by default. Starts the container under Sysbox instead of the
+    # default runtime, so the project can safely install and run its own
+    # Docker — see docs/guides/docker-access.md. Requires the chosen server
+    # to have Sysbox installed; checked in the route handler, not here,
+    # since that needs a database lookup.
+    docker_access: bool = False
 
     @field_validator("repo_url")
     @classmethod
@@ -182,6 +188,7 @@ class ProjectOut(ORMModel):
     preview_port: int | None
     preview_url: str | None
     created_at: datetime
+    docker_access: bool = False
     # What the agent is doing right now, so the sidebar means something.
     activity: str = "unknown"
     activity_detail: str | None = None
