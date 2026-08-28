@@ -21,6 +21,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import UUID
 
 import httpx
@@ -207,15 +208,43 @@ def _origin_allowed(websocket: WebSocket) -> bool:
 
     Only a browser ever sends `Origin` on a WebSocket handshake — it is the
     thing enforcing same-origin policy in the first place — so its absence
-    means a non-browser client, like the desktop app's preview relay, which
-    was never a participant in that model and has no origin to compare. A
-    browser that does send one, sending something other than a page this
-    deployment actually serves, is the CSRF-shaped case this exists to catch.
+    means a non-browser client, which was never a participant in that model
+    and has no origin to compare. A browser that does send one, naming a page
+    this deployment does not serve, is the CSRF-shaped case this exists to
+    catch.
+
+    Note what this is layered on top of: a socket is authenticated by a
+    ticket minted over a request carrying a bearer token in a header, or by
+    that token itself. Neither is ambient the way a cookie is — the token
+    lives in the frontend's own origin-scoped storage — so a cross-site page
+    has nothing to send. This check is a second lock on that door, which is
+    why the cases below can be answered generously without opening one.
     """
     origin = websocket.headers.get("origin")
     if not origin:
         return True
-    return origin in get_settings().cors_origins
+    if origin in get_settings().cors_origins:
+        return True
+
+    # Served by this very deployment. Everything behind the bundled proxy is
+    # one origin — that is the point of it, and why the phone client needs no
+    # CORS at all (docker/Caddyfile) — so the frontend's origin is whatever
+    # address the browser used to reach us. No configured list can know that
+    # in advance: it is the domain the operator chose, and until this check
+    # existed nothing ever had to be told it. Comparing against `Host` asks
+    # the question directly instead. A cross-site page cannot forge its way
+    # through: the browser sets both headers, `Origin` to the attacking page
+    # and `Host` to whoever is being attacked, and it is precisely when they
+    # differ that this is worth refusing.
+    host = websocket.headers.get("host")
+    if host and urlsplit(origin).netloc == host:
+        return True
+
+    # The desktop app loads the same frontend off a file:// page, and an
+    # opaque origin serialises to the string "null". Verified against
+    # Chromium rather than assumed, since getting it wrong locks that client
+    # out exactly as thoroughly as a wrong hostname locks out the web one.
+    return origin == "null"
 
 
 async def websocket_principal(
