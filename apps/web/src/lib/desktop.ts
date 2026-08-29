@@ -42,6 +42,7 @@ interface DesktopBridge {
   openSessionWindow: (
     request: SessionWindowRequest,
   ) => Promise<{ ok: boolean; error?: string }>
+  setApiHost: (host: string) => void
 }
 
 declare global {
@@ -51,6 +52,19 @@ declare global {
 }
 
 export const isDesktop = (): boolean => Boolean(window.moonphase?.desktop)
+
+/**
+ * Tell the shell which server this window is actually talking to.
+ *
+ * The main process has no fixed idea of "the" API host — this app connects
+ * to whatever self-hosted server was typed in — so it relies on this to know
+ * what a later openPreview's apiUrl should be checked against instead of
+ * trusted outright. Call once on load; changing host already reloads the
+ * page (see HostDialog), which calls this again on the way back up.
+ */
+export function announceApiHost(host: string): void {
+  window.moonphase?.setApiHost(host)
+}
 
 /**
  * Put one session in its own OS window.

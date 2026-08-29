@@ -39,7 +39,7 @@ import { Feed } from './components/Feed'
 import { Share } from './components/Share'
 import { Attention, waiting } from './components/Attention'
 import { SessionWindow } from './routes/SessionWindow'
-import { openSessionWindow, sessionWindowUrl } from './lib/desktop'
+import { announceApiHost, openSessionWindow, sessionWindowUrl } from './lib/desktop'
 import { HostDialog } from './components/HostDialog'
 import { RowMenu } from './components/RowMenu'
 import { RenameDialog } from './components/RenameDialog'
@@ -60,6 +60,11 @@ export function App() {
   const [needsSetup, setNeedsSetup] = useState<boolean | null>(null)
 
   const attach = useCallback((next: InstanceConfig) => {
+    // Only once the host has actually answered with a real config — the
+    // desktop shell uses this to know which apiUrl a later preview request
+    // is allowed to relay a bearer token to, so it should track a host that
+    // is confirmed to work, not every address a retry loop happened to try.
+    announceApiHost(currentHost())
     const supabase = configure(next)
     setConfig(next)
     void supabase.auth.getSession().then(({ data }) => {
