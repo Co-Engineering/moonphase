@@ -179,8 +179,9 @@ export function SignInMethods({ draft, onChange, redirectUri, domainMissing }: P
             placeholder="common"
           />
           <span className="hint">
-            <code>common</code> lets any Microsoft account in. A tenant ID restricts it to
-            your organization.
+            <code>common</code> lets any Microsoft account in, <code>organizations</code>{' '}
+            any work or school account, <code>consumers</code> personal accounts only.
+            A tenant ID or verified domain restricts it to one organization.
           </span>
         </label>
       </Provider>

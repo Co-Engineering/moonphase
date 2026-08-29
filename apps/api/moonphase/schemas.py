@@ -964,6 +964,28 @@ class AuthMethodsIn(BaseModel):
     microsoft_client_secret: str | None = None
     smtp_password: str | None = None
 
+    @field_validator("microsoft_tenant")
+    @classmethod
+    def _clean_tenant(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        # It becomes a path segment in the Azure authorization URL
+        # (authconfig.render), not a host — so it cannot redirect anyone
+        # anywhere else — but any of these characters means it was pasted as
+        # a URL or a path rather than the bare value Microsoft expects
+        # (`common`/`organizations`/`consumers`, a tenant ID, or a verified
+        # domain), and would otherwise fail with a confusing error from
+        # Microsoft's side instead of this one.
+        if any(c in v for c in " /?#\\"):
+            raise ValueError(
+                "Tenant should be `common`, `organizations`, `consumers`, a "
+                "tenant ID, or a verified domain — not a URL or a path."
+            )
+        return v
+
 
 class HealthOut(BaseModel):
     status: str
