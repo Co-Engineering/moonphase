@@ -339,7 +339,17 @@ async def bootstrap(
         # Sysbox registers itself as a Docker runtime.
         sysbox_info: sysbox_remote.SysboxInfo | None = None
         if install_sysbox and docker_info.installed and docker_info.usable_by_user:
-            sysbox_info = await ensure_sysbox(working_conn, ssh_user, auto_install=True)
+            try:
+                sysbox_info = await ensure_sysbox(working_conn, ssh_user, auto_install=True)
+            except SSHError as exc:
+                # "Never fatal" has to be enforced, not just intended.
+                # `install()` raises for no passwordless sudo, and every
+                # `.check()` inside it raises on a non-zero exit — a failed
+                # download, a broken apt state. Uncaught, that propagates out
+                # of bootstrap() and the caller marks the whole server
+                # `status="error"`, taking an online, Docker-healthy server
+                # offline because an optional extra could not be installed.
+                sysbox_info = sysbox_remote.SysboxInfo(installed=False, detail=str(exc))
 
     finally:
         conn.close()
@@ -382,6 +392,17 @@ async def bootstrap(
         generated_public_key=generated_public,
         password_can_be_discarded=auth_mode == "password_bootstrap",
         sysbox_checked=sysbox_info is not None,
-        sysbox_version=sysbox_info.version if sysbox_info else None,
+        # Only a Sysbox the *daemon* knows about counts as a version. The
+        # installed-but-unregistered state is real enough that probe() has a
+        # message for it, and recording a version for it would be worse than
+        # recording nothing: servers.sysbox_version is exactly what
+        # _require_sysbox_if_docker_access consults, so a project would be
+        # allowed to ask for --runtime=sysbox-runc and then fail to start
+        # with "unknown runtime" at provisioning time, well away from here.
+        sysbox_version=(
+            sysbox_info.version
+            if sysbox_info and sysbox_info.registered_as_runtime
+            else None
+        ),
         sysbox_status_detail=sysbox_info.detail if sysbox_info else None,
     )
