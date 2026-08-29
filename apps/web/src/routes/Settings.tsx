@@ -601,31 +601,50 @@ function HarnessSettingsTab({
     claude_md: profile.claude_md,
     mcp_json: profile.mcp_json,
     skills: profile.skills,
+    // Not editable here — Settings → Workspace already owns this at the org
+    // scope — but ClaudeConfigValue still needs a value to carry.
+    env_vars: profile.env_vars,
   })
   const [connecting, setConnecting] = useState<string | null>(null)
+  const [connectError, setConnectError] = useState<string | null>(null)
+
+  const currentProfile = () => ({
+    claude_settings_json: config.claude_settings_json,
+    claude_md: config.claude_md?.trim() || null,
+    mcp_json: config.mcp_json,
+    skills: config.skills,
+    env_vars: profile.env_vars,
+    git_user_name: profile.git_user_name,
+    git_user_email: profile.git_user_email,
+  })
 
   const save = () =>
-    run(
-      () =>
-        api.saveProfile({
-          claude_settings_json: config.claude_settings_json,
-          claude_md: config.claude_md?.trim() || null,
-          mcp_json: config.mcp_json,
-          skills: config.skills,
-          env_vars: profile.env_vars,
-          git_user_name: profile.git_user_name,
-          git_user_email: profile.git_user_email,
-        }),
-      'Saved. Restart a harness to pick it up.',
-    )
+    run(() => api.saveProfile(currentProfile()), 'Saved. Restart a harness to pick it up.')
+
+  // The relay looks the server up in the *saved* profile — `claude mcp
+  // login` runs against whatever was last written to the session's own
+  // ~/.claude.json, not whatever is still sitting in this tab's own state.
+  // Connecting before saving used to relay against a server the container
+  // did not know about yet, with a timeout that blamed the wrong thing.
+  const onConnectMcp = async (name: string) => {
+    setConnectError(null)
+    try {
+      await api.saveProfile(currentProfile())
+      setConnecting(name)
+    } catch (err) {
+      setConnectError(err instanceof Error ? err.message : String(err))
+    }
+  }
 
   return (
     <>
+      {connectError && <div className="banner error">{connectError}</div>}
       <ClaudeConfigFields
         value={config}
         onChange={setConfig}
         claudeMdHint="Written to ~/.claude/CLAUDE.md, so it applies to every project"
-        onConnectMcp={(name) => setConnecting(name)}
+        onConnectMcp={(name) => void onConnectMcp(name)}
+        showEnvVars={false}
       />
 
       <div className="actions">

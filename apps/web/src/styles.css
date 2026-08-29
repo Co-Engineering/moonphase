@@ -179,8 +179,10 @@ pre {
   padding: 10px 8px;
 }
 
-/* Three items in a 260px column: the email must give way, and the actions
-   must never wrap mid-word ("Sign / out" reads as broken). */
+/* Five actions plus an email in a 260px column: none of it fits on one row,
+   so the email gets a row to itself (truncated if it's long) and the
+   actions wrap onto their own row(s) below, rather than the two competing
+   for space on the same line. */
 .sidebar-foot {
   border-top: 1px solid var(--border);
   padding: 8px 10px;
@@ -191,14 +193,11 @@ pre {
   /* Wraps rather than pushing the last button out of the sidebar, which is
      how "Host" disappeared when Search was added beside it. */
   flex-wrap: wrap;
-  gap: 4px;
-}
-.sidebar-foot .who {
-  flex-basis: 100%;
+  gap: 4px 6px;
 }
 
 .sidebar-foot .who {
-  flex: 1;
+  flex: 0 0 100%;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

@@ -33,6 +33,9 @@ def _out(row: dict | None) -> ClaudeConfigOut:
             str(k): str(v)
             for k, v in parse_json_object(row.get("skills_json")).items()
         },
+        env_vars={
+            str(k): str(v) for k, v in parse_json_object(row.get("env_vars")).items()
+        },
     )
 
 
@@ -80,6 +83,7 @@ async def update_project_config(
                 claude_md=payload.claude_md,
                 mcp_json=payload.mcp_json,
                 skills=payload.skills,
+                env_vars=payload.env_vars,
             )
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -146,6 +150,7 @@ async def update_session_config(
                 claude_md=payload.claude_md,
                 mcp_json=payload.mcp_json,
                 skills=payload.skills,
+                env_vars=payload.env_vars,
             )
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc

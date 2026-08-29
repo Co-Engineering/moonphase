@@ -34,6 +34,83 @@ export const SHIFT_ENTER_SEQUENCE = '\x1b\r'
 export const HARNESS_CLIPBOARD_PASTE_TRIGGER = '\x16'
 
 /**
+ * Plain Ctrl+V — the paste gesture the browser never tells us about.
+ *
+ * xterm's own key handling turns Ctrl+letter into the matching control
+ * character and cancels the event (`evaluateKeyboardEvent`, the
+ * `ev.ctrlKey && !ev.shiftKey && !ev.altKey && !ev.metaKey` branch), so
+ * Ctrl+V arrives at the harness as 0x16 — the same byte as
+ * HARNESS_CLIPBOARD_PASTE_TRIGGER above — and no `paste` event is ever
+ * fired. That is the gap: an image on the clipboard only reached the
+ * harness through a right-click paste, Ctrl+Shift+V, or a drop, never
+ * through the most obvious gesture of all.
+ *
+ * Cmd+V is deliberately NOT included, and the distinction is not cosmetic.
+ * xterm claims only Cmd+A on macOS; every other Cmd chord falls through
+ * `if (!result.key) return true`, uncancelled, so the browser goes on to
+ * fire its own `paste` event — which the onPaste handler below already
+ * turns into a staged image. Intercepting Cmd+V here would call
+ * preventDefault on the one combo that does work, suppressing that event:
+ * an image would still arrive, but pasted *text* would stop arriving
+ * entirely and land as a stray 0x16 instead. Verified against xterm's
+ * sources rather than assumed, after a real Ctrl+V in a real browser was
+ * observed producing `onData 0x16` and no paste event at all.
+ */
+export function isPlainPasteCombo(
+  event: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'shiftKey' | 'altKey'>,
+): boolean {
+  return (
+    event.key.toLowerCase() === 'v' &&
+    event.ctrlKey &&
+    !event.metaKey &&
+    !event.shiftKey &&
+    !event.altKey
+  )
+}
+
+/**
+ * How long to wait on the browser for a clipboard image before giving up and
+ * letting the keystroke through as itself.
+ *
+ * `navigator.clipboard.read()` needs the `clipboard-read` permission, and
+ * until the viewer answers that prompt the promise simply stays pending —
+ * it does not reject. Awaiting it unbounded means Ctrl+V does *nothing at
+ * all* while a prompt the viewer may never have noticed sits open, because
+ * the keystroke was already swallowed by preventDefault. Half a second is
+ * far longer than a granted read takes and far shorter than a person takes
+ * to answer a prompt.
+ */
+export const CLIPBOARD_READ_TIMEOUT_MS = 500
+
+/**
+ * The clipboard's image, or null if there isn't one, we aren't allowed to
+ * look, or looking is taking long enough that it must be waiting on a
+ * person. Never rejects: every one of those is the same answer here — carry
+ * on and let Ctrl+V mean what it has always meant.
+ */
+export async function readClipboardImage(
+  clipboard: Clipboard | undefined = navigator.clipboard,
+  timeoutMs: number = CLIPBOARD_READ_TIMEOUT_MS,
+): Promise<Blob | null> {
+  if (!clipboard?.read) return null
+  const read = (async () => {
+    try {
+      for (const item of await clipboard.read()) {
+        const type = item.types.find((t) => t.startsWith('image/'))
+        if (type) return await item.getType(type)
+      }
+    } catch {
+      // Refused, unsupported, or nothing readable this way.
+    }
+    return null
+  })()
+  return Promise.race([
+    read,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+  ])
+}
+
+/**
  * What to do once a copy of the pasted image has (or hasn't) made it onto
  * the harness's side, split out from the paste handler because it has no
  * dependency on xterm/canvas/the socket and so can be tested directly rather
@@ -399,23 +476,6 @@ export function ProjectTerminal({
       }
     })
 
-    // xterm treats Enter and Shift+Enter identically — both would otherwise
-    // submit the line below. Intercepting here, ahead of that default
-    // handling, is what lets Shift+Enter send a distinguishable sequence
-    // instead (see handleShiftEnterKeydown for what the harness expects, and
-    // why this cannot just return `false` and stop there).
-    term.attachCustomKeyEventHandler((event) =>
-      handleShiftEnterKeydown(event, {
-        readOnly: readOnlyRef.current,
-        onRefused: refusedRef.current,
-        send: (bytes) => {
-          const socket = socketRef.current
-          if (socket?.readyState === WebSocket.OPEN) socket.send(bytes)
-          else flashDropped()
-        },
-      }),
-    )
-
     /**
      * The harness's own image paste shells out to the OS clipboard, which
      * this container does not have — see xclip-shim.sh for the other half of
@@ -435,10 +495,11 @@ export function ProjectTerminal({
      * bracketed-paste text, which is a different thing even when the text
      * happens to be empty, so it was never going to ask the harness to look.
      *
-     * Shared with drag-and-drop below: a file dropped onto the pane needs
-     * exactly the same staging trip, with no clipboard involved at all.
+     * Shared with drag-and-drop below, and with the explicit Ctrl+V handling
+     * further down: a dropped file, and an image read directly off the
+     * clipboard, both need exactly this same staging trip.
      */
-    const stageImage = (file: File, fallbackText: string) => {
+    const stageImage = (file: Blob, fallbackText: string) => {
       if (socketRef.current?.readyState !== WebSocket.OPEN) {
         // Nothing to encode toward — say so now rather than spending a
         // moment re-encoding a screenshot only to find there was nowhere to
@@ -519,6 +580,61 @@ export function ProjectTerminal({
     }
     host.addEventListener('dragover', onDragOver)
     host.addEventListener('drop', onDrop)
+
+    // xterm treats Enter and Shift+Enter identically — both would otherwise
+    // submit the line below. Intercepting here, ahead of that default
+    // handling, is what lets Shift+Enter send a distinguishable sequence
+    // instead (see handleShiftEnterKeydown for what the harness expects, and
+    // why this cannot just return `false` and stop there).
+    //
+    // Ctrl+V is intercepted for the same reason `onPaste` exists at all:
+    // nothing else asks the browser to read an image off the clipboard for
+    // this specific, otherwise-unremarkable keystroke (see
+    // isPlainPasteCombo for why, and for why Cmd+V is left alone — the
+    // browser does fire a paste event for that one, and onPaste below
+    // already handles it). Reading the clipboard here directly, rather than
+    // waiting on a paste event this combo never generates, is what makes
+    // the most obvious way to paste an image actually work, rather than
+    // only a right-click paste or a drop.
+    term.attachCustomKeyEventHandler((event) => {
+      const shiftEnterResult = handleShiftEnterKeydown(event, {
+        readOnly: readOnlyRef.current,
+        onRefused: refusedRef.current,
+        send: (bytes) => {
+          const socket = socketRef.current
+          if (socket?.readyState === WebSocket.OPEN) socket.send(bytes)
+          else flashDropped()
+        },
+      })
+      if (shiftEnterResult === false) return false
+      if (event.type !== 'keydown' || !isPlainPasteCombo(event)) return true
+
+      event.preventDefault()
+      event.stopPropagation()
+      if (readOnlyRef.current) {
+        refusedRef.current?.()
+        return false
+      }
+
+      const sendTrigger = () => {
+        const socket = socketRef.current
+        if (socket?.readyState === WebSocket.OPEN) {
+          socket.send(new TextEncoder().encode(HARNESS_CLIPBOARD_PASTE_TRIGGER))
+        } else {
+          flashDropped()
+        }
+      }
+
+      void (async () => {
+        const image = await readClipboardImage()
+        if (image) stageImage(image, '')
+        // Whether or not an image turned up, the harness still has to be
+        // told to look — staging alone puts the file where xclip-shim will
+        // find it, and this keystroke is what sends it looking.
+        else sendTrigger()
+      })()
+      return false
+    })
 
     // Fitting inside the observer callback resizes the element the observer
     // watches, which the browser reports as "loop completed with undelivered
