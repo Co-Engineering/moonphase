@@ -39,4 +39,10 @@ contextBridge.exposeInMainWorld('moonphase', {
     request: SessionWindowRequest,
   ): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('session:open', request),
+  // Announces which server this window is actually talking to, so the main
+  // process has something to check a later openPreview's apiUrl against
+  // instead of trusting whatever that one call happens to say. Sent once at
+  // startup and again on every host change (which already reloads the page),
+  // never awaited — there is nothing to hand back.
+  setApiHost: (host: string): void => ipcRenderer.send('host:set-current', host),
 })
