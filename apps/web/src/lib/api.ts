@@ -101,6 +101,8 @@ export interface Server {
   status_detail: string | null
   host_key_fingerprint: string | null
   docker_version: string | null
+  sysbox_version: string | null
+  sysbox_status_detail: string | null
   managed_public_key: string | null
   last_seen_at: string | null
   created_at: string
@@ -148,6 +150,8 @@ export interface Project {
   access: Access
   shared: boolean
   share_count: number
+  /** Runs under Sysbox, so it can safely install and run its own Docker. */
+  docker_access: boolean
 }
 
 export interface Session {
@@ -208,6 +212,7 @@ export interface CreateServerInput {
   private_key?: string
   passphrase?: string
   auto_install_docker: boolean
+  auto_install_sysbox?: boolean
   org_id?: string
   expected_host_key_fingerprint?: string
 }
@@ -218,6 +223,7 @@ export interface CreateProjectInput {
   harness: HarnessKind
   environment: string
   repo_url?: string | null
+  docker_access?: boolean
 }
 
 export interface Environment {
@@ -471,6 +477,12 @@ export const api = {
     }),
   bootstrapServer: (id: string) =>
     request<ServerBootstrap>(`/api/servers/${id}/bootstrap`, { method: 'POST' }),
+  // Kept distinct from bootstrapServer so the plain "Re-bootstrap" action
+  // never triggers a Sysbox install nobody asked for.
+  installSysbox: (id: string) =>
+    request<ServerBootstrap>(`/api/servers/${id}/bootstrap?install_sysbox=true`, {
+      method: 'POST',
+    }),
   testServer: (id: string) => request<Server>(`/api/servers/${id}/test`, { method: 'POST' }),
   /** The display name only — see the endpoint for why nothing else. */
   renameServer: (id: string, name: string) =>

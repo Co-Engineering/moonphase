@@ -124,7 +124,10 @@ async def create_server(
     # the client is watching; nothing here has anywhere better to report them.
     task = asyncio.create_task(
         _bootstrap_in_background(
-            principal, server_id, auto_install_docker=payload.auto_install_docker
+            principal,
+            server_id,
+            auto_install_docker=payload.auto_install_docker,
+            install_sysbox=payload.auto_install_sysbox,
         )
     )
     _background.add(task)
@@ -142,11 +145,18 @@ _background: set[asyncio.Task] = set()
 
 
 async def _bootstrap_in_background(
-    principal: Principal, server_id: UUID, *, auto_install_docker: bool
+    principal: Principal,
+    server_id: UUID,
+    *,
+    auto_install_docker: bool,
+    install_sysbox: bool = False,
 ) -> None:
     try:
         await _run_bootstrap(
-            principal, server_id, auto_install_docker=auto_install_docker
+            principal,
+            server_id,
+            auto_install_docker=auto_install_docker,
+            install_sysbox=install_sysbox,
         )
     except Exception as exc:  # noqa: BLE001 — the row is the only place to report
         log.warning("bootstrap of %s failed: %s", server_id, exc)
@@ -163,11 +173,23 @@ async def _bootstrap_in_background(
 async def rerun_bootstrap(
     server_id: UUID,
     auto_install_docker: bool = True,
+    install_sysbox: bool = False,
     principal: Principal = Depends(current_principal),
 ) -> ServerBootstrapOut:
-    """Retry onboarding — used after the user installs a managed public key."""
+    """Retry onboarding — used after the user installs a managed public key.
+
+    Also doubles as the "Install Sysbox" action on an already-online server:
+    call with `install_sysbox=true` to add that capability without a
+    dedicated endpoint. It re-verifies Docker in the same pass, same as a
+    plain retry would.
+    """
     await _require_admin(principal, server_id)
-    return await _run_bootstrap(principal, server_id, auto_install_docker=auto_install_docker)
+    return await _run_bootstrap(
+        principal,
+        server_id,
+        auto_install_docker=auto_install_docker,
+        install_sysbox=install_sysbox,
+    )
 
 
 async def _require_admin(principal: Principal, server_id: UUID) -> dict:
@@ -190,7 +212,11 @@ async def _require_admin(principal: Principal, server_id: UUID) -> dict:
 
 
 async def _run_bootstrap(
-    principal: Principal, server_id: UUID, *, auto_install_docker: bool
+    principal: Principal,
+    server_id: UUID,
+    *,
+    auto_install_docker: bool,
+    install_sysbox: bool = False,
 ) -> ServerBootstrapOut:
     async with user_session(principal.claims) as conn:
         server = await queries.get_server(conn, server_id)
@@ -227,6 +253,7 @@ async def _run_bootstrap(
             existing_public_key=server.get("managed_public_key"),
             known_host_key_fp=server.get("host_key_fingerprint"),
             auto_install_docker=auto_install_docker,
+            install_sysbox=install_sysbox,
         )
     except HostKeyMismatch as exc:
         async with user_session(principal.claims) as conn:
@@ -266,6 +293,9 @@ async def _run_bootstrap(
             docker_version=result.docker_version,
             managed_public_key=result.generated_public_key,
             touch_last_seen=result.status == "online",
+            sysbox_checked=result.sysbox_checked,
+            sysbox_version=result.sysbox_version,
+            sysbox_status_detail=result.sysbox_status_detail,
         )
         refreshed = await queries.get_server(conn, server_id)
 

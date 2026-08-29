@@ -41,6 +41,7 @@ export function AddServer({ onClose, onCreated }: Props) {
   const [privateKey, setPrivateKey] = useState('')
   const [passphrase, setPassphrase] = useState('')
   const [autoInstallDocker, setAutoInstallDocker] = useState(true)
+  const [autoInstallSysbox, setAutoInstallSysbox] = useState(false)
   const [expectedFingerprint, setExpectedFingerprint] = useState('')
 
   const [busy, setBusy] = useState(false)
@@ -94,6 +95,7 @@ export function AddServer({ onClose, onCreated }: Props) {
         private_key: mode === 'provided_key' ? privateKey : undefined,
         passphrase: mode === 'provided_key' && passphrase ? passphrase : undefined,
         auto_install_docker: autoInstallDocker,
+        auto_install_sysbox: autoInstallSysbox,
         expected_host_key_fingerprint: expectedFingerprint.trim() || undefined,
       })
       setResult(created)
@@ -297,6 +299,20 @@ export function AddServer({ onClose, onCreated }: Props) {
             />
             <span style={{ margin: 0 }}>Install Docker if missing (needs sudo)</span>
           </label>
+
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              type="checkbox"
+              checked={autoInstallSysbox}
+              onChange={(e) => setAutoInstallSysbox(e.target.checked)}
+              style={{ width: 'auto' }}
+            />
+            <span style={{ margin: 0 }}>Install Sysbox (lets projects run their own Docker)</span>
+          </label>
+          <p className="hint" style={{ marginTop: -6 }}>
+            Only needed if a project on this server will run Docker inside its container.
+            Requires an Ubuntu or Debian host.
+          </p>
 
           <label>
             <span>Expected host key fingerprint (optional)</span>

@@ -1482,6 +1482,13 @@ function ServerView({
             >
               Re-bootstrap
             </button>
+            <button
+              disabled={busy || server.status !== 'online'}
+              onClick={() => void act(() => api.installSysbox(server.id))}
+              title="Lets projects on this server opt into running their own Docker"
+            >
+              {server.sysbox_version ? 'Re-check Sysbox' : 'Install Sysbox'}
+            </button>
           </>
         )}
         <button
@@ -1508,6 +1515,13 @@ function ServerView({
             <dd className={`status-${server.status}`}>{server.status}</dd>
             <dt>Docker</dt>
             <dd>{server.docker_version ?? '—'}</dd>
+            <dt>Sysbox</dt>
+            <dd>
+              {server.sysbox_version ??
+                (server.sysbox_status_detail
+                  ? `unavailable — ${server.sysbox_status_detail}`
+                  : 'not installed')}
+            </dd>
             <dt>SSH auth</dt>
             <dd>{server.ssh_auth_mode}</dd>
             <dt>Host key</dt>

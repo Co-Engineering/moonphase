@@ -129,6 +129,7 @@ nav:
       - guides/sharing.md
       - guides/configuring-claude.md
       - guides/environments.md
+      - guides/docker-access.md
       - guides/usage-and-limits.md
       - guides/search.md
       - guides/self-hosting.md
