@@ -46,12 +46,32 @@ export function InstanceTab({
     void load()
   }, [load])
 
+  // Google and Microsoft refuse to redirect to a bare IP, so offering them
+  // before a domain exists offers a button that cannot work. The server
+  // already refuses to actually turn either on without a domain regardless
+  // of what is stored — this keeps the draft honest about that too, so the
+  // checkbox showing unchecked-and-greyed-out is not lying about what the
+  // next save of this screen would actually send.
+  const domainMissing = !settings?.public_url
+  useEffect(() => {
+    if (!domainMissing) return
+    setMethods((current) =>
+      current.google_enabled || current.microsoft_enabled
+        ? { ...current, google_enabled: false, microsoft_enabled: false }
+        : current,
+    )
+    // Re-checked whenever the draft's own flags change too, not just when
+    // domainMissing flips — it starts true before `settings` has even
+    // loaded (settings is null, and !null?.public_url is true), so the load
+    // that later brings in an already-enabled provider from the server
+    // would otherwise arrive after this ran once and found nothing to do.
+    // The functional update above is what keeps this from looping forever:
+    // once both are already false it returns the same object, so this
+    // effect settles instead of re-triggering itself.
+  }, [domainMissing, methods.google_enabled, methods.microsoft_enabled])
+
   if (error) return <div className="banner error">{error}</div>
   if (!settings) return <p className="hint">Loading…</p>
-
-  // Google and Microsoft refuse to redirect to a bare IP, so offering them
-  // before a domain exists offers a button that cannot work.
-  const domainMissing = !settings.public_url
 
   return (
     <div className="tab-body">

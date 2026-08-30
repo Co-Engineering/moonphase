@@ -59,7 +59,14 @@ seconds and nothing restarts.
 | Email and password | Nothing |
 | Magic link | An SMTP server, configured on the same screen |
 | Google | A domain, and a client id and secret from Google |
-| Microsoft | A domain, and a client id and secret from Azure |
+| Microsoft | A domain, a client id and secret from Azure, and a tenant |
+
+Microsoft also asks for a **tenant** — which Azure accounts the button
+accepts. Use `common` to let anyone with a Microsoft account in,
+`organizations` for any work or school account, `consumers` for personal
+accounts only, or a specific tenant ID or verified domain (e.g.
+`contoso.onmicrosoft.com`) to restrict it to one organization. `common` is
+the default, and works for most self-hosted instances.
 
 Google and Microsoft are unavailable until the instance has a domain, because
 neither will redirect to a bare IP address. The screen says so rather than
