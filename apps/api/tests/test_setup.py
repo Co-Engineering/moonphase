@@ -281,6 +281,155 @@ def test_the_same_credentials_work_once_there_is_a_domain() -> None:
     assert incomplete(on_a_domain) == []
 
 
+# --- Microsoft, mirroring the same rules Google gets above ------------------
+
+
+def test_a_microsoft_provider_without_credentials_is_not_offered() -> None:
+    half = AuthMethods(
+        public_url="https://moonphase.example.com",
+        microsoft_enabled=True,
+        microsoft_client_id="cid",
+    )
+
+    assert "microsoft" not in usable(half)
+    assert any("client ID and secret" in problem for problem in incomplete(half))
+
+
+def test_a_microsoft_provider_with_both_halves_is_offered() -> None:
+    whole = AuthMethods(
+        public_url="https://moonphase.example.com",
+        microsoft_enabled=True,
+        microsoft_client_id="cid",
+        microsoft_client_secret="s",
+    )
+
+    assert "microsoft" in usable(whole)
+    assert incomplete(whole) == []
+
+
+def test_microsoft_oauth_is_refused_without_a_domain() -> None:
+    on_an_ip = AuthMethods(
+        public_url="http://203.0.113.10",
+        microsoft_enabled=True,
+        microsoft_client_id="cid",
+        microsoft_client_secret="secret",
+    )
+
+    assert "microsoft" not in usable(on_an_ip)
+    assert any("bare IP" in problem for problem in incomplete(on_an_ip))
+
+
+def test_clearing_the_domain_disables_a_configured_provider_at_gotrue_itself() -> None:
+    """usable()/incomplete() only decide what Moonphase's own settings screen
+    shows — they were never wired into render(), so an admin who fully
+    configured a provider, then separately cleared the domain and saved only
+    the Address card (a different button, `instance.saveSettings`, that never
+    touches auth_methods at all) ended up with a provider GoTrue would still
+    accept, live, credentialed — while Moonphase's own sign-in page simply
+    stopped mentioning it. Both providers are checked, since this was never
+    Microsoft-specific."""
+    configured_but_no_domain = AuthMethods(
+        public_url="http://203.0.113.10",
+        google_enabled=True,
+        google_client_id="g-cid",
+        google_client_secret="g-secret",
+        microsoft_enabled=True,
+        microsoft_client_id="m-cid",
+        microsoft_client_secret="m-secret",
+    )
+
+    rendered = render(configured_but_no_domain)
+
+    assert "GOTRUE_EXTERNAL_GOOGLE_ENABLED='false'" in rendered
+    assert "GOTRUE_EXTERNAL_AZURE_ENABLED='false'" in rendered
+
+
+def test_the_rendered_azure_url_does_not_double_up_v2() -> None:
+    """GoTrue appends /oauth2/v2.0/authorize (and /token) to
+    GOTRUE_EXTERNAL_AZURE_URL itself (provider/azure.go's chooseHost, in the
+    gotrue/auth source pinned in docker-compose.yml). A trailing /v2.0 here
+    used to double up with that and send every Microsoft sign-in to
+    `.../<tenant>/v2.0/oauth2/v2.0/authorize` — a path Microsoft has never
+    served, in every configuration, unconditionally. There is no edge case:
+    this either works for nobody or everybody."""
+    default_tenant = render(
+        AuthMethods(
+            public_url="https://moonphase.example.com",
+            microsoft_enabled=True,
+            microsoft_client_id="cid",
+            microsoft_client_secret="secret",
+        )
+    )
+    assert (
+        "GOTRUE_EXTERNAL_AZURE_URL='https://login.microsoftonline.com/common'"
+        in default_tenant
+    )
+    assert "/v2.0" not in default_tenant
+
+    custom_tenant = render(
+        AuthMethods(
+            public_url="https://moonphase.example.com",
+            microsoft_enabled=True,
+            microsoft_client_id="cid",
+            microsoft_client_secret="secret",
+            microsoft_tenant="my-tenant-id",
+        )
+    )
+    assert (
+        "GOTRUE_EXTERNAL_AZURE_URL='https://login.microsoftonline.com/my-tenant-id'"
+        in custom_tenant
+    )
+    assert "/v2.0" not in custom_tenant
+
+
+def test_the_rendered_config_carries_microsofts_credentials_when_enabled() -> None:
+    rendered = render(
+        AuthMethods(
+            public_url="https://moonphase.example.com",
+            microsoft_enabled=True,
+            microsoft_client_id="the-client-id",
+            microsoft_client_secret="the-secret",
+        )
+    )
+
+    assert "GOTRUE_EXTERNAL_AZURE_ENABLED='true'" in rendered
+    assert "GOTRUE_EXTERNAL_AZURE_CLIENT_ID='the-client-id'" in rendered
+    assert "GOTRUE_EXTERNAL_AZURE_SECRET='the-secret'" in rendered
+    assert (
+        "GOTRUE_EXTERNAL_AZURE_REDIRECT_URI='https://moonphase.example.com/auth/v1/callback'"
+        in rendered
+    )
+
+
+def test_a_tenant_typed_as_a_url_or_path_is_refused() -> None:
+    """It becomes a path segment in the Azure authorization URL, not a host,
+    so this cannot redirect anyone anywhere else — but a value pasted as a
+    full URL or containing a path/query would otherwise fail later with a
+    confusing error from Microsoft's side instead of this one."""
+    from moonphase.schemas import AuthMethodsIn
+
+    for bad in (
+        "https://login.microsoftonline.com/common",
+        "common/extra",
+        "tenant?x=1",
+        "tenant with spaces",
+    ):
+        try:
+            AuthMethodsIn(microsoft_tenant=bad)
+        except ValueError as exc:
+            assert "not a URL or a path" in str(exc)
+        else:
+            raise AssertionError(f"{bad!r} should have been refused")
+
+
+def test_a_plain_tenant_value_is_accepted() -> None:
+    from moonphase.schemas import AuthMethodsIn
+
+    for good in ("common", "organizations", "consumers", "contoso.onmicrosoft.com",
+                 "72f988bf-86f1-41af-91ab-2d7cd011db47"):
+        assert AuthMethodsIn(microsoft_tenant=good).microsoft_tenant == good
+
+
 def test_a_refused_signup_says_why_in_a_shape_the_client_can_read() -> None:
     """Caddy copies a non-2xx answer from this gate straight to the browser,
     and the browser is the Supabase library, which calls `.json()` on whatever

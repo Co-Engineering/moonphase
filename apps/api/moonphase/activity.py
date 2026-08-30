@@ -199,6 +199,15 @@ def parse_prompt(pane: str, signals: ActivitySignals) -> Prompt | None:
             first_option_index = index
             label_indent = found.start(2)
         elif options and line.strip():
+            if not any(c.isalnum() for c in line):
+                # A separator — AskUserQuestion draws one between its own
+                # numbered options and the "Chat about this" escape hatch
+                # tacked on after them. It carries no meaning either way, so
+                # it is skipped rather than read as real chrome: at column 0
+                # it looked exactly like the flush-left boundary that is
+                # supposed to end the block, and stopped the scan having
+                # collected only the option below the rule.
+                continue
             # A long label wraps onto an indented continuation line rather than
             # ending the block; tell the two apart by indentation. A wrapped
             # line lines up at or past the column where the label text started,
