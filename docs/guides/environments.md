@@ -41,6 +41,10 @@ laptop that happens to be open.
 
 If you need more than this, build an image yourself and give its name as the base.
 
+If what you actually need is Docker itself running *inside* the container — testing a
+`docker-compose` stack, say — that is a separate, off-by-default toggle at project
+creation. See [Docker access](docker-access.md).
+
 ## Where the work lives
 
 A project has two named volumes: one for the workspace and one for `HOME`. Rebuilding an

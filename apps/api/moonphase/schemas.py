@@ -64,6 +64,12 @@ class ServerCreate(BaseModel):
 
     auto_install_docker: bool = True
 
+    # Off by default, unlike Docker itself: this installs a second piece of
+    # software on the managed server (Sysbox) purely so a project can later
+    # opt into running its own Docker safely. Most servers will never need
+    # it, so nothing installs it unless asked.
+    auto_install_sysbox: bool = False
+
     # Required to add a server at all when MOONPHASE_SSH_TRUST_ON_FIRST_USE is
     # disabled — otherwise there is nothing for the first connection's host
     # key to be checked against. Optional otherwise: the connection pins
@@ -113,6 +119,8 @@ class ServerOut(ORMModel):
     status_detail: str | None
     host_key_fingerprint: str | None
     docker_version: str | None
+    sysbox_version: str | None = None
+    sysbox_status_detail: str | None = None
     managed_public_key: str | None
     last_seen_at: datetime | None
     created_at: datetime
@@ -144,6 +152,12 @@ class ProjectCreate(BaseModel):
     repo_url: str | None = None
     cpus: str | None = None
     memory: str | None = None
+    # Off by default. Starts the container under Sysbox instead of the
+    # default runtime, so the project can safely install and run its own
+    # Docker — see docs/guides/docker-access.md. Requires the chosen server
+    # to have Sysbox installed; checked in the route handler, not here,
+    # since that needs a database lookup.
+    docker_access: bool = False
 
     @field_validator("repo_url")
     @classmethod
@@ -174,6 +188,7 @@ class ProjectOut(ORMModel):
     preview_port: int | None
     preview_url: str | None
     created_at: datetime
+    docker_access: bool = False
     # What the agent is doing right now, so the sidebar means something.
     activity: str = "unknown"
     activity_detail: str | None = None

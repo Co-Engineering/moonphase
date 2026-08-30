@@ -50,6 +50,14 @@ opens the local port itself. It used to bind loopback on the API's machine, whic
 was safe only because nothing but a browser on that machine could reach it —
 true of a development build, false of an installed app.
 
+**Docker access inside a project is opt-in and isolated, not privileged.** A
+project's container runs under the plain `runc` OCI runtime unless explicitly
+asked to run under `sysbox-runc`, which itself requires Sysbox to have been
+installed on the server — itself off by default. Sysbox virtualizes user
+namespaces per container rather than granting `--privileged` or sharing the
+host's Docker socket, so a container that can run its own Docker still cannot
+reach the host's, or the host itself. See [Docker access](../guides/docker-access.md).
+
 ## Sharing
 
 Organizations answer "my team can use everything we own". They are the wrong

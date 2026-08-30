@@ -64,6 +64,24 @@ def _container_name(slug: str, project_id: UUID) -> str:
     return f"mp-{slug}-{str(project_id)[:8]}"
 
 
+def _require_sysbox_if_docker_access(server: dict[str, Any], docker_access: bool) -> None:
+    """Refuse outright rather than let provisioning fail deep in the background.
+
+    A Pydantic validator can't do this — it needs the server row, which is a
+    database lookup — so it lives here instead, same as the harness-credential
+    check just below it in create_project.
+    """
+    if docker_access and not server.get("sysbox_version"):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Server '{server['name']}' does not have Sysbox installed. "
+                "Install Sysbox on the server before enabling Docker access "
+                "for a project."
+            ),
+        )
+
+
 @router.get("", response_model=list[ProjectOut])
 async def list_projects(
     server_id: UUID | None = None, principal: Principal = Depends(current_principal)
@@ -122,6 +140,7 @@ async def create_project(
                     "Bootstrap it successfully before creating projects."
                 ),
             )
+        _require_sysbox_if_docker_access(server, payload.docker_access)
 
         # A project on a server someone lent you is yours, not theirs: it
         # belongs to your organization, runs on your Claude account, and is
@@ -174,6 +193,7 @@ async def create_project(
                 home_volume="",
                 preview_port=None,
                 created_by=principal.user_id,
+                docker_access=payload.docker_access,
             )
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -210,6 +230,7 @@ async def create_project(
             repo_url=payload.repo_url,
             cpus=payload.cpus,
             memory=payload.memory,
+            docker_access=payload.docker_access,
         )
     )
     _background.add(task)
@@ -244,6 +265,7 @@ async def _provision_in_background(
     repo_url: str | None,
     cpus: str | None,
     memory: str | None,
+    docker_access: bool = False,
 ) -> None:
     """Do the slow half, and write the outcome where the client is looking.
 
@@ -270,6 +292,7 @@ async def _provision_in_background(
             preview_port=None,
             cpus=cpus,
             memory=memory,
+            docker_access=docker_access,
             progress=say,
         )
     except Exception as exc:  # noqa: BLE001 — the row is the only place to report
@@ -307,6 +330,7 @@ async def _provision_container(
     preview_port: int | None,
     cpus: str | None,
     memory: str | None,
+    docker_access: bool = False,
     progress: Callable[[str], Awaitable[None]] | None = None,
 ) -> str:
     async def say(message: str) -> None:
@@ -354,6 +378,7 @@ async def _provision_container(
         published_ports=ports,
         cpus=cpus,
         memory=memory,
+        runtime="sysbox-runc" if docker_access else None,
     )
 
     # The home volume shadows the image's /home/dev on first use, so ownership

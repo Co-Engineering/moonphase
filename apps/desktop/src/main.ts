@@ -165,6 +165,33 @@ function validApiUrl(value: string): boolean {
   }
 }
 
+/**
+ * Which server the renderer has actually told us it is talking to.
+ *
+ * There is no fixed "the" API host to check openPreview's apiUrl against —
+ * this app connects to whatever self-hosted server the person typed in, and
+ * that is by design (see apps/web/src/lib/host.ts). What there is instead is
+ * whatever the renderer most recently announced via setApiHost, which it
+ * does once on load and again on every host change — a change that already
+ * reloads the page, so "most recent" tracks the real value through that.
+ *
+ * This does not stop a renderer with genuine arbitrary code execution
+ * (it could call setApiHost itself right before openPreview), but it does
+ * close the bare "any call to openPreview, any host, no memory of what this
+ * window is actually configured for" primitive: openPreview refuses an
+ * apiUrl that does not match, rather than proxying a real bearer token
+ * wherever it is told to.
+ */
+let configuredApiHost: string | null = null
+
+function sameOrigin(a: string, b: string): boolean {
+  try {
+    return new URL(a).origin === new URL(b).origin
+  } catch {
+    return false
+  }
+}
+
 async function openPreview(request: {
   projectId: string
   projectName: string
@@ -175,15 +202,21 @@ async function openPreview(request: {
   const invalid = validate(request)
   if (invalid) return { ok: false, error: invalid }
 
-  // Not a same-origin check against the caller: the whole point of this app
-  // is connecting to a self-hosted server that is almost never the origin
-  // its own static assets loaded from — a packaged build's window is
-  // `file://`, and even in dev the frontend and API are on different ports.
-  // What is still worth refusing is a value that isn't an address at all,
-  // since ensureRelay hands it a real bearer token in an Authorization
-  // header the moment this succeeds.
+  // Not a same-origin check against the caller's own page — the whole point
+  // of this app is connecting to a self-hosted server that is almost never
+  // the origin its own static assets loaded from — but it is checked against
+  // what this window itself announced it is configured for (see
+  // configuredApiHost above), since ensureRelay hands whatever is passed
+  // here a real bearer token in an Authorization header the moment this
+  // succeeds.
   if (!validApiUrl(request.apiUrl)) {
     return { ok: false, error: 'Invalid API address.' }
+  }
+  if (!configuredApiHost || !sameOrigin(request.apiUrl, configuredApiHost)) {
+    return {
+      ok: false,
+      error: 'Refusing to relay to an API host this window is not configured for.',
+    }
   }
 
   // The proxy runs wherever the API does, which for an installed app is not
@@ -424,6 +457,9 @@ void app.whenReady().then(() => {
   ipcMain.handle('session:open', (event, request) =>
     openSessionWindow(request, callerLocation(event)),
   )
+  ipcMain.on('host:set-current', (_event, host) => {
+    if (typeof host === 'string' && validApiUrl(host)) configuredApiHost = host
+  })
   createWindow()
 
   app.on('activate', () => {

@@ -166,12 +166,18 @@ async def run_container(
     published_ports: dict[int, int] | None = None,
     cpus: str | None = None,
     memory: str | None = None,
+    runtime: str | None = None,
 ) -> str:
     """Start the long-lived project container and return its id.
 
     The container does nothing on its own — `tini -g -- sleep infinity` just
     keeps the namespace alive so tmux sessions inside it survive independently
     of any client. Restart policy brings it back after a host reboot.
+
+    `runtime` is Docker's `--runtime` flag — "sysbox-runc" for a project with
+    Docker access turned on, otherwise the daemon's own default. It is a
+    creation-time property; there is no "change a running container's
+    runtime", and this is the only call site that creates one.
     """
     args = [
         "docker", "run", "-d",
@@ -194,6 +200,15 @@ async def run_container(
         args += ["--cpus", cpus]
     if memory:
         args += ["--memory", memory]
+    if runtime:
+        # Sysbox documents that --privileged and extra --cap-add/
+        # --security-opt entries must not be combined with
+        # --runtime=sysbox-runc — the runtime itself grants what a nested
+        # Docker workload needs via per-container user-namespace
+        # virtualization, and stacking --privileged on top defeats the
+        # isolation Sysbox exists to provide. Never add a
+        # --cap-add/--privileged parameter to this function alongside it.
+        args += ["--runtime", runtime]
     args += [image, "sleep", "infinity"]
 
     command = " ".join(shlex.quote(a) for a in args)

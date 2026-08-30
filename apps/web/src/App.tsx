@@ -39,7 +39,7 @@ import { Feed } from './components/Feed'
 import { Share } from './components/Share'
 import { Attention, waiting } from './components/Attention'
 import { SessionWindow } from './routes/SessionWindow'
-import { openSessionWindow, sessionWindowUrl } from './lib/desktop'
+import { announceApiHost, openSessionWindow, sessionWindowUrl } from './lib/desktop'
 import { HostDialog } from './components/HostDialog'
 import { RowMenu } from './components/RowMenu'
 import { RenameDialog } from './components/RenameDialog'
@@ -60,6 +60,11 @@ export function App() {
   const [needsSetup, setNeedsSetup] = useState<boolean | null>(null)
 
   const attach = useCallback((next: InstanceConfig) => {
+    // Only once the host has actually answered with a real config — the
+    // desktop shell uses this to know which apiUrl a later preview request
+    // is allowed to relay a bearer token to, so it should track a host that
+    // is confirmed to work, not every address a retry loop happened to try.
+    announceApiHost(currentHost())
     const supabase = configure(next)
     setConfig(next)
     void supabase.auth.getSession().then(({ data }) => {
@@ -1482,6 +1487,13 @@ function ServerView({
             >
               Re-bootstrap
             </button>
+            <button
+              disabled={busy || server.status !== 'online'}
+              onClick={() => void act(() => api.installSysbox(server.id))}
+              title="Lets projects on this server opt into running their own Docker"
+            >
+              {server.sysbox_version ? 'Re-check Sysbox' : 'Install Sysbox'}
+            </button>
           </>
         )}
         <button
@@ -1508,6 +1520,13 @@ function ServerView({
             <dd className={`status-${server.status}`}>{server.status}</dd>
             <dt>Docker</dt>
             <dd>{server.docker_version ?? '—'}</dd>
+            <dt>Sysbox</dt>
+            <dd>
+              {server.sysbox_version ??
+                (server.sysbox_status_detail
+                  ? `unavailable — ${server.sysbox_status_detail}`
+                  : 'not installed')}
+            </dd>
             <dt>SSH auth</dt>
             <dd>{server.ssh_auth_mode}</dd>
             <dt>Host key</dt>

@@ -367,8 +367,14 @@ export function ProjectTerminal({
       const socket = new WebSocket(url)
       socket.binaryType = 'arraybuffer'
       socketRef.current = socket
+      // A handshake the server refused and a connection that dropped both
+      // arrive here as a bare 1006 with no reason attached — the refusal
+      // happens before the socket is accepted, so there is nowhere to put
+      // one. This is the only thing that tells them apart.
+      let everOpened = false
 
       socket.onopen = () => {
+        everOpened = true
         retryRef.current = 0
         // Send the true geometry immediately: the query params were a guess
         // made before the first fit().
@@ -413,7 +419,16 @@ export function ProjectTerminal({
         const delay = Math.min(1000 * 2 ** retryRef.current, 15000)
         retryRef.current += 1
         term.writeln(
-          `\r\n\x1b[90m[moonphase] connection lost — reattaching in ${delay / 1000}s\x1b[0m`,
+          everOpened
+            ? `\r\n\x1b[90m[moonphase] connection lost — reattaching in ${delay / 1000}s\x1b[0m`
+            : // Never opened, so nothing was lost: the server answered the
+              // handshake with a refusal. Retrying is still right — this is
+              // also what a restarting server looks like — but calling it a
+              // lost connection sends you looking at your network, and
+              // v0.9.0's Origin regression sat behind exactly that sentence
+              // with nothing on screen to contradict it.
+              `\r\n\x1b[33m[moonphase] the server refused this connection` +
+              ` (it never opened) — retrying in ${delay / 1000}s\x1b[0m`,
         )
         reconnectTimer = window.setTimeout(connect, delay)
       }
