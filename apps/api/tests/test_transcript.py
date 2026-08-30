@@ -406,6 +406,38 @@ def test_a_wrapped_option_label_does_not_swallow_earlier_options() -> None:
     )
 
 
+def test_a_separator_before_chat_about_this_does_not_swallow_the_real_options() -> None:
+    """AskUserQuestion draws a rule between its own numbered options and the
+    "Chat about this" escape hatch tacked on after them (and, in this case,
+    per-option descriptions on their own indented line below each choice).
+
+    That rule sits flush at column 0 — indistinguishable, by indentation
+    alone, from real chrome ending the block — and previously stopped the
+    scan right there, keeping only the option below it: reported as "only
+    the last option shows up" on a phone with a six-option question.
+    """
+    pane = (
+        "What's your favorite animal?\n\n"
+        "❯ 1. Ape\n"
+        "     Our closest living relatives.\n"
+        "  2. Dog\n"
+        "     Loyal and always happy to see you.\n"
+        "  3. Cat\n"
+        "     Independent and a bit mysterious.\n"
+        "  4. Hippo\n"
+        "     Surprisingly fast, and surprisingly dangerous.\n"
+        "  5. Type something.\n"
+        "─────────────────────────────────────────────\n"
+        "6. Chat about this\n"
+        "\n"
+        "Enter to select · ↑/↓ to navigate · Esc to cancel\n"
+    )
+    prompt = parse_prompt(pane, CLAUDE.activity_signals())
+    assert prompt is not None
+    assert [o["key"] for o in prompt.options] == ["1", "2", "3", "4", "5", "6"]
+    assert prompt.options[5]["label"] == "Chat about this"
+
+
 def test_no_prompt_when_the_agent_is_working() -> None:
     assert parse_prompt("⏺ Read(x.py)\n  240 lines\n", CLAUDE.activity_signals()) is None
 
