@@ -82,13 +82,13 @@ MOONPHASE_IMAGE=oliversvanecoec/moonphase
 `.env` chooses the tag:
 
 ```bash
-MOONPHASE_VERSION=v0.10.1    # or latest, or 0.9, or edge
+MOONPHASE_VERSION=v0.10.2    # or latest, or 0.9, or edge
 ```
 
 | Tag | What it is |
 | --- | ---------- |
 | `latest` | The newest release. **The default.** It moves when a release is cut, not when a commit lands |
-| `v0.10.1`, `0.10.1` | One exact release. The same image under both names |
+| `v0.10.2`, `0.10.2` | One exact release. The same image under both names |
 | `0.5` | The newest patch of that minor version |
 | `edge` | The tip of `main`. Builds and passes tests, and is not a release |
 
