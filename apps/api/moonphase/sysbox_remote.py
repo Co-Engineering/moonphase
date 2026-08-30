@@ -181,6 +181,36 @@ async def install(conn: asyncssh.SSHClientConnection, ssh_user: str) -> SysboxIn
     if not docker_check.ok:
         raise SSHError("Docker must be installed before Sysbox.")
 
+    # Sysbox's own postinst changes Docker's network configuration, which
+    # needs a full daemon restart, and it refuses to restart Docker while any
+    # container exists — `docker ps -a`, so stopped ones count too. It fails
+    # the configure step outright:
+    #
+    #   The Sysbox installer requires a docker service restart to configure
+    #   network parameters, but it cannot proceed due to existing Docker
+    #   containers.
+    #
+    # dpkg then reports only "Sub-process /usr/bin/dpkg returned an error
+    # code (1)", and the package is left half-configured: sysbox-runc on
+    # PATH, nothing registered with the daemon. Asked here first, before a
+    # download and a half-install, so the answer is a sentence naming the
+    # actual requirement.
+    #
+    # This makes the "Install Sysbox" button unusable on a server that
+    # already has projects, which is the honest state of affairs: the
+    # supported path is the checkbox when adding the server, before any
+    # container exists.
+    containers = await ssh.run(conn, "docker ps -aq | wc -l", timeout=30)
+    count = containers.stdout.strip() if containers.ok else ""
+    if count.isdigit() and int(count) > 0:
+        raise SSHError(
+            f"Sysbox cannot be installed while this server has containers on "
+            f"it ({count} present, running or stopped). Its installer needs to "
+            "restart Docker to change network settings, and refuses to do that "
+            "underneath existing containers. Install Sysbox when adding a "
+            "server, before any project exists on it."
+        )
+
     # Community Edition asset naming, checked against the release assets
     # themselves rather than the releases page's prose: there is no `-0`
     # revision suffix. Getting this wrong is silent until the install runs —
@@ -202,11 +232,20 @@ async def install(conn: asyncssh.SSHClientConnection, ssh_user: str) -> SysboxIn
     # sysbox-runc in /etc/docker/daemon.json's "runtimes" stanza, start
     # sysbox-mgr/sysbox-fs, and restart docker — none of that is done
     # manually here.
-    await ssh.run(conn, f"sudo -n dpkg -i /tmp/{filename}", timeout=120)
+    dpkg = await ssh.run(conn, f"sudo -n dpkg -i /tmp/{filename}", timeout=120)
     update = await ssh.run(conn, "sudo -n apt-get update -qq", timeout=120)
     update.check("Updating apt package lists")
     fix_deps = await ssh.run(conn, "sudo -n apt-get install -f -y -qq", timeout=300)
-    fix_deps.check("Installing Sysbox")
+    if not fix_deps.ok:
+        # apt's own stderr for a failed postinst is "Sub-process
+        # /usr/bin/dpkg returned an error code (1)", which says nothing about
+        # why. The package's reason goes to stdout, so carry both.
+        reason = " ".join(
+            part.strip()
+            for part in (fix_deps.stderr, fix_deps.stdout, dpkg.stdout)
+            if part and part.strip()
+        )
+        raise SSHError(f"Installing Sysbox failed: {reason[:600]}")
 
     await ssh.run(conn, f"rm -f /tmp/{filename}", timeout=15)
 

@@ -229,6 +229,8 @@ async def test_install_happy_path_downloads_dpkgs_and_reprobes(monkeypatch) -> N
     fake.set("uname -r", _ok("6.1.0-13-amd64\n"))
     fake.set("sudo -n true", _ok())
     fake.set("command -v docker", _ok("/usr/bin/docker\n"))
+    # No containers: Sysbox's postinst will not restart Docker under any.
+    fake.set("docker ps -aq", _ok("0"))
     fake.set("curl -fsSL", _ok())
     fake.set("sudo -n dpkg -i", _ok())
     fake.set("sudo -n apt-get update", _ok())
@@ -284,3 +286,87 @@ def test_the_package_url_matches_sysbox_s_published_asset_naming() -> None:
         name = f"sysbox-ce_{sysbox_remote.SYSBOX_VERSION}.linux_{arch}.deb"
         assert re.fullmatch(r"sysbox-ce_\d+\.\d+\.\d+\.linux_(amd64|arm64)\.deb", name), name
         assert "-0." not in name
+
+
+# --- refusing before a half-install --------------------------------------
+
+
+async def test_install_refuses_while_the_server_has_containers(monkeypatch) -> None:
+    """The failure this turns into a sentence.
+
+    Sysbox's postinst changes Docker's network configuration, needs a daemon
+    restart for it, and refuses to restart Docker while any container exists
+    — `docker ps -a`, so stopped ones count. It fails the configure step and
+    dpkg reports only "Sub-process /usr/bin/dpkg returned an error code (1)",
+    leaving sysbox-runc on PATH with nothing registered.
+
+    Every server with a project on it is in that state, so the button could
+    only ever fail there. Refusing up front costs a download and a
+    half-configured package less, and says which requirement was not met.
+    """
+    fake = _fake(monkeypatch)
+    fake.set("/etc/os-release", _ok(DEBIAN_OS_RELEASE))
+    fake.set("uname -m", _ok("x86_64"))
+    fake.set("uname -r", _ok("6.17.0-1022-azure"))
+    fake.set("sudo -n true", _ok())
+    fake.set("command -v docker", _ok("/usr/bin/docker"))
+    fake.set("docker ps -aq", _ok("7"))
+
+    with pytest.raises(SSHError) as caught:
+        await sysbox_remote.install(object(), "dev")
+
+    assert "7 present" in str(caught.value)
+    assert "adding a server" in str(caught.value)
+    assert not any("curl" in c or "dpkg" in c for c in fake.calls), (
+        "nothing should be downloaded or installed once the check has failed"
+    )
+
+
+async def test_install_proceeds_on_a_server_with_no_containers(monkeypatch) -> None:
+    fake = _fake(monkeypatch)
+    fake.set("/etc/os-release", _ok(DEBIAN_OS_RELEASE))
+    fake.set("uname -m", _ok("x86_64"))
+    fake.set("uname -r", _ok("6.17.0-1022-azure"))
+    fake.set("sudo -n true", _ok())
+    fake.set("command -v docker", _ok("/usr/bin/docker"))
+    fake.set("docker ps -aq", _ok("0"))
+    fake.set("curl", _ok())
+    fake.set("dpkg -i", _ok())
+    fake.set("apt-get update", _ok())
+    fake.set("apt-get install -f", _ok())
+    fake.set("rm -f", _ok())
+    fake.set("command -v sysbox-runc", _ok("/usr/bin/sysbox-runc"))
+    fake.set("sysbox-runc --version", _ok("sysbox-runc\n\tedition: Community Edition (CE)"))
+    fake.set("docker info", _ok('{"sysbox-runc":{"path":"/usr/bin/sysbox-runc"}}'))
+
+    info = await sysbox_remote.install(object(), "dev")
+
+    assert info.installed is True
+    assert info.registered_as_runtime is True
+
+
+async def test_a_failed_install_reports_what_the_package_said(monkeypatch) -> None:
+    """apt's stderr for a failed postinst says nothing; the reason is on stdout."""
+    fake = _fake(monkeypatch)
+    fake.set("/etc/os-release", _ok(DEBIAN_OS_RELEASE))
+    fake.set("uname -m", _ok("x86_64"))
+    fake.set("uname -r", _ok("6.17.0-1022-azure"))
+    fake.set("sudo -n true", _ok())
+    fake.set("command -v docker", _ok("/usr/bin/docker"))
+    fake.set("docker ps -aq", _ok("0"))
+    fake.set("curl", _ok())
+    fake.set("dpkg -i", _ok("Setting up sysbox-ce ... the real reason lives here"))
+    fake.set("apt-get update", _ok())
+    fake.set(
+        "apt-get install -f",
+        CommandResult(
+            exit_status=100,
+            stdout="",
+            stderr="E: Sub-process /usr/bin/dpkg returned an error code (1)",
+        ),
+    )
+
+    with pytest.raises(SSHError) as caught:
+        await sysbox_remote.install(object(), "dev")
+
+    assert "the real reason lives here" in str(caught.value)
