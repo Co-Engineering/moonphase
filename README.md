@@ -9,7 +9,7 @@ shutting the lid, reattach from your phone on the train. The session never notic
 
 ## Status
 
-**v0.1 — vertical slice.** The full chain works end to end:
+**v0.10 — shipping regularly.** The full chain works end to end:
 
 ```
 add server → SSH bootstrap → docker container → tmux + claude → live terminal
