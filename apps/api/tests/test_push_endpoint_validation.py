@@ -87,6 +87,11 @@ async def test_send_prunes_rather_than_delivers_to_a_bad_endpoint(monkeypatch) -
     subscription = push.Subscription(
         endpoint="https://internal.example/steal", p256dh="p", auth="a"
     )
-    delivered = await push.send(subscription, title="t", body="b")
+    result = await push.send(subscription, title="t", body="b")
 
-    assert delivered is False
+    # A real SendResult, not a bare bool — alive=False is what tells a caller
+    # (monitor.py's sweep, the /test endpoint) to actually prune the row,
+    # rather than raising AttributeError on the first attribute access.
+    assert result.delivered is False
+    assert result.alive is False
+    assert result.error is not None
