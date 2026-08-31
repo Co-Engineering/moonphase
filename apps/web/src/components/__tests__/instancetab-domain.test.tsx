@@ -45,15 +45,25 @@ describe('sign-in methods when the domain is missing', () => {
     render(<InstanceTab busy={false} run={async (fn) => void (await fn())} />)
 
     await screen.findByText(/ways to sign in/i)
-    // Two cards on this tab, each with its own "Save" button — the second
-    // one belongs to "Ways to sign in".
-    const saveButtons = screen.getAllByRole('button', { name: /^save$/i })
-    saveButtons[saveButtons.length - 1].click()
 
-    await waitFor(() =>
+    // The domain-missing correction lands one render after the data load
+    // that first shows this text: the checkbox already renders unchecked as
+    // soon as domainMissing is known (SignInMethods forces
+    // `checked={enabled && !domainMissing}`), independent of the separate
+    // effect in InstanceTab that corrects the underlying draft — which is
+    // the very distinction this test exists to catch. So there is no DOM
+    // signal to await before the draft itself has actually caught up;
+    // retrying the click until a call lands with the corrected values
+    // sidesteps the race instead of guessing how many renders it takes.
+    await waitFor(() => {
+      // Two cards on this tab, each with its own "Save" button — the second
+      // one belongs to "Ways to sign in". Re-queried every attempt since a
+      // fresh render can replace the earlier elements.
+      const saveButtons = screen.getAllByRole('button', { name: /^save$/i })
+      saveButtons[saveButtons.length - 1].click()
       expect(save).toHaveBeenCalledWith(
         expect.objectContaining({ google_enabled: false, microsoft_enabled: false }),
-      ),
-    )
+      )
+    })
   })
 })
