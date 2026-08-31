@@ -111,5 +111,13 @@ EXPOSE 8471
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
     CMD curl -fsS http://127.0.0.1:8471/api/health || exit 1
 
+
+# --no-access-log: uvicorn's access log writes the full request line,
+# query string included, to container stdout on every request — the same
+# reason the bundled Caddy config already suppresses its own. A query
+# string is also where a ticket (or, before it, a raw access token) lives
+# for WebSocket auth, so this is what keeps one from landing in the one
+# place TLS termination doesn't reach.
 CMD ["uvicorn", "moonphase.main:app", "--host", "0.0.0.0", "--port", "8471", \
-     "--app-dir", "/app/apps/api", "--proxy-headers", "--forwarded-allow-ips", "*"]
+     "--app-dir", "/app/apps/api", "--proxy-headers", "--forwarded-allow-ips", "*", \
+     "--no-access-log"]

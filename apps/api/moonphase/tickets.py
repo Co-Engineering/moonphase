@@ -29,6 +29,12 @@ from typing import Any
 # socket — a client does all three in one motion — and nothing more.
 TICKET_TTL_SECONDS = 15.0
 
+# Defense in depth beyond the per-caller rate limit on the minting endpoint
+# (routers/terminal.py): a bound on the store itself, so many distinct
+# accounts each staying under their own limit still cannot grow this past a
+# fixed size.
+MAX_TICKETS = 10_000
+
 
 @dataclass
 class _Ticket:
@@ -43,6 +49,10 @@ _tickets: dict[str, _Ticket] = {}
 def issue(claims: dict[str, Any], *, scope: str) -> str:
     """Mint a ticket carrying `claims`, redeemable only for `scope`."""
     _prune()
+    if len(_tickets) >= MAX_TICKETS:
+        # Oldest first in insertion order, and every ticket shares the same
+        # TTL, so the oldest is also the one soonest to expire anyway.
+        _tickets.pop(next(iter(_tickets)))
     ticket = secrets.token_urlsafe(32)
     _tickets[ticket] = _Ticket(
         claims=claims, scope=scope, expires_at=time.monotonic() + TICKET_TTL_SECONDS

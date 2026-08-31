@@ -1,8 +1,12 @@
-"""`websocket_principal`'s two ways in: a ticket, or the bearer token itself.
+"""`websocket_principal`'s one way in: a ticket, and only a ticket.
 
-The ticket path is what closes the leak a raw token in the query string
-caused (see tickets.py); the token path stays as a fallback, so both need to
-keep working the same way they did before.
+A raw bearer token — via `?token=` or an `Authorization` header — used to
+authenticate a WebSocket too, as a fallback for a client that had not
+switched over. Both shipped clients (web, desktop) now always mint a
+ticket first, so that fallback was removed entirely: a token loose in a
+query string undoes the whole point of tickets.py (short-lived, single-use,
+so a logged copy is worthless), and a header would be just as capable of
+doing so for any non-browser client willing to send one.
 """
 
 from __future__ import annotations
@@ -66,33 +70,26 @@ async def test_a_ticket_with_no_subject_claim_is_refused() -> None:
     assert caught.value.status_code == 401
 
 
-async def test_falls_back_to_a_bearer_header_when_no_ticket_is_given() -> None:
-    """A client that has not switched to tickets yet still works.
-
-    `token` and `ticket` are explicitly None here: calling the dependency
-    function directly (rather than through FastAPI's injection) skips the
-    resolution that would otherwise turn their `Query(default=None)` param
-    markers into a real `None` — left unset, they are truthy sentinel
-    objects, not absent.
-    """
+async def test_a_bearer_header_alone_no_longer_authenticates_the_connection() -> None:
+    """Regression guard: a raw bearer token used to authenticate a socket
+    via an `Authorization` header when no ticket was given. That fallback is
+    gone — a header alone, however valid-looking, is refused the same as no
+    credential at all, rather than reaching token decoding."""
     websocket = _FakeWebSocket({"authorization": "Bearer not-a-real-token"})
 
     with pytest.raises(HTTPException) as caught:
-        await auth.websocket_principal(websocket, project_id=PROJECT_ID, token=None, ticket=None)
-
-    # Reaches real token decoding (and fails there) rather than the "missing
-    # token" error — proving the header fallback path was taken.
-    assert caught.value.detail != "Missing token."
-
-
-async def test_no_ticket_and_no_token_is_refused() -> None:
-    with pytest.raises(HTTPException) as caught:
-        await auth.websocket_principal(
-            _FakeWebSocket(), project_id=PROJECT_ID, token=None, ticket=None
-        )
+        await auth.websocket_principal(websocket, project_id=PROJECT_ID, ticket=None)
 
     assert caught.value.status_code == 401
-    assert caught.value.detail == "Missing token."
+    assert caught.value.detail == "Missing ticket."
+
+
+async def test_no_ticket_is_refused() -> None:
+    with pytest.raises(HTTPException) as caught:
+        await auth.websocket_principal(_FakeWebSocket(), project_id=PROJECT_ID, ticket=None)
+
+    assert caught.value.status_code == 401
+    assert caught.value.detail == "Missing ticket."
 
 
 # --- Origin --------------------------------------------------------------------

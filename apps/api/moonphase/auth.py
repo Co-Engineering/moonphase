@@ -250,38 +250,35 @@ def _origin_allowed(websocket: WebSocket) -> bool:
 async def websocket_principal(
     websocket: WebSocket,
     project_id: UUID | None = None,
-    token: str | None = Query(default=None),
     ticket: str | None = Query(default=None),
 ) -> Principal:
     """Authenticate a WebSocket.
 
     Browsers cannot set headers on a WebSocket handshake, so proof of
-    identity has to arrive as a query parameter either way. A raw bearer
-    token there lands in every reverse proxy's access log for as long as it
-    is valid, so `ticket` — short-lived, single-use, minted over an
-    authenticated HTTP request — is preferred. `token` remains as a fallback
-    for a client that has not switched over.
+    identity has to arrive as a query parameter — which is exactly why it
+    must be a ticket and never a real access token: a query string lands in
+    every reverse proxy's and uvicorn's own access log for as long as it
+    stays in the URL, and a ticket is short-lived, single-use, minted over
+    an authenticated HTTP request specifically so a logged copy is worthless
+    the moment it's read back. This used to also accept a raw bearer token,
+    via `?token=` or an `Authorization` header, as a fallback for a client
+    that had not yet switched over — both shipped clients (web, desktop)
+    have, so that fallback is gone rather than left live as a way to undo
+    the whole point of tickets.
     """
     if not _origin_allowed(websocket):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Origin not allowed."
         )
 
-    if ticket:
-        claims = tickets.redeem(ticket, scope=ticket_scope(project_id))
-        if claims is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="This ticket is invalid, expired, or already used.",
-            )
-        return _principal_from_claims(claims)
-
-    if not token:
-        header = websocket.headers.get("authorization", "")
-        if header.lower().startswith("bearer "):
-            token = header[7:]
-    if not token:
+    if not ticket:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token."
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing ticket."
         )
-    return await _principal_from_token(token)
+    claims = tickets.redeem(ticket, scope=ticket_scope(project_id))
+    if claims is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="This ticket is invalid, expired, or already used.",
+        )
+    return _principal_from_claims(claims)
