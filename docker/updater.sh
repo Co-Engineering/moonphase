@@ -105,9 +105,13 @@ while true; do
   # both places. It is also not part of the compose project, so nothing the
   # update does can stop it half way through.
   compose() {
+    # :ro on the project mount, matching the same path's read-only mount into
+    # the long-lived updater service in docker-compose.update.yml: pull,
+    # config --services, up -d and ps all only read the compose files, never
+    # write into the project tree.
     docker run --rm \
       -v /var/run/docker.sock:/var/run/docker.sock \
-      -v "$host_dir:$host_dir" \
+      -v "$host_dir:$host_dir:ro" \
       -w "$host_dir" \
       docker:28-cli docker compose "$@" 2>&1
   }

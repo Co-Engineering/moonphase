@@ -403,7 +403,10 @@ async function runUpdateCheck(): Promise<void> {
   const { response } = await (parent
     ? dialog.showMessageBox(parent, options)
     : dialog.showMessageBox(options))
-  if (response === 0 && result.releaseUrl) {
+  // Server-controlled today (GitHub's own release page), but every other
+  // shell.openExternal in this file goes through the same check first, and
+  // this is the one call that didn't — no reason for this to be the exception.
+  if (response === 0 && result.releaseUrl && validate({ url: result.releaseUrl }) === null) {
     void shell.openExternal(result.releaseUrl)
   }
 }
