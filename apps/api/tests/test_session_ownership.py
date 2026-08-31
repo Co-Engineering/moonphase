@@ -138,7 +138,7 @@ def mcp_session():
     session = mcp_login.McpLoginSession(
         id=uuid.uuid4().hex,
         org_id="alice-org",
-        project_id="project-1",
+        project_id=str(uuid.uuid4()),
         session_name="main",
         server_name="some-mcp",
         home="/home/dev",
@@ -152,13 +152,32 @@ def mcp_session():
 
 
 def test_the_owner_can_look_up_their_own_mcp_session(mcp_session) -> None:
-    found = mcp_oauth._get_mcp_session(mcp_session.id, _principal("alice"))
+    found = mcp_oauth._get_mcp_session(
+        mcp_session.id, uuid.UUID(mcp_session.project_id), _principal("alice")
+    )
     assert found is mcp_session
 
 
 def test_someone_elses_mcp_session_is_not_found(mcp_session) -> None:
     with pytest.raises(HTTPException) as caught:
-        mcp_oauth._get_mcp_session(mcp_session.id, _principal("mallory"))
+        mcp_oauth._get_mcp_session(
+            mcp_session.id, uuid.UUID(mcp_session.project_id), _principal("mallory")
+        )
+    assert caught.value.status_code == 404
+    assert caught.value.detail == "No such connection attempt."
+
+
+def test_a_different_project_id_in_the_url_is_not_found(mcp_session) -> None:
+    """The flow's own project_id is fixed at /start time, from the same
+    place its container/tmux session come from. A caller who still owns the
+    session but names a *different* project in the URL must be refused
+    exactly like an unknown session — otherwise the access check (on the
+    URL's project) and the resource actually driven (the flow's own
+    project) could diverge."""
+    other_project = uuid.uuid4()
+    assert str(other_project) != mcp_session.project_id
+    with pytest.raises(HTTPException) as caught:
+        mcp_oauth._get_mcp_session(mcp_session.id, other_project, _principal("alice"))
     assert caught.value.status_code == 404
     assert caught.value.detail == "No such connection attempt."
 
