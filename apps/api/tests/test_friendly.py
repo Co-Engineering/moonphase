@@ -170,15 +170,30 @@ def test_a_missing_repository_is_a_message_not_a_crash() -> None:
 def test_saving_takes_files_git_has_never_seen() -> None:
     """The person clicked save because they want *this*, and a brand new file
     is very much part of this."""
-    script = checkpoints.save_script("/work", "My save")
+    script = checkpoints.save_script("/work", "My save", "Ada Lovelace", "ada@example.com")
 
     assert "git add -A" in script
+
+
+def test_save_commits_as_the_configured_identity() -> None:
+    """Regression guard: this used to read GIT_AUTHOR_NAME/GIT_AUTHOR_EMAIL,
+    env vars nothing ever set, so every save point was authored "Moonphase"
+    no matter what a person configured. The identity must be passed in and
+    actually land in the script, not read from the shell environment."""
+    script = checkpoints.save_script("/work", "My save", "Ada Lovelace", "ada@example.com")
+
+    assert "user.name='Ada Lovelace'" in script
+    assert "ada@example.com" in script
+    assert "GIT_AUTHOR_NAME" not in script
+    assert "GIT_AUTHOR_EMAIL" not in script
 
 
 def test_restoring_saves_the_current_state_first() -> None:
     """The rule that makes this safe to hand to someone who cannot inspect it:
     going back never destroys anything, so the undo has an undo."""
-    script = checkpoints.restore_script("/work", "abc1234", "Went back")
+    script = checkpoints.restore_script(
+        "/work", "abc1234", "Went back", "Ada Lovelace", "ada@example.com"
+    )
 
     before = script.index("Before going back")
     restore = script.index("git restore --source=")
@@ -188,14 +203,18 @@ def test_restoring_saves_the_current_state_first() -> None:
 def test_restoring_does_not_remove_ignored_files() -> None:
     """`-fdx` would delete node_modules and a virtualenv, turning an undo into
     twenty minutes of reinstalling."""
-    script = checkpoints.restore_script("/work", "abc1234", "Went back")
+    script = checkpoints.restore_script(
+        "/work", "abc1234", "Went back", "Ada Lovelace", "ada@example.com"
+    )
 
     assert "git clean -fdq" in script
     assert "-fdx" not in script
 
 
 def test_a_label_with_quotes_cannot_escape_the_command() -> None:
-    script = checkpoints.save_script("/work", 'evil"; rm -rf /; echo "')
+    script = checkpoints.save_script(
+        "/work", 'evil"; rm -rf /; echo "', "Ada Lovelace", "ada@example.com"
+    )
 
     # Quoted as one shell word, so the semicolons are text rather than syntax.
     assert "rm -rf /; echo" in script

@@ -385,6 +385,13 @@ async def project_terminal(
             exc = task.exception()
             if exc and not isinstance(exc, WebSocketDisconnect):
                 log.warning("terminal pump for %s ended: %s", project_id, exc)
+                # Otherwise this is indistinguishable, at the client, from any
+                # other drop: it retries forever showing "connection lost"
+                # with nothing to say the same failure is about to repeat.
+                with contextlib.suppress(Exception):
+                    await websocket.send_text(
+                        json.dumps({"type": "error", "message": str(exc)})
+                    )
     except WebSocketDisconnect:
         pass
     finally:

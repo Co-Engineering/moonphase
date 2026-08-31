@@ -83,9 +83,11 @@ terminal, or let the agent do it.
 
 ## Committing as you
 
-Set **Settings → Workspace → Git identity** and every session commits with that
-name and email. Without it git uses whatever the container's default is, and the
-history ends up attributed to `dev@` some container hostname.
+Set **Settings → Accounts → GitHub → Git identity** and every session commits
+with that name and email — connecting GitHub prefills it from your account if
+it knows a name or public email, and it's yours to change either way. Without
+it git uses whatever the container's default is, and the history ends up
+attributed to `dev@` some container hostname.
 
 !!! question "Who does a commit belong to when two people share a project?"
     Whoever made it. Each session has its own `HOME` and its own git config, and

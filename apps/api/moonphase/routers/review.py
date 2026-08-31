@@ -348,9 +348,18 @@ async def save_checkpoint(
     ctx, space, session_name = await _own_session(principal, project_id, name)
     conn_ssh = await ssh.pool.get(ctx.target)
     label = (payload.label or "").strip() or checkpoints.default_label()
+    workspace_profile = await runtime.load_session_profile(
+        principal.claims, ctx.project, ctx.harness, session_name
+    )
     try:
         ok, detail = await checkpoints.save(
-            conn_ssh, ctx.container, space.workdir, label
+            conn_ssh,
+            ctx.container,
+            space.workdir,
+            label,
+            author_name=workspace_profile.git_user_name or (principal.email or "Moonphase"),
+            author_email=workspace_profile.git_user_email
+            or (principal.email or "moonphase@localhost"),
         )
     except SSHError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -384,6 +393,9 @@ async def restore_checkpoint(
     if target is None:
         raise HTTPException(status_code=404, detail="That save point is no longer there.")
 
+    workspace_profile = await runtime.load_session_profile(
+        principal.claims, ctx.project, ctx.harness, session_name
+    )
     try:
         ok, detail = await checkpoints.restore(
             conn_ssh,
@@ -391,6 +403,9 @@ async def restore_checkpoint(
             space.workdir,
             checkpoint,
             f"Went back to: {target.label}",
+            author_name=workspace_profile.git_user_name or (principal.email or "Moonphase"),
+            author_email=workspace_profile.git_user_email
+            or (principal.email or "moonphase@localhost"),
         )
     except SSHError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
