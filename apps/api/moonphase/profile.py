@@ -120,6 +120,13 @@ async def read_file(
 # shell command.
 _SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
+# An env var key becomes a literal `KEY=value` line in a file that gets
+# `.`-sourced as bash by sessions.py's launcher and is_authenticated() — so
+# it is restricted to what is safe there regardless of what already passed
+# schema validation on the way in, the same reasoning as the skill-name
+# check above.
+_ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 
 async def write_skills(
     conn: asyncssh.SSHClientConnection,
@@ -232,8 +239,13 @@ async def apply(
         env["GH_TOKEN"] = profile.vcs_credential.token
         env["GITHUB_TOKEN"] = profile.vcs_credential.token
 
-    body = "".join(f"{k}={shlex.quote(v)}\n" for k, v in env.items())
-    await write_file(conn, container, space.env_file, body, mode="600")
+    body_lines = []
+    for k, v in env.items():
+        if not _ENV_KEY_RE.match(k):
+            log.warning("skipping env var with an unsafe name: %r", k)
+            continue
+        body_lines.append(f"{k}={shlex.quote(v)}\n")
+    await write_file(conn, container, space.env_file, "".join(body_lines), mode="600")
 
     # --- git ------------------------------------------------------------------
     git_config: list[str] = []
