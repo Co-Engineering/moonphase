@@ -1131,10 +1131,22 @@ async def update_project_config(
 async def get_session_config(
     conn: AsyncConnection, project_id: UUID, tmux_session: str
 ) -> dict[str, Any] | None:
+    # Left join, not inner: project_session_config's own SELECT policy only
+    # admits the session's owner or a project admin (see its migration), so a
+    # collaborator who can merely observe the project would otherwise lose
+    # the row entirely rather than see it filled in with nothing configured.
+    # Every session has a config row (a trigger creates one at insert time),
+    # so this only matters for the RLS case, not a genuinely missing row.
     result = await conn.execute(
         text(
-            f"select {CLAUDE_CONFIG_COLUMNS} from project_sessions "
-            "where project_id = :pid and tmux_session = :ts"
+            """
+            select cfg.claude_settings_json, cfg.claude_md, cfg.mcp_json,
+                   coalesce(cfg.skills_json, '{}'::jsonb) as skills_json,
+                   coalesce(cfg.env_vars, '{}'::jsonb) as env_vars
+            from project_sessions ps
+            left join project_session_config cfg on cfg.session_id = ps.id
+            where ps.project_id = :pid and ps.tmux_session = :ts
+            """
         ),
         {"pid": project_id, "ts": tmux_session},
     )
@@ -1153,17 +1165,25 @@ async def update_session_config(
     skills: dict[str, str],
     env_vars: dict[str, str],
 ) -> dict[str, Any]:
+    # A plain UPDATE, not an upsert: every session already has a config row
+    # (see project_session_config's migration), so there is no INSERT case
+    # for RLS to have an opinion on -- a policy violation on INSERT raises
+    # rather than filtering, which would turn "not your session" into a
+    # 500 instead of the clean PermissionError below.
     result = await conn.execute(
         text(
-            f"""
-            update project_sessions set
+            """
+            update project_session_config cfg set
               claude_settings_json = :settings,
               claude_md            = :claude_md,
-              mcp_json             = :mcp,
+              mcp_json              = :mcp,
               skills_json           = cast(:skills as jsonb),
               env_vars              = cast(:env as jsonb)
-            where project_id = :pid and tmux_session = :ts
-            returning {CLAUDE_CONFIG_COLUMNS}
+            from project_sessions ps
+            where cfg.session_id = ps.id
+              and ps.project_id = :pid and ps.tmux_session = :ts
+            returning cfg.claude_settings_json, cfg.claude_md, cfg.mcp_json,
+                      cfg.skills_json, cfg.env_vars
             """
         ),
         {
