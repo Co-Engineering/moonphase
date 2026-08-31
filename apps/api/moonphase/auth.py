@@ -240,11 +240,19 @@ def _origin_allowed(websocket: WebSocket) -> bool:
     if host and urlsplit(origin).netloc == host:
         return True
 
-    # The desktop app loads the same frontend off a file:// page, and an
-    # opaque origin serialises to the string "null". Verified against
-    # Chromium rather than assumed, since getting it wrong locks that client
-    # out exactly as thoroughly as a wrong hostname locks out the web one.
-    return origin == "null"
+    # The desktop app loads the same frontend off a file:// page. A
+    # spec-compliant opaque origin serialises to the literal string "null" —
+    # but a live capture against the actual shipped app (Electron 33.4.11)
+    # showed it sending the literal string "file://" instead, unprefixed,
+    # with no host or path. That mismatch alone made every desktop-app
+    # WebSocket connection fail this check permanently, surfacing as an
+    # unexplained, endlessly repeating "connection lost" in the terminal —
+    # so both forms are accepted here rather than trusting either
+    # in isolation. Either way, a normal page's own outgoing request can
+    # never make a browser send this: Origin is one of the headers
+    # JavaScript cannot set itself, so only a page genuinely loaded from
+    # disk produces it.
+    return origin == "null" or origin.startswith("file://")
 
 
 async def websocket_principal(
