@@ -105,9 +105,9 @@ on how you pay: a subscription gets its limit window, an API key gets the bill.
 
 | Tab               | What is in it                                                     |
 | ----------------- | ----------------------------------------------------------------- |
-| **Accounts**      | Connect Claude and GitHub once; every project uses it              |
+| **Accounts**      | Connect Claude and GitHub once, git identity alongside it — every project uses it |
 | **Claude**        | Permissions, MCP servers and a global `CLAUDE.md` — as forms       |
-| **Workspace**     | Git identity and environment variables                            |
+| **Workspace**     | Environment variables                                              |
 | **Environments**  | Base images and setup commands, built on the server               |
 | **Instance**      | The domain, who may sign in, and who has an account               |
 

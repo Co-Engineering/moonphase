@@ -89,6 +89,36 @@ async def _build_out(principal: Principal, org_id: UUID) -> WorkspaceProfileOut:
     )
 
 
+async def _prefill_git_identity(
+    principal: Principal, org_id: UUID, name: str | None, email: str | None
+) -> None:
+    """Fill in git identity from a freshly connected GitHub account, once.
+
+    Connecting GitHub is the one thing almost everyone visits Settings for;
+    git identity lives in a different part of the same page and is easy to
+    never notice. This is what keeps a first commit from being attributed to
+    a container hostname instead of a person, without ever overwriting a
+    value someone already set — each field only fills in if it was empty.
+    """
+    if not name and not email:
+        return
+    async with user_session(principal.claims) as conn:
+        row = await queries.get_profile(conn, org_id) or {}
+        if row.get("git_user_name") and row.get("git_user_email"):
+            return
+        await queries.upsert_profile(
+            conn,
+            org_id,
+            claude_settings_json=row.get("claude_settings_json"),
+            claude_md=row.get("claude_md"),
+            mcp_json=row.get("mcp_json"),
+            skills=parse_json_object(row.get("skills_json")),
+            env_vars=parse_json_object(row.get("env_vars")),
+            git_user_name=row.get("git_user_name") or name,
+            git_user_email=row.get("git_user_email") or email,
+        )
+
+
 @router.get("", response_model=WorkspaceProfileOut)
 async def get_profile(
     org_id: UUID | None = None, principal: Principal = Depends(current_principal)
@@ -460,6 +490,9 @@ async def poll_github_device(
             token=identity.token,
             created_by=principal.user_id,
         )
+    await _prefill_git_identity(
+        principal, UUID(session.org_id), identity.name, identity.email
+    )
 
     session.state = "complete"
     session.identity = identity
@@ -489,6 +522,7 @@ async def set_github_token(
             token=identity.token,
             created_by=principal.user_id,
         )
+    await _prefill_git_identity(principal, org_id, identity.name, identity.email)
     return await _build_out(principal, org_id)
 
 

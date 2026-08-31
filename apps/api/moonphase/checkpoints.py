@@ -61,17 +61,17 @@ class Board:
     detail: str | None = None
 
 
-def _identity() -> str:
+def _identity(author_name: str, author_email: str) -> str:
     """Commit as the person, falling back rather than failing.
 
     A worktree whose git identity was never configured would otherwise refuse
-    the commit, and "your save failed because user.email is not set" is exactly
-    the sentence this feature exists to avoid.
+    the commit, and "your save failed because user.email is not set" is
+    exactly the sentence this feature exists to avoid — so the caller
+    resolves that fallback (see routers/review.py, same pattern as
+    workspaces.py's own commits) rather than this reading a shell environment
+    variable nothing ever sets.
     """
-    return (
-        '-c user.name="${GIT_AUTHOR_NAME:-Moonphase}" '
-        '-c user.email="${GIT_AUTHOR_EMAIL:-moonphase@localhost}"'
-    )
+    return f"-c user.name={shlex.quote(author_name)} -c user.email={shlex.quote(author_email)}"
 
 
 def parse_board(stdout: str) -> Board:
@@ -121,7 +121,7 @@ git status --porcelain -uall 2>/dev/null
 """
 
 
-def save_script(workdir: str, label: str) -> str:
+def save_script(workdir: str, label: str, author_name: str, author_email: str) -> str:
     """Commit everything, including files git has never seen.
 
     `git add -A` rather than only tracked changes: the person clicked save
@@ -132,6 +132,7 @@ def save_script(workdir: str, label: str) -> str:
     # The label is data, so it goes in through a variable rather than being
     # spliced into the message argument.
     safe = shlex.quote(label)
+    identity = _identity(author_name, author_email)
     return f"""
 cd {d} 2>/dev/null || {{ echo "###ERROR"; echo "That project folder is missing."; exit 0; }}
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {{
@@ -141,13 +142,15 @@ git add -A 2>/dev/null
 if git diff --cached --quiet 2>/dev/null; then
   echo "###ERROR"; echo "Nothing has changed since your last save point."; exit 0
 fi
-git {_identity()} commit -q -m "$LABEL" -m "{TRAILER} 1" 2>&1 | tail -3
+git {identity} commit -q -m "$LABEL" -m "{TRAILER} 1" 2>&1 | tail -3
 echo "###OK"
 git rev-parse HEAD
 """
 
 
-def restore_script(workdir: str, checkpoint: str, label: str) -> str:
+def restore_script(
+    workdir: str, checkpoint: str, label: str, author_name: str, author_email: str
+) -> str:
     """Put the files back, having first saved where they are.
 
     `git clean -fd` without `-x` removes files created since the point but
@@ -157,6 +160,7 @@ def restore_script(workdir: str, checkpoint: str, label: str) -> str:
     d = shlex.quote(workdir)
     sha = shlex.quote(checkpoint)
     safe = shlex.quote(label)
+    identity = _identity(author_name, author_email)
     return f"""
 cd {d} 2>/dev/null || {{ echo "###ERROR"; echo "That project folder is missing."; exit 0; }}
 git cat-file -e {sha} 2>/dev/null || {{
@@ -165,7 +169,7 @@ git cat-file -e {sha} 2>/dev/null || {{
 # Going back is itself undoable: whatever is here now becomes a point first.
 git add -A 2>/dev/null
 if ! git diff --cached --quiet 2>/dev/null; then
-  git {_identity()} commit -q -m "Before going back" -m "{TRAILER} 1" 2>/dev/null
+  git {identity} commit -q -m "Before going back" -m "{TRAILER} 1" 2>/dev/null
 fi
 
 git restore --source={sha} --staged --worktree -- . 2>&1 | tail -2
@@ -176,7 +180,7 @@ if git diff --cached --quiet 2>/dev/null; then
   # Already exactly there. Not an error, just nothing to record.
   echo "###OK"; git rev-parse HEAD; exit 0
 fi
-git {_identity()} commit -q -m {safe} -m "{TRAILER} 1" 2>&1 | tail -3
+git {identity} commit -q -m {safe} -m "{TRAILER} 1" 2>&1 | tail -3
 echo "###OK"
 git rev-parse HEAD
 """
@@ -215,10 +219,18 @@ async def board(
 
 
 async def save(
-    conn: asyncssh.SSHClientConnection, container: str, workdir: str, label: str
+    conn: asyncssh.SSHClientConnection,
+    container: str,
+    workdir: str,
+    label: str,
+    author_name: str = "Moonphase",
+    author_email: str = "moonphase@localhost",
 ) -> tuple[bool, str]:
     result = await docker_remote.exec_capture(
-        conn, container, ["sh", "-c", save_script(workdir, label)], timeout=90
+        conn,
+        container,
+        ["sh", "-c", save_script(workdir, label, author_name, author_email)],
+        timeout=90,
     )
     return parse_result(result.stdout)
 
@@ -229,8 +241,17 @@ async def restore(
     workdir: str,
     checkpoint: str,
     label: str,
+    author_name: str = "Moonphase",
+    author_email: str = "moonphase@localhost",
 ) -> tuple[bool, str]:
     result = await docker_remote.exec_capture(
-        conn, container, ["sh", "-c", restore_script(workdir, checkpoint, label)], timeout=120
+        conn,
+        container,
+        [
+            "sh",
+            "-c",
+            restore_script(workdir, checkpoint, label, author_name, author_email),
+        ],
+        timeout=120,
     )
     return parse_result(result.stdout)

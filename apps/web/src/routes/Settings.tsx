@@ -451,6 +451,15 @@ function GitHubAccount({
   const [error, setError] = useState<string | null>(null)
   const [working, setWorking] = useState(false)
   const pollRef = useRef<number | undefined>(undefined)
+  const [gitName, setGitName] = useState(profile.git_user_name ?? '')
+  const [gitEmail, setGitEmail] = useState(profile.git_user_email ?? '')
+
+  // Picks up a value set elsewhere — most notably the server prefilling it
+  // from the GitHub account this component just connected.
+  useEffect(() => {
+    setGitName(profile.git_user_name ?? '')
+    setGitEmail(profile.git_user_email ?? '')
+  }, [profile.git_user_name, profile.git_user_email])
 
   useEffect(() => {
     void api
@@ -459,6 +468,56 @@ function GitHubAccount({
       .catch(() => setDeviceFlow(false))
     return () => window.clearInterval(pollRef.current)
   }, [])
+
+  const saveIdentity = () =>
+    run(
+      () =>
+        api.saveProfile({
+          claude_settings_json: profile.claude_settings_json,
+          claude_md: profile.claude_md,
+          mcp_json: profile.mcp_json,
+          skills: profile.skills,
+          env_vars: profile.env_vars,
+          git_user_name: gitName.trim() || null,
+          git_user_email: gitEmail.trim() || null,
+        }),
+      'Saved.',
+    )
+
+  const identitySection = (
+    <div style={{ marginTop: 18 }}>
+      <h3>Git identity</h3>
+      <p className="hint">
+        So commits the agent makes are attributed to you rather than to <code>dev</code>.
+        Prefilled from GitHub once connected, if it knows a name or email — either way,
+        yours to change.
+      </p>
+      <div className="row">
+        <label>
+          <span>Name</span>
+          <input
+            value={gitName}
+            onChange={(e) => setGitName(e.target.value)}
+            placeholder="Ada Lovelace"
+          />
+        </label>
+        <label>
+          <span>Email</span>
+          <input
+            value={gitEmail}
+            onChange={(e) => setGitEmail(e.target.value)}
+            placeholder="ada@example.com"
+          />
+        </label>
+      </div>
+      <div className="actions">
+        <div className="spacer" />
+        <button className="primary" disabled={busy} onClick={() => void saveIdentity()}>
+          Save
+        </button>
+      </div>
+    </div>
+  )
 
   const start = async () => {
     setWorking(true)
@@ -513,6 +572,7 @@ function GitHubAccount({
             Disconnect
           </button>
         </div>
+        {identitySection}
       </div>
     )
   }
@@ -581,6 +641,8 @@ function GitHubAccount({
           </button>
         </div>
       )}
+
+      {identitySection}
     </div>
   )
 }
@@ -728,8 +790,6 @@ function WorkspaceTab({
   busy: boolean
   run: Runner
 }) {
-  const [gitName, setGitName] = useState(profile.git_user_name ?? '')
-  const [gitEmail, setGitEmail] = useState(profile.git_user_email ?? '')
   const [pairs, setPairs] = useState<[string, string][]>(
     Object.entries(profile.env_vars ?? {}),
   )
@@ -747,8 +807,10 @@ function WorkspaceTab({
           mcp_json: profile.mcp_json,
           skills: profile.skills,
           env_vars: env,
-          git_user_name: gitName.trim() || null,
-          git_user_email: gitEmail.trim() || null,
+          // Set from Accounts → GitHub, not here — echoed back unchanged so
+          // saving environment variables never clobbers it.
+          git_user_name: profile.git_user_name,
+          git_user_email: profile.git_user_email,
         }),
       'Saved. Restart a harness to pick it up.',
     )
@@ -756,26 +818,7 @@ function WorkspaceTab({
 
   return (
     <>
-      <h3>Git identity</h3>
-      <p className="hint">
-        So commits the agent makes are attributed to you rather than to <code>dev</code>.
-      </p>
-      <div className="row">
-        <label>
-          <span>Name</span>
-          <input value={gitName} onChange={(e) => setGitName(e.target.value)} placeholder="Ada Lovelace" />
-        </label>
-        <label>
-          <span>Email</span>
-          <input
-            value={gitEmail}
-            onChange={(e) => setGitEmail(e.target.value)}
-            placeholder="ada@example.com"
-          />
-        </label>
-      </div>
-
-      <h3 style={{ marginTop: 18 }}>Environment variables</h3>
+      <h3>Environment variables</h3>
       <p className="hint">
         Available to the harness and anything it runs, in every project. Stored encrypted.
       </p>

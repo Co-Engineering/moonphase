@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 
@@ -57,6 +58,12 @@ class GitHubIdentity:
     token: str
     account: str | None
     scopes: str
+    # A person's display name and public email, straight off `/user` — the
+    # natural default for git identity, since nothing else on this deployment
+    # knows either without asking. Either can be null: a fine-grained token
+    # may omit `name`, and `email` is only present when set public on GitHub.
+    name: str | None = None
+    email: str | None = None
 
 
 @dataclass
@@ -147,10 +154,13 @@ async def poll_device_flow(client_id: str, flow: DeviceFlow) -> GitHubIdentity |
 
     if "access_token" in payload:
         token = payload["access_token"]
+        user = await _fetch_user(token)
         return GitHubIdentity(
             token=token,
-            account=await account_for(token),
+            account=user.get("login"),
             scopes=payload.get("scope") or flow.scopes,
+            name=user.get("name"),
+            email=user.get("email"),
         )
 
     error = payload.get("error")
@@ -163,8 +173,10 @@ async def poll_device_flow(client_id: str, flow: DeviceFlow) -> GitHubIdentity |
     raise GitHubError(payload.get("error_description") or f"GitHub error: {error}")
 
 
-async def account_for(token: str) -> str | None:
-    """The login name behind a token, so the UI can say who is connected."""
+async def _fetch_user(token: str) -> dict[str, Any]:
+    """Raw `/user` payload for a token — login, name, email if public. Empty
+    on any failure, so a caller can `.get()` its way through without a
+    separate not-found branch."""
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             response = await client.get(
@@ -175,10 +187,10 @@ async def account_for(token: str) -> str | None:
                 },
             )
         if response.status_code >= 300:
-            return None
-        return response.json().get("login")
+            return {}
+        return response.json()
     except httpx.HTTPError:
-        return None
+        return {}
 
 
 def _next_page_url(response: httpx.Response) -> str | None:
@@ -244,9 +256,14 @@ async def verify_token(token: str) -> GitHubIdentity:
     if response.status_code >= 300:
         raise GitHubError(f"Could not verify the token: {response.text[:200]}")
 
+    user = response.json()
     # GitHub reports a classic token's grants in this header; fine-grained
     # tokens omit it, which is not an error.
     scopes = response.headers.get("x-oauth-scopes", "")
     return GitHubIdentity(
-        token=token, account=response.json().get("login"), scopes=scopes
+        token=token,
+        account=user.get("login"),
+        scopes=scopes,
+        name=user.get("name"),
+        email=user.get("email"),
     )
