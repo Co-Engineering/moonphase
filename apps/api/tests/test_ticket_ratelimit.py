@@ -27,7 +27,9 @@ def _principal(user_id: str) -> Principal:
 
 
 async def test_a_burst_of_ticket_requests_is_refused_past_the_limit(monkeypatch) -> None:
-    monkeypatch.setattr(terminal, "_TICKET_RATE_LIMITER", RateLimiter(max_calls=2, window_seconds=60))
+    monkeypatch.setattr(
+        terminal, "_TICKET_RATE_LIMITER", RateLimiter(max_calls=2, window_seconds=60)
+    )
     principal = _principal("user-1")
 
     await terminal.issue_terminal_ticket(PROJECT_ID, principal=principal)
@@ -43,7 +45,9 @@ async def test_a_burst_of_ticket_requests_is_refused_past_the_limit(monkeypatch)
 async def test_callers_do_not_share_a_ticket_budget(monkeypatch) -> None:
     """One account scripting a flood must not cost another account its own
     ability to open a terminal at all."""
-    monkeypatch.setattr(terminal, "_TICKET_RATE_LIMITER", RateLimiter(max_calls=1, window_seconds=60))
+    monkeypatch.setattr(
+        terminal, "_TICKET_RATE_LIMITER", RateLimiter(max_calls=1, window_seconds=60)
+    )
 
     await terminal.issue_terminal_ticket(PROJECT_ID, principal=_principal("flooder"))
     with pytest.raises(HTTPException):
