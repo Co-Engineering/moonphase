@@ -17,7 +17,7 @@ from .. import queries, runtime
 from ..auth import Principal, current_principal
 from ..db import user_session
 from ..profile import parse_json_object
-from ..runtime import CAN_CONTROL, CAN_OBSERVE, NotFound
+from ..runtime import CAN_ADMINISTER, CAN_CONTROL, CAN_OBSERVE, NotFound
 from ..schemas import ClaudeConfigIn, ClaudeConfigOut
 
 router = APIRouter(prefix="/api/projects", tags=["claude-config"])
@@ -43,10 +43,16 @@ def _out(row: dict | None) -> ClaudeConfigOut:
 async def get_project_config(
     project_id: UUID, principal: Principal = Depends(current_principal)
 ) -> ClaudeConfigOut:
-    """Applies to every session in this project, for everyone who can drive one."""
+    """Applies to every session in this project, for everyone who can drive one.
+
+    CAN_CONTROL, not CAN_OBSERVE: a plain viewer share is watch-only — the
+    feed and the terminal, nothing about configuration — and this can carry
+    real secrets (env_vars exists specifically to hold things like a
+    project-only database URL, unencrypted, in the same row).
+    """
     try:
         await runtime.load_project_context(
-            principal.claims, project_id, require=CAN_OBSERVE
+            principal.claims, project_id, require=CAN_CONTROL
         )
     except NotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -64,10 +70,14 @@ async def update_project_config(
     payload: ClaudeConfigIn,
     principal: Principal = Depends(current_principal),
 ) -> ClaudeConfigOut:
-    """Takes effect for everyone in this project on their next harness restart."""
+    """Takes effect for everyone in this project on their next harness restart,
+    including a project admin's own session — so setting it is an admin-only
+    act, not something a plain write-collaborator can do to everyone else
+    unreviewed (mcp_json in particular can name an MCP server command that
+    runs on the next session start)."""
     try:
         await runtime.load_project_context(
-            principal.claims, project_id, require=CAN_CONTROL
+            principal.claims, project_id, require=CAN_ADMINISTER
         )
     except NotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

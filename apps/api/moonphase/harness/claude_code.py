@@ -171,11 +171,23 @@ def _merge_settings_layers(layers: list[str | None]) -> str | None:
     merged: dict[str, Any] = {}
     decided: dict[str, str] = {}  # "Tool(pattern)" -> decision
 
-    for raw in layers:
+    for index, raw in enumerate(layers):
         doc = _parse_object(raw)
         for key, value in doc.items():
-            if key != "permissions":
-                merged[key] = value
+            if key == "permissions":
+                continue
+            if key == "hooks" and 0 < index < len(layers) - 1:
+                # hooks run arbitrary shell commands on tool-use events.
+                # layers is always [org profile, project, session] here, and
+                # only the two ends are trusted for this key: the org
+                # profile is the caller's own account, and the session
+                # layer is set only by that session's own owner. A middle
+                # (project) layer is writable by any write-collaborator and
+                # applies to every other collaborator's session too — so it
+                # must not be able to plant a hook that then runs inside,
+                # say, a project admin's own session.
+                continue
+            merged[key] = value
         permissions = doc.get("permissions")
         if not isinstance(permissions, dict):
             continue
