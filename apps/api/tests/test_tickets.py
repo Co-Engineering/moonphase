@@ -59,3 +59,24 @@ def test_an_expired_ticket_is_refused(monkeypatch) -> None:
     )
 
     assert tickets.redeem(ticket, scope="ws:project-1") is None
+
+
+def test_the_store_is_capped_even_across_many_distinct_callers(monkeypatch) -> None:
+    """Defense in depth beyond the per-caller rate limit on the minting
+    endpoint (routers/terminal.py): many different accounts, each staying
+    under their own limit, must still not grow the shared store without
+    bound."""
+    monkeypatch.setattr(tickets, "MAX_TICKETS", 3)
+    tickets._tickets.clear()
+    try:
+        issued = [
+            tickets.issue({"sub": f"user-{i}"}, scope="ws:project-1") for i in range(3)
+        ]
+        overflow = tickets.issue({"sub": "user-3"}, scope="ws:project-1")
+
+        assert len(tickets._tickets) == 3
+        # The oldest ticket was evicted to make room for the newest.
+        assert tickets.redeem(issued[0], scope="ws:project-1") is None
+        assert tickets.redeem(overflow, scope="ws:project-1") == {"sub": "user-3"}
+    finally:
+        tickets._tickets.clear()

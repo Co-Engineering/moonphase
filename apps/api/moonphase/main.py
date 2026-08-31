@@ -11,6 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 
 from . import preflight, preview, ssh
 from .config import get_settings
@@ -97,6 +98,20 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # Starlette itself gained a `max_body_size` app constructor option, but
+    # FastAPI's own build_middleware_stack() override (added to interleave
+    # AsyncExitStackMiddleware) doesn't read it at all — setting that
+    # attribute here would silently do nothing. Adding Starlette's own
+    # RequestBodyLimitMiddleware directly still works, since it's the same
+    # mechanism CORSMiddleware above uses. Without this, the feed upload
+    # endpoint's own 15MB check runs only after Starlette's multipart parser
+    # has already spooled an arbitrarily large file part to disk — this is
+    # what actually stops that before it starts. Comfortably above the 15MB
+    # the upload endpoint allows, to leave room for multipart boundaries and
+    # other form fields. Applied globally rather than only to that route:
+    # nothing else this API serves has a legitimate reason for a body
+    # anywhere near this size either.
+    app.add_middleware(RequestBodyLimitMiddleware, max_body_size=20 * 1024 * 1024)
 
     @app.exception_handler(NotFound)
     async def _not_found(request: Request, exc: NotFound) -> JSONResponse:

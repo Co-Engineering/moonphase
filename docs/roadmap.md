@@ -51,7 +51,9 @@ running.
       container; it should write that back to `projects.status` so a rebooted
       server does not leave the UI lying.
 - [x] **WebSocket auth tickets.** Replaced the token query parameter with a
-      short-lived single-use ticket, so access tokens stop landing in logs.
+      short-lived single-use ticket — and removed the token fallback
+      entirely, plus turned off uvicorn's own access log, so an access
+      token genuinely never lands anywhere it could be read back from.
 
 ## v0.3 — zrok previews
 

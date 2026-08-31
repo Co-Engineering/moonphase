@@ -511,6 +511,27 @@ def _valid_skills(v: dict[str, str]) -> dict[str, str]:
     return v
 
 
+# An env var key becomes a literal `KEY=value` line in a file that gets
+# `.`-sourced as bash (profile.py's apply() and sessions.py's launcher script
+# and is_authenticated() all do this) — so it is restricted to what a POSIX
+# shell itself accepts as a variable name. Only the *value* is shell-quoted
+# when that file is written; an unrestricted key would let a newline, `;` or
+# backtick in it become literal shell syntax the moment the file is sourced.
+_ENV_KEY_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*$"
+
+
+def _valid_env_vars(v: dict[str, str]) -> dict[str, str]:
+    import re
+
+    for key in v:
+        if not re.match(_ENV_KEY_PATTERN, key):
+            raise ValueError(
+                f"Environment variable name {key!r} must be letters, numbers or "
+                "_, and can't start with a number."
+            )
+    return v
+
+
 class WorkspaceProfileIn(BaseModel):
     org_id: UUID | None = None
     claude_settings_json: str | None = None
@@ -530,6 +551,11 @@ class WorkspaceProfileIn(BaseModel):
     @classmethod
     def _valid_skill_names(cls, v: dict[str, str]) -> dict[str, str]:
         return _valid_skills(v)
+
+    @field_validator("env_vars")
+    @classmethod
+    def _valid_env_var_names(cls, v: dict[str, str]) -> dict[str, str]:
+        return _valid_env_vars(v)
 
 
 class WorkspaceProfileOut(BaseModel):
@@ -574,6 +600,11 @@ class ClaudeConfigIn(BaseModel):
     @classmethod
     def _valid_skill_names(cls, v: dict[str, str]) -> dict[str, str]:
         return _valid_skills(v)
+
+    @field_validator("env_vars")
+    @classmethod
+    def _valid_env_var_names(cls, v: dict[str, str]) -> dict[str, str]:
+        return _valid_env_vars(v)
 
 
 class ClaudeConfigOut(BaseModel):

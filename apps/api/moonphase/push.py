@@ -167,8 +167,11 @@ async def send(
         # Should not be reachable — subscribe() already validates — but a row
         # from before this check existed, or written some other way, must be
         # pruned rather than used to make a request on the caller's behalf.
+        # A real SendResult, not a bare bool: every caller reads .alive/
+        # .delivered/.error off whatever this returns, and alive=False is
+        # exactly what tells them to prune it.
         log.warning("refusing to deliver to a bad push endpoint: %s", exc)
-        return False
+        return SendResult(delivered=False, alive=False, error=str(exc))
 
     payload = json.dumps(
         {

@@ -3,20 +3,17 @@
 <plist version="1.0">
 <dict>
 	<!--
-	The standard set Electron itself documents for a hardened-runtime build
-	(electronjs.org/docs/latest/tutorial/code-signing): V8 needs JIT and
-	unsigned executable memory, and Electron's own libraries and any native
-	Node modules need library validation relaxed to load. Without these, a
-	hardened-runtime build can crash on launch rather than merely lose a
-	permission it never used.
+	Only what V8 itself needs (electronjs.org/docs/latest/tutorial/code-signing)
+	to not crash on launch under Hardened Runtime. This app has no native Node
+	modules — the only runtime dependency is the pure-JS `ws` package — and no
+	Squirrel.Mac auto-update (it only opens the release page in a browser), so
+	the dylib-injection allowances the same doc mentions for that case are not
+	load-bearing here. Add them back only alongside a specific native
+	dependency that actually needs them, naming it.
 	-->
 	<key>com.apple.security.cs.allow-jit</key>
 	<true/>
 	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-	<true/>
-	<key>com.apple.security.cs.allow-dyld-environment-variables</key>
-	<true/>
-	<key>com.apple.security.cs.disable-library-validation</key>
 	<true/>
 	<!-- The renderer talks to a user-configured Moonphase server over HTTP(S)
 	     and WebSocket, and the preview relay dials out too. -->

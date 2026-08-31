@@ -23,15 +23,23 @@ import logging
 from uuid import UUID
 
 import asyncssh
-from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 
 from .. import docker_remote, queries, runtime, sessions, ssh, tickets, workspaces
 from ..auth import Principal, current_principal, ticket_scope, websocket_principal
 from ..db import user_session
+from ..ratelimit import RateLimiter
 from ..runtime import CAN_CONTROL, CAN_OBSERVE, Forbidden, NotFound
 from ..ssh import SSHError
 
 log = logging.getLogger(__name__)
+
+# Ticket minting itself checks no project access (the socket does, against
+# the identity the ticket carries), so nothing else here bounds the rate a
+# caller can grow the shared in-memory ticket store at — see ratelimit.py.
+# Sized well above a person opening or reattaching several terminals in
+# quick succession, and well below a scripted flood.
+_TICKET_RATE_LIMITER = RateLimiter(max_calls=60, window_seconds=60)
 
 router = APIRouter(tags=["terminal"])
 
@@ -194,8 +202,17 @@ async def issue_terminal_ticket(
     """A ticket to open this project's terminal socket with, instead of the
     real bearer token — see tickets.py for why. Minting one does not itself
     check project access: the socket runs that same check it always has,
-    against the identity the ticket carries.
+    against the identity the ticket carries. Since that means this endpoint
+    has no access check of its own to lean on, it is rate limited instead —
+    see ratelimit.py.
     """
+    retry_after = _TICKET_RATE_LIMITER.check(principal.user_id)
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many ticket requests in a short time. Try again shortly.",
+            headers={"Retry-After": str(max(1, int(retry_after) + 1))},
+        )
     return {"ticket": tickets.issue(principal.claims, scope=ticket_scope(project_id))}
 
 

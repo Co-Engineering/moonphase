@@ -79,6 +79,11 @@ class McpLoginSession:
     credential_entry: str | None = None
     pane: str = ""
     cleaned_up: bool = False
+    # This server's entry, if any, read before this attempt's relay ever
+    # started. _harvest_credential diffs against this so an entry already
+    # sitting in the file — from a previous, unrelated connection — can never
+    # be mistaken for proof that *this* attempt succeeded.
+    existing_credential: str | None = None
 
     @property
     def expired(self) -> bool:
@@ -147,6 +152,9 @@ async def start(
 
 async def _prepare(conn: asyncssh.SSHClientConnection, session: McpLoginSession) -> None:
     try:
+        session.existing_credential = await _read_oauth_entry(
+            conn, session.container, session.home, session.server_name
+        )
         await _supersede(conn, session)
 
         command = ["claude", "mcp", "login", session.server_name, "--no-browser"]
@@ -233,15 +241,10 @@ async def advance(
 
     session.pane = await capture(conn, session)
 
-    entry = await _harvest_credential(conn, session)
-    if entry is not None:
-        session.credential_entry = entry
-        session.state = "complete"
-        session.detail = None
-        log.info("mcp login %s: captured a credential for %s", session.id, session.server_name)
-        await cleanup(conn, session)
-        return session
-
+    # Checked before the credential file, not after: a pane that plainly says
+    # this attempt failed must never be overridden by an entry that happens
+    # to be sitting in the file — whether it is stale or genuinely new, a
+    # visible failure is the more trustworthy signal about *this* attempt.
     lowered = session.pane.lower()
     if any(
         phrase in lowered
@@ -251,6 +254,15 @@ async def advance(
         session.detail = _last_nonblank_line(session.pane) or (
             f"{session.server_name!r} rejected that link. Start again."
         )
+        await cleanup(conn, session)
+        return session
+
+    entry = await _harvest_credential(conn, session)
+    if entry is not None:
+        session.credential_entry = entry
+        session.state = "complete"
+        session.detail = None
+        log.info("mcp login %s: captured a credential for %s", session.id, session.server_name)
         await cleanup(conn, session)
         return session
 
@@ -265,18 +277,19 @@ async def advance(
     return session
 
 
-async def _harvest_credential(
-    conn: asyncssh.SSHClientConnection, session: McpLoginSession
+async def _read_oauth_entry(
+    conn: asyncssh.SSHClientConnection, container: str, home: str, server_name: str
 ) -> str | None:
-    """The `"<server-name>|<hash>": {...}` pair Claude Code wrote, if any.
+    """The `"<server-name>|<hash>": {...}` pair in this container's own
+    credentials file right now, whatever it is.
 
-    Read from the session's own credentials file rather than parsed out of the
-    pane: the pane only ever says whether it worked, and the file is the
-    thing that has to be replayed into every other session afterward anyway.
+    A plain lookup with no notion of "before" or "after" — used both to
+    snapshot what was already there before a relay starts and, later, to see
+    what is there now.
     """
-    path = f"{session.home}/.claude/.credentials.json"
+    path = f"{home}/.claude/.credentials.json"
     result = await docker_remote.exec_capture(
-        conn, session.container,
+        conn, container,
         ["sh", "-c", f"cat {shlex.quote(path)} 2>/dev/null"],
         timeout=30,
     )
@@ -290,11 +303,33 @@ async def _harvest_credential(
     if not isinstance(oauth, dict):
         return None
 
-    prefix = f"{session.server_name}|"
+    prefix = f"{server_name}|"
     for key, value in oauth.items():
         if key.startswith(prefix) and isinstance(value, dict) and value.get("accessToken"):
             return json.dumps({key: value})
     return None
+
+
+async def _harvest_credential(
+    conn: asyncssh.SSHClientConnection, session: McpLoginSession
+) -> str | None:
+    """The `"<server-name>|<hash>": {...}` pair Claude Code wrote for *this*
+    attempt, if any — never the one that was already there.
+
+    Read from the session's own credentials file rather than parsed out of the
+    pane: the pane only ever says whether it worked, and the file is the
+    thing that has to be replayed into every other session afterward anyway.
+    Compared against the snapshot taken before this attempt started, so a
+    server the org already connected once can't be marked "complete" just
+    because its old entry is still sitting there unchanged — only a
+    genuinely new or different entry counts as this attempt's own result.
+    """
+    entry = await _read_oauth_entry(
+        conn, session.container, session.home, session.server_name
+    )
+    if entry is None or entry == session.existing_credential:
+        return None
+    return entry
 
 
 def _last_nonblank_line(pane: str) -> str | None:

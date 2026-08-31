@@ -36,17 +36,30 @@ router = APIRouter(prefix="/api/projects/{project_id}", tags=["mcp-oauth"])
 
 
 def _get_mcp_session(
-    login_session_id: str, principal: Principal
+    login_session_id: str, project_id: UUID, principal: Principal
 ) -> mcp_login.McpLoginSession:
-    """`mcp_login.get`, refused for anyone but the account that started it.
+    """`mcp_login.get`, refused for anyone but the account that started it,
+    on the same project it was started under.
 
     The session id is a random token, but it is also the only thing gating a
     flow that ends in a credential stored under `session.org_id` and
     `created_by=session.user_id` — a mismatch here must read as "no such
     session", not as a way to tell a wrong id apart from someone else's.
+
+    The project check matters just as much as the user check: callers
+    authorize against the URL's `project_id`, but `session.container` and
+    `session.tmux_session` are fixed to whatever project the flow actually
+    started under. Without this, someone who started a flow on a project
+    they've since lost access to could keep driving it by naming a different
+    project they still control in the URL — the access check would pass
+    while the commands still ran against the *original* project's session.
     """
     session = mcp_login.get(login_session_id)
-    if session is None or session.user_id != str(principal.user_id):
+    if (
+        session is None
+        or session.user_id != str(principal.user_id)
+        or session.project_id != str(project_id)
+    ):
         raise HTTPException(status_code=404, detail="No such connection attempt.")
     return session
 
@@ -206,7 +219,7 @@ async def poll_mcp_oauth(
     Persists the captured credential the moment it appears — an upsert, so a
     client that keeps polling after completion does not cause a second row.
     """
-    mcp_session = _get_mcp_session(login_session_id, principal)
+    mcp_session = _get_mcp_session(login_session_id, project_id, principal)
 
     if mcp_session.state == "verifying":
         try:
@@ -244,7 +257,7 @@ async def paste_mcp_oauth(
     Types it and returns at once; the client polls for the result the same
     way it already does for the harness's own sign-in.
     """
-    mcp_session = _get_mcp_session(login_session_id, principal)
+    mcp_session = _get_mcp_session(login_session_id, project_id, principal)
 
     try:
         ctx = await runtime.load_project_context(
