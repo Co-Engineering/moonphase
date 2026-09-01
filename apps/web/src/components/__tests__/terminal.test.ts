@@ -3,6 +3,7 @@ import {
   HARNESS_CLIPBOARD_PASTE_TRIGGER,
   SHIFT_ENTER_SEQUENCE,
   clipboardImagePasteFollowUp,
+  decodeOsc52ClipboardPayload,
   handleShiftEnterKeydown,
   isPlainPasteCombo,
   readClipboardImage,
@@ -231,5 +232,48 @@ describe('reading an image off the clipboard for Ctrl+V', () => {
 
   it('is not defeated by a clipboard API the browser does not implement', async () => {
     expect(await readClipboardImage(undefined, 50)).toBeNull()
+  })
+})
+
+/**
+ * tmux forwards a mouse-drag copy to the browser as an OSC 52 sequence.
+ * `registerOscHandler(52, ...)` hands this function everything between
+ * "52;" and the terminator.
+ */
+describe('decodeOsc52ClipboardPayload', () => {
+  it('decodes a real tmux mouse-copy, captured live over a raw pty', () => {
+    // From an actual `tmux -L ptytest` session: select a line, release the
+    // mouse (MouseDragEnd1Pane's default binding, copy-pipe-and-cancel), and
+    // this exact byte sequence is what came back — Pc empty, not "c".
+    const captured =
+      ';ZGV2QG1wLW1vb25waGFzZS1mZjg1NTVlNDp+L3dvcmskIGVjaG8gaGVsbG8tY2xpcGJvYXJkLXdvcmxk'
+    expect(decodeOsc52ClipboardPayload(captured)).toBe(
+      'dev@mp-moonphase-ff8555e4:~/work$ echo hello-clipboard-world',
+    )
+  })
+
+  it('decodes an explicit "c" target the same way', () => {
+    expect(decodeOsc52ClipboardPayload('c;aGVsbG8=')).toBe('hello')
+  })
+
+  it('declines a read request rather than answering it', () => {
+    expect(decodeOsc52ClipboardPayload('c;?')).toBeNull()
+  })
+
+  it('declines a target that explicitly excludes the clipboard', () => {
+    // "p" (primary selection) named on its own, clipboard deliberately left out.
+    expect(decodeOsc52ClipboardPayload('p;aGVsbG8=')).toBeNull()
+  })
+
+  it('still copies when the clipboard is named alongside another target', () => {
+    expect(decodeOsc52ClipboardPayload('pc;aGVsbG8=')).toBe('hello')
+  })
+
+  it('returns null for a payload with no separator at all', () => {
+    expect(decodeOsc52ClipboardPayload('nonsense')).toBeNull()
+  })
+
+  it('returns null for bytes that are not valid base64', () => {
+    expect(decodeOsc52ClipboardPayload(';not-base64!!!')).toBeNull()
   })
 })
