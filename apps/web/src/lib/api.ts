@@ -429,6 +429,13 @@ export interface FeedUpload {
   path: string
 }
 
+export interface SessionUpload {
+  /** Name the file landed under in the session's working directory — typed
+   *  by hand, this is what you'd `cat`. Renamed from what was sent if that
+   *  name was already taken (see `sessions.unique_filename`). */
+  path: string
+}
+
 export interface PreviewService {
   port: number
   /** 'page' serves HTML and is what "open the app" means; 'api' answers JSON. */
@@ -787,6 +794,17 @@ export async function terminalUrl(
     ...(session ? { session } : {}),
   })
   return `${base}/ws/projects/${projectId}/terminal?${params}`
+}
+
+/** Drops a file into the session's working directory, for the agent (and
+ *  anyone reviewing Changes) to find sitting there like any other file. */
+export function uploadSessionFile(projectId: string, file: File, session?: string) {
+  const form = new FormData()
+  form.append('file', file)
+  return request<SessionUpload>(
+    `/api/projects/${projectId}/sessions/upload${session ? `?session=${encodeURIComponent(session)}` : ''}`,
+    { method: 'POST', body: form },
+  )
 }
 
 

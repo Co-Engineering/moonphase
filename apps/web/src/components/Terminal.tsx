@@ -3,7 +3,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
-import { terminalUrl } from '../lib/api'
+import { terminalUrl, uploadSessionFile } from '../lib/api'
 import { copyText } from '../lib/clipboard'
 
 type Status = 'connecting' | 'attached' | 'disconnected' | 'error'
@@ -66,6 +66,17 @@ export function isPlainPasteCombo(
     !event.shiftKey &&
     !event.altKey
   )
+}
+
+/**
+ * Wraps a filename for safe insertion into a shell command line: single
+ * quotes, with any embedded single quote escaped the POSIX way (close the
+ * quote, an escaped literal quote, reopen it). Used when an uploaded file's
+ * name is pasted into the terminal after landing, so a name with a space or
+ * shell-special character still reads as the one argument it is.
+ */
+export function shellQuoteForPaste(name: string): string {
+  return `'${name.replace(/'/g, `'\\''`)}'`
 }
 
 /**
@@ -247,6 +258,8 @@ export function ProjectTerminal({
   // clipboard the moment it arrives.
   const pendingClipboardRef = useRef<string | null>(null)
   const pendingClipboardTimeoutRef = useRef<number | undefined>(undefined)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const uploadTimerRef = useRef<number | undefined>(undefined)
 
   const [status, setStatus] = useState<Status>('connecting')
   // Set briefly when a keystroke had nowhere to go — the socket wasn't open,
@@ -259,6 +272,12 @@ export function ProjectTerminal({
   // write on the other end of the socket, easily the better part of a second
   // for a large screenshot, with nothing on screen to say it's in progress.
   const [pastingImage, setPastingImage] = useState(false)
+  // Mirrors pastingImage for a dropped or picked file that isn't an image:
+  // there is no clipboard-paste convention to piggyback on here, so this is
+  // the only sign an upload is in flight, succeeded, or failed.
+  const [uploadState, setUploadState] = useState<
+    { kind: 'uploading' | 'done' | 'error'; label: string } | null
+  >(null)
 
   // Read through a ref inside the xterm callback: the terminal is rebuilt only
   // when the project or session changes, so a plain closure over the prop
@@ -271,6 +290,51 @@ export function ProjectTerminal({
   useEffect(() => {
     onStatusChange?.(status)
   }, [status, onStatusChange])
+
+  // Independent of the connection effect below (which tears down and rebuilds
+  // the whole terminal on a project/session change): only the pending-timer
+  // needs cleaning up on unmount, not on every reattach.
+  useEffect(() => () => window.clearTimeout(uploadTimerRef.current), [])
+
+  /**
+   * Uploads each file into the session's working directory, then pastes the
+   * name(s) it landed under at the cursor — the same convention dragging a
+   * file onto Terminal.app or iTerm2 follows, typing its path rather than
+   * silently doing something with it. Shared by the drop handler below and
+   * the explicit upload button, so both end up in the same place.
+   */
+  const uploadFiles = (files: File[]) => {
+    if (readOnlyRef.current || files.length === 0) return
+    void (async () => {
+      setUploadState({
+        kind: 'uploading',
+        label: files.length === 1 ? files[0].name : `${files.length} files`,
+      })
+      const landed: string[] = []
+      let failed = 0
+      for (const file of files) {
+        try {
+          const { path } = await uploadSessionFile(projectId, file, session)
+          landed.push(path)
+        } catch {
+          failed += 1
+        }
+      }
+      if (landed.length) {
+        termRef.current?.paste(landed.map(shellQuoteForPaste).join(' '))
+      }
+      setUploadState(
+        failed > 0
+          ? {
+              kind: 'error',
+              label: landed.length ? `${failed} of ${files.length} failed` : 'upload failed',
+            }
+          : { kind: 'done', label: landed.length === 1 ? landed[0] : `${landed.length} files` },
+      )
+      window.clearTimeout(uploadTimerRef.current)
+      uploadTimerRef.current = window.setTimeout(() => setUploadState(null), 2500)
+    })()
+  }
 
   useEffect(() => {
     if (!hostRef.current) return
@@ -641,10 +705,11 @@ export function ProjectTerminal({
     }
     host.addEventListener('paste', onPaste, { capture: true })
 
-    // Dropping an image is the same destination as pasting one — the
-    // terminal itself has nothing to drop text or files onto, so any drop
-    // with an image in it is claimed here rather than left to the browser's
-    // default (which, over a bare div, is to navigate to the file).
+    // Dropping a file is claimed here rather than left to the browser's
+    // default (which, over a bare div, is to navigate to it). An image goes
+    // to the same clipboard-staging destination a paste would; anything else
+    // is uploaded into the session's working directory instead — see
+    // uploadFiles above.
     const onDragOver = (event: DragEvent) => {
       if (!readOnlyRef.current) event.preventDefault()
     }
@@ -654,11 +719,11 @@ export function ProjectTerminal({
         refusedRef.current?.()
         return
       }
-      const file = Array.from(event.dataTransfer?.files ?? []).find((f) =>
-        f.type.startsWith('image/'),
-      )
-      if (!file) return
-      stageImage(file, '')
+      const dropped = Array.from(event.dataTransfer?.files ?? [])
+      const image = dropped.find((f) => f.type.startsWith('image/'))
+      if (image) stageImage(image, '')
+      const rest = dropped.filter((f) => f !== image)
+      if (rest.length) uploadFiles(rest)
     }
     host.addEventListener('dragover', onDragOver)
     host.addEventListener('drop', onDrop)
@@ -774,19 +839,54 @@ export function ProjectTerminal({
           read-only
         </div>
       )}
-      <div
-        className={`terminal-status terminal-status--${status}${inputDropped ? ' input-dropped' : ''}`}
-      >
-        <span className="dot" />
-        {pastingImage
-          ? 'pasting image…'
-          : status === 'attached'
-            ? 'attached'
-            : status === 'connecting'
-              ? 'attaching…'
-              : status === 'disconnected'
-                ? 'detached'
-                : 'error'}
+      <div className="terminal-toolbar">
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="terminal-upload-input"
+          tabIndex={-1}
+          onChange={(event) => {
+            const files = Array.from(event.target.files ?? [])
+            event.target.value = ''
+            if (files.length) uploadFiles(files)
+          }}
+        />
+        <button
+          type="button"
+          className="terminal-upload-button"
+          title={
+            readOnly
+              ? 'This session belongs to someone else'
+              : 'Upload a file into this session'
+          }
+          aria-label="Upload a file into this session"
+          onClick={() => (readOnly ? onRefusedInput?.() : fileInputRef.current?.click())}
+        >
+          +
+        </button>
+        <div
+          className={`terminal-status terminal-status--${status}${
+            inputDropped ? ' input-dropped' : ''
+          }${uploadState?.kind === 'error' ? ' upload-error' : ''}`}
+        >
+          <span className="dot" />
+          {uploadState
+            ? uploadState.kind === 'uploading'
+              ? `uploading ${uploadState.label}…`
+              : uploadState.kind === 'done'
+                ? `uploaded ${uploadState.label}`
+                : uploadState.label
+            : pastingImage
+              ? 'pasting image…'
+              : status === 'attached'
+                ? 'attached'
+                : status === 'connecting'
+                  ? 'attaching…'
+                  : status === 'disconnected'
+                    ? 'detached'
+                    : 'error'}
+        </div>
       </div>
       <div ref={hostRef} className="terminal-host" />
     </div>
