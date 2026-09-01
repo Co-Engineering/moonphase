@@ -50,7 +50,19 @@ log = logging.getLogger(__name__)
 # Leaving both at 6 would have meant every container built since the first
 # change already looked current, and the second would have reached none of
 # them.
-RECIPE_VERSION = "7"
+#
+# v8 is not a content change — the Dockerfile below is byte-for-byte what v7
+# produced. It exists purely to force a rebuild: images built before a host's
+# Docker/containerd/Sysbox packages were last updated carry layer ownership
+# metadata that Sysbox's ID-mapped mounts no longer resolve correctly, so every
+# root-owned setuid binary from the base image — sudo, passwd — shows up owned
+# by `nobody` inside the container. `sudo` then refuses to run at all ("must be
+# owned by uid 0"), which silently breaks the one thing Docker access on a
+# project depends on: installing Docker yourself via `sudo apt-get install`.
+# A fresh build, right now, with the same recipe, produces correct ownership —
+# confirmed directly against a real Sysbox-enabled project's host. Nothing
+# about the image needed to change; only its age did.
+RECIPE_VERSION = "8"
 
 NODE_VERSION = "22.20.0"
 
