@@ -190,11 +190,19 @@ class SessionMonitor:
 
         # A host reboot brings the container back — that is what the restart
         # policy is for — but everything inside it started fresh, so the agents
-        # are gone. Bring each session back with `--continue` the same way the
-        # "Resume" button would, so a reboot is invisible rather than an errand
-        # to run once per session.
-        if not panes and group and self._resume_due(container):
-            resumed, failed = await self._auto_resume(conn_ssh, container, group)
+        # are gone. Bring each *missing* session back with `--continue` the
+        # same way the "Resume" button would, so a reboot is invisible rather
+        # than an errand to run once per session.
+        #
+        # Judged per session rather than "every pane in the container is
+        # gone": a plain terminal attach recreates a tmux pane for whichever
+        # session someone happens to open first (see terminal.py), and that
+        # one pane used to be enough to make the whole container look
+        # already-resumed, silently cancelling auto-resume for every other
+        # session in it until a person opened each one by hand.
+        missing = [row for row in group if panes.get(str(row["tmux_session"])) is None]
+        if missing and self._resume_due(container):
+            resumed, failed = await self._auto_resume(conn_ssh, container, missing)
             # Only a failure starts the clock. Clearing it on a clean resume
             # keeps the *next* reboot immediate rather than making it serve
             # out the backoff earned by an unrelated earlier one.
@@ -264,9 +272,14 @@ class SessionMonitor:
         return last is None or time.monotonic() - last >= RESUME_RETRY_INTERVAL_SECONDS
 
     async def _auto_resume(
-        self, conn_ssh: Any, container: str, group: list[dict[str, Any]]
+        self, conn_ssh: Any, container: str, missing: list[dict[str, Any]]
     ) -> tuple[int, int]:
-        """Bring every session in a freshly-rebooted container back on its own.
+        """Bring each of the given, currently paneless sessions back on its own.
+
+        `missing` is whichever sessions in the container have no tmux pane
+        right now — not necessarily all of them, since one session can already
+        be back (someone opened it, or an earlier attempt resumed it) while
+        others in the same container are still gone.
 
         Best effort, one session at a time: one person's revoked credential or
         deleted project must not stop their neighbours' sessions in the same
@@ -275,7 +288,7 @@ class SessionMonitor:
         """
         resumed = 0
         failed = 0
-        for row in group:
+        for row in missing:
             user_id = row.get("user_id")
             session_name = str(row["tmux_session"])
             if user_id is None:

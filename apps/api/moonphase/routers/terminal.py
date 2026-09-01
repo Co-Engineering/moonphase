@@ -325,6 +325,16 @@ async def project_terminal(
                 workspace_profile=workspace_profile,
                 session=session_name,
                 space=space,
+                # A no-op when the tmux pane is already there, same as always.
+                # When it is not — the container restarted since anyone last
+                # attached — this is the only place that ever launches the
+                # harness for this session, so it has to be the one asking for
+                # `--continue`, or reattaching after a restart would silently
+                # start a brand new conversation instead of resuming the old
+                # one. Every harness treats `resume` as safe with nothing to
+                # continue, so this is fine on a session's very first attach
+                # too.
+                resume=True,
             )
     except SSHError as exc:
         await websocket.send_text(json.dumps({"type": "error", "message": str(exc)}))
