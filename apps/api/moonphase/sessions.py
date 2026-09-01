@@ -148,7 +148,8 @@ async def write_upload(
     path: str,
     data: bytes,
 ) -> None:
-    """Write an uploaded file (an image from the feed) into the container.
+    """Write an uploaded file (an image from the feed, or a file dropped onto
+    the terminal) into the container.
 
     The SSH channel that carries `stdin` here is text, not bytes, so raw image
     data would corrupt in transit; base64 survives it, and `base64 -d` on the
@@ -162,6 +163,65 @@ async def write_upload(
     )
     result = await ssh.run(conn, command, timeout=60, stdin=base64.b64encode(data).decode())
     result.check(f"Writing {path} into {container}")
+
+
+# Not a content-type allowlist, unlike the feed's image upload: this file's
+# caller lands arbitrary files (a log, a spec, a CSV) in the working
+# directory, so there is no fixed set of acceptable kinds — only a name that
+# has to be safe to use as a single path segment.
+_UPLOAD_NAME_CONTROL_CHARS = re.compile(r"[\x00-\x1f]")
+
+
+def sanitise_upload_name(name: str) -> str:
+    """A browser-supplied filename, made safe to use as one path segment.
+
+    `File.name` is whatever the browser decided to report and is about to
+    become part of a path inside the container, so this takes the basename
+    only (stripping any directory components the browser or a malicious
+    client included) and rejects the two names — '.' and '..' — that stay
+    dangerous even with every separator gone, since either one used as a bare
+    path segment still means "this directory" or "its parent".
+    """
+    base = name.replace("\\", "/").rsplit("/", 1)[-1].strip()
+    base = _UPLOAD_NAME_CONTROL_CHARS.sub("_", base)
+    if base in ("", ".", ".."):
+        return "upload"
+    return base[:200]
+
+
+async def list_directory(
+    conn: asyncssh.SSHClientConnection, container: str, directory: str
+) -> list[str]:
+    """Names directly inside `directory`, or an empty list if it does not
+    exist yet — the ordinary case for a session's first upload."""
+    result = await docker_remote.exec_capture(
+        conn, container, ["ls", "-1", "-A", directory], timeout=15
+    )
+    if not result.ok:
+        return []
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def unique_filename(existing: list[str] | set[str], filename: str) -> str:
+    """`filename`, or a numbered variant if that name is already taken.
+
+    The same convention a downloads folder or a Finder copy uses — 'notes
+    (1).txt', then 'notes (2).txt' — rather than silently overwriting
+    whatever a session's working directory already had under that name.
+    """
+    taken = set(existing)
+    if filename not in taken:
+        return filename
+    if "." in filename and not filename.startswith("."):
+        stem, ext = filename.rsplit(".", 1)
+        ext = f".{ext}"
+    else:
+        stem, ext = filename, ""
+    for n in range(1, 1000):
+        candidate = f"{stem} ({n}){ext}"
+        if candidate not in taken:
+            return candidate
+    raise SSHError(f"Too many files already named like {filename!r}.")
 
 
 CLIPBOARD_STAGE_DIR = ".moonphase-clipboard"

@@ -8,6 +8,7 @@ import {
   isPlainPasteCombo,
   readClipboardImage,
   isShiftEnter,
+  shellQuoteForPaste,
 } from '../Terminal'
 
 function pasteCombo(
@@ -275,5 +276,21 @@ describe('decodeOsc52ClipboardPayload', () => {
 
   it('returns null for bytes that are not valid base64', () => {
     expect(decodeOsc52ClipboardPayload(';not-base64!!!')).toBeNull()
+  })
+})
+
+describe('shellQuoteForPaste', () => {
+  it('wraps a plain name in single quotes', () => {
+    expect(shellQuoteForPaste('notes.txt')).toBe("'notes.txt'")
+  })
+
+  it('quotes a name with a space so it reads as one argument', () => {
+    expect(shellQuoteForPaste('release notes.txt')).toBe("'release notes.txt'")
+  })
+
+  it('escapes an embedded single quote the POSIX way', () => {
+    // Close the quote, an escaped literal quote, reopen it — the standard
+    // trick, since a single-quoted string cannot contain a single quote.
+    expect(shellQuoteForPaste("it's done.txt")).toBe(`'it'\\''s done.txt'`)
   })
 })

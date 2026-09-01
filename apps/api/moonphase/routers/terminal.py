@@ -23,13 +23,23 @@ import logging
 from uuid import UUID
 
 import asyncssh
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 
 from .. import docker_remote, queries, runtime, sessions, ssh, tickets, workspaces
 from ..auth import Principal, current_principal, ticket_scope, websocket_principal
 from ..db import user_session
 from ..ratelimit import RateLimiter
 from ..runtime import CAN_CONTROL, CAN_OBSERVE, Forbidden, NotFound
+from ..schemas import UploadOut
 from ..ssh import SSHError
 
 log = logging.getLogger(__name__)
@@ -54,6 +64,13 @@ MARKER_TIMEOUT_SECONDS = 5.0
 # something enormous through a channel that was never meant to be a file
 # upload.
 MAX_CLIPBOARD_IMAGE_BASE64 = 15_000_000
+
+# Same ceiling as the feed's photo upload, and for the same reason: comfortably
+# above anything this is meant for, well below what makes an SSH round trip or
+# the container's disk a problem. main.py's RequestBodyLimitMiddleware (20MB)
+# is what actually stops an oversized body before it reaches here — this is
+# the friendlier error for the common case of a merely-too-big file.
+_MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 
 
 async def _consume_tty_marker(
@@ -214,6 +231,44 @@ async def issue_terminal_ticket(
             headers={"Retry-After": str(max(1, int(retry_after) + 1))},
         )
     return {"ticket": tickets.issue(principal.claims, scope=ticket_scope(project_id))}
+
+
+@router.post("/api/projects/{project_id}/sessions/upload", response_model=UploadOut)
+async def upload_session_file(
+    project_id: UUID,
+    session: str | None = None,
+    file: UploadFile = File(...),
+    principal: Principal = Depends(current_principal),
+) -> UploadOut:
+    """Drop an arbitrary file into the session's working directory.
+
+    Unlike the feed's photo upload, this lands in the git worktree itself, not
+    the session's home: the point is for the agent — and anyone reviewing
+    Changes — to see the file arrive as a normal part of the workspace, the
+    same way it would if it had been `git add`ed by hand. `CAN_CONTROL` is
+    `load_project_context`'s default, so a viewer cannot write into a project
+    they may only watch.
+
+    A name that already exists in the working directory is not overwritten;
+    see `sessions.unique_filename` for the numbered variant it gets instead.
+    """
+    data = await file.read(_MAX_UPLOAD_BYTES + 1)
+    if len(data) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Files are limited to 15 MB.")
+    if not data:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty.")
+
+    session_name = sessions.sanitise_name(session or sessions.DEFAULT_SESSION)
+    ctx = await runtime.load_project_context(principal.claims, project_id)
+    space, _row = await runtime.load_session_space(principal.claims, project_id, session_name)
+
+    safe_name = sessions.sanitise_upload_name(file.filename or "upload")
+    conn_ssh = await ssh.pool.get(ctx.target)
+    existing = await sessions.list_directory(conn_ssh, ctx.container, space.workdir)
+    unique_name = sessions.unique_filename(existing, safe_name)
+
+    await sessions.write_upload(conn_ssh, ctx.container, f"{space.workdir}/{unique_name}", data)
+    return UploadOut(path=unique_name)
 
 
 @router.websocket("/ws/projects/{project_id}/terminal")

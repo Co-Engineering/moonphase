@@ -510,11 +510,17 @@ pre {
   display: none;
 }
 
-.terminal-status {
+.terminal-toolbar {
   position: absolute;
   top: 8px;
   right: 16px;
   z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.terminal-status {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -538,10 +544,42 @@ pre {
   animation: readonly-pulse 0.9s ease;
 }
 
+/* A dropped or picked file failed to upload — distinct from input-dropped's
+   amber, since nothing here is retried automatically either. */
+.terminal-status.upload-error {
+  border-color: var(--red);
+  color: var(--red);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .terminal-status.input-dropped {
     animation: none;
   }
+}
+
+.terminal-upload-input {
+  /* Never shown — the button opens the platform picker for it. */
+  display: none;
+}
+
+.terminal-upload-button {
+  pointer-events: auto;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: rgba(15, 16, 23, 0.9);
+  color: var(--text-faint);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 160ms ease, color 160ms ease;
+}
+
+.terminal-upload-button:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
 }
 
 /* --- auth ----------------------------------------------------------------- */
