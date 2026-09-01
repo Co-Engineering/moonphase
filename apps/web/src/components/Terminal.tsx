@@ -156,6 +156,41 @@ export function handleShiftEnterKeydown(
 // heartbeat forces detection well before that.
 const HEARTBEAT_INTERVAL_MS = 10_000
 
+/**
+ * Decodes an OSC 52 clipboard-set payload into the text it names, or null if
+ * there is nothing sane to copy: a read request (`?`, always declined — see
+ * the handler below), a target that is not the clipboard, or bytes that do
+ * not decode as base64/UTF-8.
+ */
+export function decodeOsc52ClipboardPayload(data: string): string | null {
+  const separator = data.indexOf(';')
+  if (separator === -1) return null
+  const targets = data.slice(0, separator)
+  const payload = data.slice(separator + 1)
+  if (payload === '?') return null
+  // tmux's own copy (mouse-drag release, not a passthrough of some inner
+  // program's own OSC 52) was captured live sending an empty Pc field —
+  // "52;;<base64>", not "52;c;<base64>" — so an empty target has to mean
+  // "the clipboard" too, or every ordinary tmux copy is silently discarded
+  // right here regardless of anything else. Only an explicit *other*
+  // target (primary selection "p", a cut buffer) should be turned away.
+  if (targets && !targets.includes('c')) return null
+  try {
+    const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0))
+    return new TextDecoder().decode(bytes)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * How long a tmux copy waits, unclaimed, for the next real interaction with
+ * this terminal before it is treated as abandoned rather than flushed to the
+ * system clipboard on some much-later keystroke that has nothing to do with
+ * it.
+ */
+export const PENDING_CLIPBOARD_TIMEOUT_MS = 15_000
+
 /** Re-encodes any pasted image as PNG — the one format the in-container xclip
  * shim (see infra/images/claude/xclip-shim.sh) knows how to hand back. */
 async function imageBlobToPngBase64(blob: Blob): Promise<string> {
@@ -207,6 +242,11 @@ export function ProjectTerminal({
   // Survives re-renders so a burst of failures backs off instead of hammering.
   const retryRef = useRef(0)
   const disposedRef = useRef(false)
+  // A tmux copy that arrived over OSC 52 but hasn't yet ridden out on a real
+  // user gesture — see the effect below for why it can't be written to the
+  // clipboard the moment it arrives.
+  const pendingClipboardRef = useRef<string | null>(null)
+  const pendingClipboardTimeoutRef = useRef<number | undefined>(undefined)
 
   const [status, setStatus] = useState<Status>('connecting')
   // Set briefly when a keystroke had nowhere to go — the socket wasn't open,
@@ -276,25 +316,52 @@ export function ProjectTerminal({
      * back out via an OSC 52 escape sequence, so the browser is the only
      * side missing a handler for it. Without one, xterm.js just drops the
      * sequence and the text never reaches the system clipboard.
+     *
+     * It cannot just call the clipboard API here, though. This sequence
+     * only exists at all because it travelled mouseup → this socket → SSH →
+     * tmux → SSH → this socket again, and every one of those hops is time
+     * a browser's "was this actually asked for by the person sitting here"
+     * check does not forgive: Chromium refuses a write once transient
+     * activation is more than about a second stale (and separately, once
+     * the document has lost focus in the meantime), Firefox and Safari
+     * refuse outright unless the write happens inside a real gesture's own
+     * handler. A real round trip is essentially always slower than that
+     * window. So the payload is buffered here and only actually written to
+     * the clipboard from inside the next genuine mousedown/mouseup/keydown
+     * on this terminal (below) — a real gesture, just not the one that
+     * produced this particular text.
      */
     const clipboardHandler = term.parser.registerOscHandler(52, (data) => {
-      const separator = data.indexOf(';')
-      if (separator === -1) return true
-      const targets = data.slice(0, separator)
-      const payload = data.slice(separator + 1)
-      // "?" is a request to read the clipboard back into the pane. Silently
-      // declined: browsers gate reads behind a user gesture we don't have
-      // here, and honouring reads at all would let anything running in the
-      // session sniff the clipboard on a whim.
-      if (payload === '?' || !targets.includes('c')) return true
-      try {
-        const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0))
-        void copyText(new TextDecoder().decode(bytes))
-      } catch {
-        // Malformed payload — nothing sane to copy.
+      // "?" is a request to read the clipboard back into the pane, already
+      // filtered out by decodeOsc52ClipboardPayload below. Silently
+      // declined regardless: browsers gate reads behind a user gesture we
+      // don't have here, and honouring reads at all would let anything
+      // running in the session sniff the clipboard on a whim.
+      const text = decodeOsc52ClipboardPayload(data)
+      if (text) {
+        pendingClipboardRef.current = text
+        window.clearTimeout(pendingClipboardTimeoutRef.current)
+        pendingClipboardTimeoutRef.current = window.setTimeout(() => {
+          pendingClipboardRef.current = null
+        }, PENDING_CLIPBOARD_TIMEOUT_MS)
       }
       return true
     })
+
+    // The gesture that actually earns the write. Deliberately three event
+    // types rather than one: whichever the person does next — clicking to
+    // start another selection, releasing it, or simply typing on — should
+    // flush a copy that's still waiting, not just one specific key.
+    const flushPendingClipboard = () => {
+      const text = pendingClipboardRef.current
+      if (!text) return
+      pendingClipboardRef.current = null
+      window.clearTimeout(pendingClipboardTimeoutRef.current)
+      void copyText(text)
+    }
+    host.addEventListener('mousedown', flushPendingClipboard)
+    host.addEventListener('mouseup', flushPendingClipboard)
+    host.addEventListener('keydown', flushPendingClipboard)
 
     term.open(host)
 
@@ -675,6 +742,10 @@ export function ProjectTerminal({
       host.removeEventListener('paste', onPaste, { capture: true })
       host.removeEventListener('dragover', onDragOver)
       host.removeEventListener('drop', onDrop)
+      host.removeEventListener('mousedown', flushPendingClipboard)
+      host.removeEventListener('mouseup', flushPendingClipboard)
+      host.removeEventListener('keydown', flushPendingClipboard)
+      window.clearTimeout(pendingClipboardTimeoutRef.current)
       onData.dispose()
       onResize.dispose()
       clipboardHandler.dispose()
