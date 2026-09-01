@@ -207,11 +207,11 @@ To pin a version instead, set a channel:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-app.sh \
-    | MOONPHASE_CHANNEL=v0.10.3 sh
+    | MOONPHASE_CHANNEL=v0.10.4 sh
 ```
 
 ```powershell
-$env:MOONPHASE_CHANNEL = 'v0.10.3'; irm https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-app.ps1 | iex
+$env:MOONPHASE_CHANNEL = 'v0.10.4'; irm https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-app.ps1 | iex
 ```
 
 !!! warning "The variable goes before `sh`, not before `curl`"
