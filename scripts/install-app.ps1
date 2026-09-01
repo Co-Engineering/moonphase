@@ -32,14 +32,23 @@ try {
   throw "Could not reach GitHub to find the $channel release. $_"
 }
 
+# Sorted newest first: a release can carry more than one build for the same
+# platform and architecture (a stale one left over from a previous publish, an
+# `edge` republish that failed to clean up after itself), and picking anything
+# but the most recent one installs an old build with no indication that it is
+# not the current one.
 $asset = $release.assets |
   Where-Object { $_.name -like '*.exe' -and $_.name -like "*$arch*" } |
+  Sort-Object -Property created_at -Descending |
   Select-Object -First 1
 
 # Only one Windows build for this architecture is normal; falling back to the
 # sole installer beats failing with "not found".
 if (-not $asset) {
-  $asset = $release.assets | Where-Object { $_.name -like '*.exe' } | Select-Object -First 1
+  $asset = $release.assets |
+    Where-Object { $_.name -like '*.exe' } |
+    Sort-Object -Property created_at -Descending |
+    Select-Object -First 1
 }
 if (-not $asset) {
   throw "No Windows build in the $channel release."

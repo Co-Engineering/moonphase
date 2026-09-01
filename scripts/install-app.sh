@@ -68,15 +68,33 @@ assets="$(printf '%s' "$release_json" \
   | sed 's/.*"\(https[^"]*\)"/\1/' \
   | grep -E -- "$want" || true)"
 
-url="$(printf '%s\n' "$assets" | grep -E -- "$arch|$(printf '%s' "$arch" | sed 's/x64/x86_64/')" | head -1 || true)"
+# A release can carry more than one build for the same platform and
+# architecture — a stale one left over from a previous publish, or an `edge`
+# republish that failed to clean up after itself — and the API lists them in
+# whatever order it wants, not newest first. Picking the first match then picks
+# whichever one that happens to be, which has handed people a years-old build
+# with no sign anything was wrong. Sorting by the version embedded in the
+# filename and taking the highest one is what "newest" has to mean here: there
+# is no per-asset date to read once the response has been reduced to bare URLs.
+pick_newest() {
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    version="$(printf '%s' "$candidate" \
+      | sed -n 's/.*[^0-9]\([0-9][0-9]*\)\.\([0-9][0-9]*\)\.\([0-9][0-9]*\)[^0-9].*/\1 \2 \3/p')"
+    [ -n "$version" ] || continue
+    # shellcheck disable=SC2086 — three bare words feeding three %03d slots.
+    padded="$(printf '%03d.%03d.%03d' $version)"
+    printf '%s %s\n' "$padded" "$candidate"
+  done | sort | tail -1 | cut -d' ' -f2-
+}
+
+url="$(printf '%s\n' "$assets" | grep -E -- "$arch|$(printf '%s' "$arch" | sed 's/x64/x86_64/')" | pick_newest)"
 
 # electron-builder leaves the architecture out of the name when it built only
 # one for that platform, so an arch-less asset is the right answer — but only if
-# it names no architecture at all. Taking simply the first match would hand an
-# x64 machine the arm64 build whenever that one happened to be listed first,
-# which installs cleanly and then refuses to start.
+# it names no architecture at all.
 if [ -z "$url" ]; then
-  url="$(printf '%s\n' "$assets" | grep -vE -- 'arm64|aarch64|x64|x86_64|ia32' | head -1 || true)"
+  url="$(printf '%s\n' "$assets" | grep -vE -- 'arm64|aarch64|x64|x86_64|ia32' | pick_newest)"
 fi
 
 [ -n "$url" ] || die "No $os build for $arch in the $CHANNEL release."
