@@ -57,6 +57,18 @@ async def test_the_desktop_app_may_connect() -> None:
     assert principal.user_id == "user-1"
 
 
+async def test_the_desktop_app_may_connect_even_when_chromium_says_file_scheme() -> None:
+    """Regression: a live capture against the shipped app (Electron 33.4.11)
+    showed it sending the literal string "file://" as Origin, not the
+    spec-compliant "null" the other test above covers. Either was always
+    going to come only from a page actually loaded off disk — a normal page
+    cannot make a browser send this, Origin being one of the headers
+    JavaScript may not set itself — so both must be accepted, or every
+    desktop-app socket fails this check permanently."""
+    principal = await _connect(_browser("file://"))
+    assert principal.user_id == "user-1"
+
+
 async def test_a_configured_origin_may_connect() -> None:
     """A genuinely cross-origin frontend, like the dev server.
 
