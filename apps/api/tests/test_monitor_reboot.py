@@ -15,8 +15,14 @@ from typing import Any
 import pytest
 
 from moonphase import monitor as monitor_module
+from moonphase.activity import ActivitySignals
 from moonphase.monitor import SessionMonitor
 from moonphase.profile import WorkspaceProfile
+
+
+class _Harness:
+    def activity_signals(self) -> ActivitySignals:
+        return ActivitySignals(prompt_patterns=[], busy_patterns=[])
 
 
 class _NullSession:
@@ -99,6 +105,62 @@ async def test_every_session_resumes_on_its_own(monitor, monkeypatch) -> None:
 
     assert {r["session"] for r in resumed} == {"one", "two"}
     assert all(r["resume"] is True for r in resumed)
+
+
+async def test_a_session_that_already_has_a_pane_does_not_block_its_neighbour(
+    monitor, monkeypatch
+) -> None:
+    """The exact bug this was fixed for.
+
+    Auto-resume used to trigger only when *every* pane in the container was
+    gone. Opening one session's terminal after a restart recreates that one
+    tmux pane (with a fresh conversation, since a plain attach did not pass
+    `resume`) — which was enough to make the container look already-resumed
+    and permanently cancel auto-resume for every session someone had not
+    opened yet.
+    """
+
+    async def one_pane_already_back(_conn, _container, **kw):
+        return {"one": "a live pane"}
+
+    monkeypatch.setattr(
+        "moonphase.monitor.sessions.capture_all_panes", one_pane_already_back
+    )
+    monkeypatch.setattr(
+        "moonphase.monitor.harness_registry.get", lambda kind: _Harness()
+    )
+
+    async def fake_org(_conn, _uid):
+        return "o1"
+
+    async def fake_project(_conn, _pid):
+        return {"id": "proj-1"}
+
+    async def fake_profile(*a, **k):
+        return _authed_profile()
+
+    resumed: list[str] = []
+
+    async def fake_ensure(_conn, _container, *, session, **kwargs):
+        resumed.append(session)
+        return False
+
+    monkeypatch.setattr(
+        "moonphase.monitor.queries.personal_org_id_for_user_privileged", fake_org
+    )
+    monkeypatch.setattr("moonphase.monitor.queries.get_project", fake_project)
+    monkeypatch.setattr(
+        "moonphase.monitor.runtime.load_session_profile_privileged", fake_profile
+    )
+    monkeypatch.setattr("moonphase.monitor.sessions.ensure_session", fake_ensure)
+
+    group = [_row("one"), _row("two")]
+    await monitor._check_container(object(), "c-alpha", group)
+
+    assert resumed == ["two"], (
+        "the session that already has a pane must be left alone, and the one "
+        "that is still missing must still be resumed"
+    )
 
 
 async def test_a_project_that_no_longer_exists_does_not_stop_its_neighbour(
