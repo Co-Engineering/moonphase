@@ -28,7 +28,7 @@ import httpx
 
 log = logging.getLogger(__name__)
 
-DEFAULT_REPO = "oliversvane/moonphase"
+DEFAULT_REPO = "Co-Engineering/moonphase"
 GITHUB_TIMEOUT = 15.0
 
 # The answer changes when somebody cuts a release, which is not something worth

@@ -2,7 +2,7 @@
 #
 # Install Moonphase.
 #
-#   curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/Co-Engineering/moonphase/main/scripts/install.sh | sh
 #
 # There is nothing to configure. Docker is installed if missing, every secret is
 # generated, and the address and first account are set up in the browser
@@ -20,12 +20,12 @@
 # MOONPHASE_SECRET_KEY would make every stored SSH key unreadable.
 set -eu
 
-REPO="${MOONPHASE_REPO:-https://github.com/oliversvane/moonphase.git}"
+REPO="${MOONPHASE_REPO:-https://github.com/Co-Engineering/moonphase.git}"
 BRANCH="${MOONPHASE_BRANCH:-main}"
 DIR="${MOONPHASE_DIR:-moonphase}"
 PORT="${MOONPHASE_PORT:-8471}"
 BIND="${MOONPHASE_BIND:-127.0.0.1}"
-REPO_RAW_HINT="https://raw.githubusercontent.com/oliversvane/moonphase/main"
+REPO_RAW_HINT="https://raw.githubusercontent.com/Co-Engineering/moonphase/main"
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 info() { printf '\033[34m==>\033[0m %s\n' "$*"; }
@@ -251,7 +251,7 @@ fi
 GITHUB_CLIENT_ID=$(existing MOONPHASE_GITHUB_CLIENT_ID)
 
 IMAGE=$(existing MOONPHASE_IMAGE)
-[ -n "${IMAGE:-}" ] || IMAGE="${MOONPHASE_IMAGE:-ghcr.io/oliversvane/moonphase}"
+[ -n "${IMAGE:-}" ] || IMAGE="${MOONPHASE_IMAGE:-ghcr.io/co-engineering/moonphase}"
 
 VERSION=$(existing MOONPHASE_VERSION)
 # `latest` is the newest release. It was `edge` for a while because nothing had
@@ -422,5 +422,5 @@ printf '    docker compose logs -f api\n'
 printf '    docker compose down          stop, keeping your data\n'
 printf '    docker compose pull && docker compose up -d              upgrade\n'
 printf '\n'
-printf '  Documentation: https://oliversvane.github.io/moonphase/\n'
+printf '  Documentation: https://co-engineering.github.io/moonphase/\n'
 printf '\n'

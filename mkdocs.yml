@@ -1,8 +1,8 @@
 site_name: Moonphase
 site_description: Your coding agents live on servers you own, not on the laptop you need to close.
-site_url: https://oliversvane.github.io/moonphase/
-repo_url: https://github.com/oliversvane/moonphase
-repo_name: oliversvane/moonphase
+site_url: https://co-engineering.github.io/moonphase/
+repo_url: https://github.com/Co-Engineering/moonphase
+repo_name: Co-Engineering/moonphase
 edit_uri: edit/main/docs/
 copyright: Moonphase is self-hosted. Your servers, your agents, your data.
 
@@ -104,7 +104,7 @@ validation:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/oliversvane/moonphase
+      link: https://github.com/Co-Engineering/moonphase
       name: Moonphase on GitHub
 
 nav:

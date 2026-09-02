@@ -9,7 +9,7 @@
  * refuses to drive an update onto an unsigned build, so the honest thing this
  * can do is say a release exists and hand the person its page.
  */
-const REPO = 'oliversvane/moonphase'
+const REPO = 'Co-Engineering/moonphase'
 
 // A release tag: v1.2.3, with an optional pre-release or build suffix.
 const TAG = /^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/

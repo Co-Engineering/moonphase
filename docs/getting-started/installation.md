@@ -27,7 +27,7 @@ need Docker installed; Moonphase can install it, given a user with passwordless 
 ## Set up
 
 ```bash
-git clone https://github.com/oliversvane/moonphase.git
+git clone https://github.com/Co-Engineering/moonphase.git
 cd moonphase
 cp .env.example .env
 ```
