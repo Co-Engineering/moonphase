@@ -9,7 +9,7 @@ you.
     result, and it installs Docker for you if the machine has none.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Co-Engineering/moonphase/main/scripts/install.sh | sh
 ```
 
 Then open it in a browser and follow the setup: it asks for your account, an
@@ -26,13 +26,13 @@ itself. [Pointing a domain at it](../guides/dns.md) is one DNS record.
 
 !!! tip "Read it before you pipe it"
     Piping a script from the internet into a shell is a thing worth being suspicious
-    of. [The script is here](https://github.com/oliversvane/moonphase/blob/main/scripts/install.sh)
+    of. [The script is here](https://github.com/Co-Engineering/moonphase/blob/main/scripts/install.sh)
     — it clones the repository, writes an `.env`, and runs `docker compose up`.
 
     You can do the same by hand:
 
     ```bash
-    git clone https://github.com/oliversvane/moonphase.git
+    git clone https://github.com/Co-Engineering/moonphase.git
     cd moonphase && ./scripts/install.sh
     ```
 
@@ -44,7 +44,7 @@ Four containers:
 | ------- | ----- | ---- |
 | `db` | `postgres:16-alpine` | Everything is stored here |
 | `auth` | `supabase/gotrue` | Sign-in |
-| `api` | `ghcr.io/oliversvane/moonphase` | SSH, Docker orchestration, the PTY bridge, and the client |
+| `api` | `ghcr.io/co-engineering/moonphase` | SSH, Docker orchestration, the PTY bridge, and the client |
 | `proxy` | `caddy:2-alpine` | Puts all of it on one address |
 
 Deliberately **not** the full Supabase stack. Moonphase talks to Postgres directly with
@@ -63,7 +63,7 @@ The same image is published to two registries:
 
 | Registry | Name |
 | -------- | ---- |
-| GitHub (default) | `ghcr.io/oliversvane/moonphase` |
+| GitHub (default) | `ghcr.io/co-engineering/moonphase` |
 | Docker Hub | [`oliversvanecoec/moonphase`](https://hub.docker.com/r/oliversvanecoec/moonphase) |
 
 GitHub's is the default because it does not rate-limit anonymous pulls. Docker Hub allows

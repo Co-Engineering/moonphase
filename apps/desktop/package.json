@@ -107,7 +107,7 @@
     "name": "Moonphase",
     "email": "oliversvane@users.noreply.github.com"
   },
-  "homepage": "https://github.com/oliversvane/moonphase",
+  "homepage": "https://github.com/Co-Engineering/moonphase",
   "dependencies": {
     "ws": "^8.21.3"
   }

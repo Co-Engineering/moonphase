@@ -14,7 +14,7 @@ for those.
 ## Quick start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Co-Engineering/moonphase/main/scripts/install.sh | sh
 ```
 
 That writes an `.env`, generates every secret, and brings up four containers: Postgres,
@@ -23,12 +23,12 @@ GoTrue for sign-in, this image, and Caddy putting all of it on one address.
 ## Running it yourself
 
 It needs Postgres and GoTrue alongside it — see
-[`docker-compose.yml`](https://github.com/oliversvane/moonphase/blob/main/docker-compose.yml).
+[`docker-compose.yml`](https://github.com/Co-Engineering/moonphase/blob/main/docker-compose.yml).
 
 ```yaml
 services:
   api:
-    image: oliversvanecoec/moonphase:latest   # or ghcr.io/oliversvane/moonphase:latest
+    image: oliversvanecoec/moonphase:latest   # or ghcr.io/co-engineering/moonphase:latest
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:...@db:5432/postgres
       SUPABASE_URL: https://moonphase.example.com
@@ -38,7 +38,7 @@ services:
 ```
 
 Every variable is documented in the
-[configuration reference](https://oliversvane.github.io/moonphase/reference/configuration/).
+[configuration reference](https://co-engineering.github.io/moonphase/reference/configuration/).
 
 ## Tags
 
@@ -50,10 +50,10 @@ Every variable is documented in the
 
 Built for `linux/amd64` and `linux/arm64`.
 
-The same image is on GitHub's registry as `ghcr.io/oliversvane/moonphase`, which is what
+The same image is on GitHub's registry as `ghcr.io/co-engineering/moonphase`, which is what
 the compose file defaults to — it has no anonymous pull limit.
 
 ## Links
 
-- [Documentation](https://oliversvane.github.io/moonphase/)
-- [Source](https://github.com/oliversvane/moonphase)
+- [Documentation](https://co-engineering.github.io/moonphase/)
+- [Source](https://github.com/Co-Engineering/moonphase)

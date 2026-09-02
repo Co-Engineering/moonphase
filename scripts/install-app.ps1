@@ -1,6 +1,6 @@
 # Install the Moonphase desktop app on Windows.
 #
-#   irm https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-app.ps1 | iex
+#   irm https://raw.githubusercontent.com/Co-Engineering/moonphase/main/scripts/install-app.ps1 | iex
 #
 # This is the app, not the server. It connects to a Moonphase you are already
 # running — it asks for the address on first launch — and installing it changes
@@ -11,7 +11,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$repo = if ($env:MOONPHASE_REPO) { $env:MOONPHASE_REPO } else { 'oliversvane/moonphase' }
+$repo = if ($env:MOONPHASE_REPO) { $env:MOONPHASE_REPO } else { 'Co-Engineering/moonphase' }
 $channel = if ($env:MOONPHASE_CHANNEL) { $env:MOONPHASE_CHANNEL } else { 'edge' }
 
 function Write-Step($message) { Write-Host "==> $message" -ForegroundColor Blue }
@@ -84,7 +84,7 @@ Write-Host ''
 Write-Host '  Find it in the Start menu, or on your desktop.'
 Write-Host ''
 Write-Host 'On first launch it asks for the address of your Moonphase server.'
-Write-Host 'Do not have one yet? https://oliversvane.github.io/moonphase/getting-started/docker/'
+Write-Host 'Do not have one yet? https://co-engineering.github.io/moonphase/getting-started/docker/'
 Write-Host ''
 
 if ($release.prerelease) {

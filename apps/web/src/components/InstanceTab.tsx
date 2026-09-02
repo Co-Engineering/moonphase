@@ -96,7 +96,7 @@ export function InstanceTab({
           is what a certificate gives you. Leave it blank to keep using this
           machine&rsquo;s address.{' '}
           <a
-            href="https://oliversvane.github.io/moonphase/guides/dns/"
+            href="https://co-engineering.github.io/moonphase/guides/dns/"
             target="_blank"
             rel="noreferrer"
           >

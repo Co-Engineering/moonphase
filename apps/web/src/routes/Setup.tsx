@@ -172,7 +172,7 @@ export function Setup({ onDone }: Props) {
                   adds HTTPS automatically, and is required for notifications and
                   for signing in with Google or Microsoft.{' '}
                   <a
-                    href="https://oliversvane.github.io/moonphase/guides/dns/"
+                    href="https://co-engineering.github.io/moonphase/guides/dns/"
                     target="_blank"
                     rel="noreferrer"
                   >

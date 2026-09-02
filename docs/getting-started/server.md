@@ -4,7 +4,7 @@ One command on your own machine. It asks where the server is and how to reach
 it, then does the rest over SSH.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-server.sh -o install-server.sh
+curl -fsSL https://raw.githubusercontent.com/Co-Engineering/moonphase/main/scripts/install-server.sh -o install-server.sh
 sh install-server.sh
 ```
 
@@ -93,7 +93,7 @@ Nothing here is magic — it is one SSH connection and the ordinary installer. T
 run that yourself, on the server:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Co-Engineering/moonphase/main/scripts/install.sh | sh
 ```
 
 [Installing with Docker](docker.md) covers what that puts on the machine, how to

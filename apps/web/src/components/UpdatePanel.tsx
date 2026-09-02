@@ -160,7 +160,7 @@ export function UpdatePanel({ busy }: { busy: boolean }) {
                 updater alongside Moonphase, which is opt-in because it is the
                 one component that can reach the host&rsquo;s Docker daemon —{' '}
                 <a
-                  href="https://oliversvane.github.io/moonphase/guides/updating/"
+                  href="https://co-engineering.github.io/moonphase/guides/updating/"
                   target="_blank"
                   rel="noreferrer"
                 >

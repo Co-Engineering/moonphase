@@ -133,7 +133,7 @@ jobs:
             The current build of `main`, refreshed on every commit.
 
             Install it with one command — see
-            <https://oliversvane.github.io/moonphase/getting-started/app/>.
+            <https://co-engineering.github.io/moonphase/getting-started/app/>.
 
             Built from ${{ github.sha }}.
           prerelease: true

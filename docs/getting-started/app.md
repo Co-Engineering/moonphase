@@ -14,7 +14,7 @@ One command on a computer, two taps on a phone.
 === "Linux"
 
     ```bash
-    curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-app.sh | sh
+    curl -fsSL https://raw.githubusercontent.com/Co-Engineering/moonphase/main/scripts/install-app.sh | sh
     ```
 
     Installs to `~/.local/share/moonphase` with a launcher at
@@ -31,7 +31,7 @@ One command on a computer, two taps on a phone.
         meant to be one. Unpacked, it needs no FUSE and starts faster.
 
         The `.AppImage` on [the releases
-        page](https://github.com/oliversvane/moonphase/releases) is the same
+        page](https://github.com/Co-Engineering/moonphase/releases) is the same
         build if you would rather have the single file — that one does need
         `libfuse2`.
 
@@ -42,7 +42,7 @@ One command on a computer, two taps on a phone.
 === "macOS"
 
     ```bash
-    curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-app.sh | sh
+    curl -fsSL https://raw.githubusercontent.com/Co-Engineering/moonphase/main/scripts/install-app.sh | sh
     ```
 
     The same command as Linux — it works out which one it is on. Moonphase lands
@@ -58,7 +58,7 @@ One command on a computer, two taps on a phone.
 === "Windows"
 
     ```powershell
-    irm https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-app.ps1 | iex
+    irm https://raw.githubusercontent.com/Co-Engineering/moonphase/main/scripts/install-app.ps1 | iex
     ```
 
     In PowerShell — no administrator rights needed. It installs for your user
@@ -75,12 +75,12 @@ One command on a computer, two taps on a phone.
 !!! tip "Read it before you pipe it"
     Piping a script from the internet into a shell is worth being suspicious of.
     Both are short and do exactly what this page says:
-    [install-app.sh](https://github.com/oliversvane/moonphase/blob/main/scripts/install-app.sh)
+    [install-app.sh](https://github.com/Co-Engineering/moonphase/blob/main/scripts/install-app.sh)
     ·
-    [install-app.ps1](https://github.com/oliversvane/moonphase/blob/main/scripts/install-app.ps1)
+    [install-app.ps1](https://github.com/Co-Engineering/moonphase/blob/main/scripts/install-app.ps1)
 
     Or take the file yourself from
-    [the releases page](https://github.com/oliversvane/moonphase/releases) —
+    [the releases page](https://github.com/Co-Engineering/moonphase/releases) —
     `.AppImage` and `.deb` for Linux, `.dmg` for macOS, `.exe` for Windows, in
     x64 and arm64.
 
@@ -206,12 +206,12 @@ what this project runs on itself.
 To pin a version instead, set a channel:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-app.sh \
+curl -fsSL https://raw.githubusercontent.com/Co-Engineering/moonphase/main/scripts/install-app.sh \
     | MOONPHASE_CHANNEL=v0.10.6 sh
 ```
 
 ```powershell
-$env:MOONPHASE_CHANNEL = 'v0.10.6'; irm https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-app.ps1 | iex
+$env:MOONPHASE_CHANNEL = 'v0.10.6'; irm https://raw.githubusercontent.com/Co-Engineering/moonphase/main/scripts/install-app.ps1 | iex
 ```
 
 !!! warning "The variable goes before `sh`, not before `curl`"

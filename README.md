@@ -46,14 +46,14 @@ address, a username, and a key or password, and installs Docker on the way if
 the machine has none:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-server.sh -o install-server.sh
+curl -fsSL https://raw.githubusercontent.com/Co-Engineering/moonphase/main/scripts/install-server.sh -o install-server.sh
 sh install-server.sh
 ```
 
 Or, on the server itself:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Co-Engineering/moonphase/main/scripts/install.sh | sh
 ```
 
 Either way there is nothing to configure: every secret is generated, and the
@@ -65,12 +65,12 @@ One command on a computer:
 
 ```bash
 # Linux and macOS
-curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-app.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Co-Engineering/moonphase/main/scripts/install-app.sh | sh
 ```
 
 ```powershell
 # Windows, in PowerShell
-irm https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-app.ps1 | iex
+irm https://raw.githubusercontent.com/Co-Engineering/moonphase/main/scripts/install-app.ps1 | iex
 ```
 
 On a phone there is no store download: open your Moonphase address and add it to
@@ -79,7 +79,7 @@ Android. The app is served by your own instance, so it is always the same
 version as the server it talks to.
 
 Full instructions, including what to do about the unsigned builds on macOS and
-Windows, are in [installing the app](https://oliversvane.github.io/moonphase/getting-started/app/).
+Windows, are in [installing the app](https://co-engineering.github.io/moonphase/getting-started/app/).
 
 Then **Settings → Notifications → Enable**, and you get a push whenever one of
 your sessions starts waiting for you. Notifications go to the person who owns
@@ -147,7 +147,7 @@ The desktop attaches to its real PTY; the (planned) phone client renders a reada
 parsed from Claude Code's own session transcript and writes back with `tmux send-keys`, so
 both surfaces drive the same session with no protocol drift.
 
-**[Read the documentation →](https://oliversvane.github.io/moonphase/)**
+**[Read the documentation →](https://co-engineering.github.io/moonphase/)**
 
 Or locally:
 
@@ -173,11 +173,11 @@ docs            Documentation site (MkDocs Material)
 Docker is the only requirement.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Co-Engineering/moonphase/main/scripts/install.sh | sh
 ```
 
 That generates every secret it needs and brings up four containers: Postgres, GoTrue for
-sign-in, `ghcr.io/oliversvane/moonphase`, and Caddy putting all of it on one address. Open `http://127.0.0.1:8471` and create an account.
+sign-in, `ghcr.io/co-engineering/moonphase`, and Caddy putting all of it on one address. Open `http://127.0.0.1:8471` and create an account.
 
 Set `MOONPHASE_BUILD=1` to build the image from source instead of pulling it.
 
@@ -191,7 +191,7 @@ cp .env.example .env
 
 That boots Supabase, applies migrations, starts the API on `:8471` and Vite on `:8472`,
 then opens the Electron shell. Full instructions and the self-host path are in the
-[documentation](https://oliversvane.github.io/moonphase/getting-started/installation/).
+[documentation](https://co-engineering.github.io/moonphase/getting-started/installation/).
 
 ## License
 

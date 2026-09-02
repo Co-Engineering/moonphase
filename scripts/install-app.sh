@@ -2,7 +2,7 @@
 #
 # Install the Moonphase desktop app on Linux or macOS.
 #
-#   curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-app.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/Co-Engineering/moonphase/main/scripts/install-app.sh | sh
 #
 # This is the app, not the server. It connects to a Moonphase you are already
 # running — it asks for the address on first launch — and installing it changes
@@ -16,7 +16,7 @@
 # you update.
 set -eu
 
-REPO="${MOONPHASE_REPO:-oliversvane/moonphase}"
+REPO="${MOONPHASE_REPO:-Co-Engineering/moonphase}"
 CHANNEL="${MOONPHASE_CHANNEL:-edge}"
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -222,5 +222,5 @@ else
 fi
 
 echo "On first launch it asks for the address of your Moonphase server."
-echo "Do not have one yet? https://oliversvane.github.io/moonphase/getting-started/docker/"
+echo "Do not have one yet? https://co-engineering.github.io/moonphase/getting-started/docker/"
 echo

@@ -2,7 +2,7 @@
 #
 # Install Moonphase on a server, from your own machine.
 #
-#   curl -fsSL https://raw.githubusercontent.com/oliversvane/moonphase/main/scripts/install-server.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/Co-Engineering/moonphase/main/scripts/install-server.sh | sh
 #
 # Asks for the address, a username, and a key or password, then does the rest
 # over SSH: installs Docker if the machine has none, generates every secret,
@@ -18,7 +18,7 @@
 # credential it holds unreadable.
 set -eu
 
-REPO_RAW="${MOONPHASE_RAW:-https://raw.githubusercontent.com/oliversvane/moonphase/main}"
+REPO_RAW="${MOONPHASE_RAW:-https://raw.githubusercontent.com/Co-Engineering/moonphase/main}"
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 info() { printf '\033[34m==>\033[0m %s\n' "$*"; }
@@ -297,5 +297,5 @@ printf '    ssh %s@%s "cd moonphase && docker compose logs -f api"\n' "$SSH_USER
 printf '    Run this script again to upgrade — it keeps your data.\n'
 printf '\n'
 printf '  The app for your own computer and phone:\n'
-printf '    https://oliversvane.github.io/moonphase/getting-started/app/\n'
+printf '    https://co-engineering.github.io/moonphase/getting-started/app/\n'
 printf '\n'

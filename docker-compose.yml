@@ -102,7 +102,7 @@ services:
   # keeps the ownership it was created with, and neither the API nor the auth
   # container runs as root, so neither can correct it itself.
   prepare-volumes:
-    image: ${MOONPHASE_IMAGE:-ghcr.io/oliversvane/moonphase}:${MOONPHASE_VERSION:-latest}
+    image: ${MOONPHASE_IMAGE:-ghcr.io/co-engineering/moonphase}:${MOONPHASE_VERSION:-latest}
     user: root
     entrypoint:
       - sh
@@ -131,7 +131,7 @@ services:
     # `docker compose pull` upgraded the code and left the schema behind —
     # and said nothing, because a migration that is not there is not a
     # migration that failed.
-    image: ${MOONPHASE_IMAGE:-ghcr.io/oliversvane/moonphase}:${MOONPHASE_VERSION:-latest}
+    image: ${MOONPHASE_IMAGE:-ghcr.io/co-engineering/moonphase}:${MOONPHASE_VERSION:-latest}
     depends_on:
       db:
         condition: service_healthy
@@ -160,7 +160,7 @@ services:
     #
     # To run from source, add the override:
     #   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
-    image: ${MOONPHASE_IMAGE:-ghcr.io/oliversvane/moonphase}:${MOONPHASE_VERSION:-latest}
+    image: ${MOONPHASE_IMAGE:-ghcr.io/co-engineering/moonphase}:${MOONPHASE_VERSION:-latest}
     restart: unless-stopped
     depends_on:
       db:
