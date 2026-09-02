@@ -12,6 +12,7 @@ import {
   setupState,
 } from './lib/api'
 import { useResource } from './lib/useResource'
+import { useCollapsed } from './lib/collapsed'
 import { Logo } from './components/Logo'
 import { ProjectTerminal } from './components/Terminal'
 import { Auth } from './routes/Auth'
@@ -225,6 +226,8 @@ function Shell({ email }: { email: string }) {
   >(null)
   const [showUsage, setShowUsage] = useState(false)
   const [showSearch, setShowSearch] = useState(false)
+  const [collapsedServers, toggleServerCollapsed] = useCollapsed('moonphase.collapsedServers')
+  const [collapsedProjects, toggleProjectCollapsed] = useCollapsed('moonphase.collapsedProjects')
 
   // ⌘K / Ctrl-K. Registered here rather than inside the modal because its
   // whole job is opening the modal when it is not mounted.
@@ -368,129 +371,145 @@ function Shell({ email }: { email: string }) {
             </p>
           )}
 
-          {servers.data?.map((server) => (
-            <div className="tree-server" key={server.id}>
-              {/* The server's own row, so hovering it reveals its menu and
-                  not every menu in the block underneath it. */}
-              <div className="tree-server-row">
-                <button
-                  className={`tree-row status-${server.status}${
-                    activeServer?.id === server.id ? ' active' : ''
-                  }`}
-                  onClick={() => {
-                    setSelected({ kind: 'server', id: server.id })
-                    setShowSidebar(false)
-                  }}
-                >
-                  <span className="dot" />
-                  <span className="name">{server.name}</span>
-                  {server.shared && (
-                    <span className="shared-tag" title="Shared with you">
-                      shared
-                    </span>
+          {servers.data?.map((server) => {
+            const serverProjects = grouped.filter((p) => p.server_id === server.id)
+            const serverCollapsed = collapsedServers.has(server.id)
+            return (
+              <div className="tree-server" key={server.id}>
+                {/* The server's own row, so hovering it reveals its menu and
+                    not every menu in the block underneath it. */}
+                <div className="tree-server-row">
+                  {serverProjects.length > 0 && (
+                    <button
+                      className={`tree-toggle${serverCollapsed ? '' : ' open'}`}
+                      onClick={() => toggleServerCollapsed(server.id)}
+                      aria-expanded={!serverCollapsed}
+                      aria-label={serverCollapsed ? 'Expand' : 'Collapse'}
+                      title={serverCollapsed ? 'Expand' : 'Collapse'}
+                    >
+                      <span className="disclose" aria-hidden="true" />
+                    </button>
                   )}
-                </button>
-                <RowMenu
-                  label={server.name}
-                  actions={[
-                    ...(server.access === 'admin'
-                      ? [
-                          {
-                            label: 'Share',
-                            onSelect: () =>
-                              setShareTarget({
-                                kind: 'servers',
-                                id: server.id,
-                                name: server.name,
-                              }),
-                          },
-                        ]
-                      : []),
-                    {
-                      label: 'Rename',
-                      disabledReason:
-                        server.access === 'admin' ? undefined : 'not yours',
-                      onSelect: () =>
-                        setRenaming({
-                          kind: 'server',
-                          id: server.id,
-                          name: server.name,
-                        }),
-                    },
-                    {
-                      label: 'Remove server',
-                      danger: true,
-                      detail:
-                        'Deletes its projects from Moonphase and revokes the key. ' +
-                        'Volumes on the machine are left alone.',
-                      disabledReason:
-                        server.access === 'admin' ? undefined : 'not yours',
-                      onSelect: () =>
-                        void api
-                          .deleteServer(server.id)
-                          .then(reloadAll)
-                          .catch(() => reloadAll()),
-                    },
-                  ]}
-                />
-              </div>
-
-              {grouped
-                .filter((p) => p.server_id === server.id)
-                .map((project) => (
-                  <ProjectRow
-                    key={project.id}
-                    project={project}
-                    active={activeProject?.id === project.id}
-                    activeSession={
-                      selected?.kind === 'project' && selected.id === project.id
-                        ? selected.session
-                        : undefined
-                    }
-                    sessions={(sessions.data ?? []).filter(
-                      (s) => s.project_id === project.id,
+                  <button
+                    className={`tree-row status-${server.status}${
+                      activeServer?.id === server.id ? ' active' : ''
+                    }`}
+                    onClick={() => {
+                      setSelected({ kind: 'server', id: server.id })
+                      setShowSidebar(false)
+                    }}
+                  >
+                    <span className="dot" />
+                    <span className="name">{server.name}</span>
+                    {server.shared && (
+                      <span className="shared-tag" title="Shared with you">
+                        shared
+                      </span>
                     )}
-                    onSelect={selectProject}
-                    onShare={(project) =>
-                      setShareTarget({
-                        kind: 'projects',
-                        id: project.id,
-                        name: project.name,
-                      })
-                    }
-                    onRemove={(project) =>
-                      void api.deleteProject(project.id).then(reloadAll)
-                    }
-                    onRename={(item) =>
-                      setRenaming({
-                        kind: 'project',
-                        id: item.id,
-                        name: item.name,
-                      })
-                    }
-                    onRenameSession={(item) =>
-                      setRenaming({
-                        kind: 'session',
-                        id: item.tmux_session,
-                        name: item.display_name ?? item.tmux_session,
-                        projectId: project.id,
-                      })
-                    }
-                    onCloseSession={(item) => closeSession(project.id, item.tmux_session)}
-                    onConfigure={(item) =>
-                      setConfigureTarget({ projectId: item.id, projectName: item.name })
-                    }
-                    onConfigureSession={(item) =>
-                      setConfigureTarget({
-                        projectId: project.id,
-                        projectName: project.name,
-                        session: item.tmux_session,
-                      })
-                    }
+                  </button>
+                  <RowMenu
+                    label={server.name}
+                    actions={[
+                      ...(server.access === 'admin'
+                        ? [
+                            {
+                              label: 'Share',
+                              onSelect: () =>
+                                setShareTarget({
+                                  kind: 'servers',
+                                  id: server.id,
+                                  name: server.name,
+                                }),
+                            },
+                          ]
+                        : []),
+                      {
+                        label: 'Rename',
+                        disabledReason:
+                          server.access === 'admin' ? undefined : 'not yours',
+                        onSelect: () =>
+                          setRenaming({
+                            kind: 'server',
+                            id: server.id,
+                            name: server.name,
+                          }),
+                      },
+                      {
+                        label: 'Remove server',
+                        danger: true,
+                        detail:
+                          'Deletes its projects from Moonphase and revokes the key. ' +
+                          'Volumes on the machine are left alone.',
+                        disabledReason:
+                          server.access === 'admin' ? undefined : 'not yours',
+                        onSelect: () =>
+                          void api
+                            .deleteServer(server.id)
+                            .then(reloadAll)
+                            .catch(() => reloadAll()),
+                      },
+                    ]}
                   />
-                ))}
-            </div>
-          ))}
+                </div>
+  
+                {!serverCollapsed &&
+                  serverProjects.map((project) => (
+                    <ProjectRow
+                      key={project.id}
+                      project={project}
+                      active={activeProject?.id === project.id}
+                      activeSession={
+                        selected?.kind === 'project' && selected.id === project.id
+                          ? selected.session
+                          : undefined
+                      }
+                      sessions={(sessions.data ?? []).filter(
+                        (s) => s.project_id === project.id,
+                      )}
+                      onSelect={selectProject}
+                      collapsed={collapsedProjects.has(project.id)}
+                      onToggleCollapse={() => toggleProjectCollapsed(project.id)}
+                      onShare={(project) =>
+                        setShareTarget({
+                          kind: 'projects',
+                          id: project.id,
+                          name: project.name,
+                        })
+                      }
+                      onRemove={(project) =>
+                        void api.deleteProject(project.id).then(reloadAll)
+                      }
+                      onRename={(item) =>
+                        setRenaming({
+                          kind: 'project',
+                          id: item.id,
+                          name: item.name,
+                        })
+                      }
+                      onRenameSession={(item) =>
+                        setRenaming({
+                          kind: 'session',
+                          id: item.tmux_session,
+                          name: item.display_name ?? item.tmux_session,
+                          projectId: project.id,
+                        })
+                      }
+                      onCloseSession={(item) => closeSession(project.id, item.tmux_session)}
+                      onConfigure={(item) =>
+                        setConfigureTarget({ projectId: item.id, projectName: item.name })
+                      }
+                      onConfigureSession={(item) =>
+                        setConfigureTarget({
+                          projectId: project.id,
+                          projectName: project.name,
+                          session: item.tmux_session,
+                        })
+                      }
+                    />
+                  ))}
+              </div>
+            )
+          })}
 
           {loose.length > 0 && (
             <>
@@ -510,6 +529,8 @@ function Shell({ email }: { email: string }) {
                   sessions={(sessions.data ?? []).filter((s) => s.project_id === project.id)}
                   onSelect={selectProject}
                   subtitle={project.server_name ?? undefined}
+                  collapsed={collapsedProjects.has(project.id)}
+                  onToggleCollapse={() => toggleProjectCollapsed(project.id)}
                   onShare={(item) =>
                     setShareTarget({
                       kind: 'projects',
@@ -779,6 +800,8 @@ function ProjectRow({
   sessions,
   onSelect,
   subtitle,
+  collapsed,
+  onToggleCollapse,
   onShare,
   onRemove,
   onRename,
@@ -793,6 +816,8 @@ function ProjectRow({
   sessions: Session[]
   onSelect: (id: string, session?: string) => void
   subtitle?: string
+  collapsed: boolean
+  onToggleCollapse: () => void
   onShare?: (project: Project) => void
   onRemove?: (project: Project) => void
   onRename?: (project: Project) => void
@@ -801,6 +826,7 @@ function ProjectRow({
   onConfigure?: (project: Project) => void
   onConfigureSession?: (session: Session) => void
 }) {
+  const hasSessions = project.status === 'running' && sessions.length > 0
   return (
     <>
       {/* The row and its menu together, so the menu is positioned
@@ -809,6 +835,17 @@ function ProjectRow({
           stacked on the server's own. Sessions have always been wrapped
           like this; projects were the one kind that was not. */}
       <div className="tree-project-row">
+        {hasSessions && (
+          <button
+            className={`tree-toggle${collapsed ? '' : ' open'}`}
+            onClick={onToggleCollapse}
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? 'Expand' : 'Collapse'}
+            title={collapsed ? 'Expand' : 'Collapse'}
+          >
+            <span className="disclose" aria-hidden="true" />
+          </button>
+        )}
         <button
           // One class, one meaning. It used to carry both `status-*` and
           // `activity-*`, which style the same dot with different vocabularies —
@@ -877,7 +914,8 @@ function ProjectRow({
           thing you are actually looking at, so it should be navigable in the
           same place as everything else, and several projects' sessions should
           be visible at once. Nothing connects until one is opened. */}
-      {project.status === 'running' &&
+      {hasSessions &&
+        !collapsed &&
         sessions.map((session) => (
           <div className="tree-session-row" key={session.id}>
           <button

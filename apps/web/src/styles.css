@@ -230,7 +230,10 @@ pre {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px;
+  /* Left padding leaves room for a sibling .tree-toggle to sit in, whether
+     or not this particular row has one — so every row at the same depth
+     keeps its dot in the same column. */
+  padding: 6px 8px 6px 22px;
   border-radius: 6px;
   color: var(--text-dim);
   text-decoration: none;
@@ -260,7 +263,7 @@ pre {
 }
 
 .tree-project {
-  padding-left: 24px;
+  padding-left: 38px;
   font-family: var(--mono);
   font-size: 12px;
 }
@@ -1733,7 +1736,7 @@ button.linkish:hover:not(:disabled) {
 /* Loose shared projects are not nested under a server, so they need the
  * indent a tree-project would have inherited. */
 .sidebar-scroll > .tree-project {
-  padding-left: 16px;
+  padding-left: 30px;
 }
 
 .share-modal {
@@ -1936,7 +1939,7 @@ button.linkish:hover:not(:disabled) {
  */
 
 .tree-session {
-  padding-left: 40px;
+  padding-left: 54px;
   font-family: var(--mono);
   font-size: 11px;
 }
@@ -1959,6 +1962,49 @@ button.linkish:hover:not(:disabled) {
 .tree-project-row,
 .tree-session-row {
   position: relative;
+}
+
+/* Collapsing a server's projects or a project's sessions. A sibling of the
+   row button, not nested inside it — a button cannot contain another
+   button, and clicking it must not also select the row underneath. It sits
+   in the padding every row already reserves for its own indent, the same
+   way .row-menu overlaps the row's right edge. Left out entirely on a leaf
+   (a server with no projects, a project with no sessions), rather than
+   shown disabled, since there would be nothing it could ever open. */
+.tree-toggle {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-faint);
+  z-index: 1;
+}
+
+.tree-toggle:hover {
+  background: none;
+  color: var(--text);
+}
+
+.tree-server-row .tree-toggle {
+  left: 5px;
+}
+
+.tree-project-row .tree-toggle {
+  left: 21px;
+}
+
+/* Loose shared projects sit directly under .sidebar-scroll (see
+   .sidebar-scroll > .tree-project above) and so need their toggle pulled in
+   to match, the same 8px less than a nested project. */
+.sidebar-scroll > .tree-project-row .tree-toggle {
+  left: 13px;
 }
 
 .row-menu {
