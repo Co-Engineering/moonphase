@@ -416,6 +416,17 @@ export function ProjectTerminal({
     // types rather than one: whichever the person does next — clicking to
     // start another selection, releasing it, or simply typing on — should
     // flush a copy that's still waiting, not just one specific key.
+    //
+    // Deliberately on `window`, not this terminal's own element. The reason
+    // to copy in the first place is almost always to paste somewhere else —
+    // another session, the sidebar, a dialog, a different browser tab — so
+    // the next real gesture lands back inside this terminal only some of the
+    // time. Chromium's and Firefox's activation grants are document-wide,
+    // not scoped to whatever element was clicked, so any of those gestures
+    // is just as usable for the write; only the listener was ever narrower
+    // than it needed to be. Capture phase, so nothing an intervening
+    // handler does (stopPropagation, a dialog swallowing the event) can
+    // keep this from ever seeing the gesture.
     const flushPendingClipboard = () => {
       const text = pendingClipboardRef.current
       if (!text) return
@@ -423,9 +434,9 @@ export function ProjectTerminal({
       window.clearTimeout(pendingClipboardTimeoutRef.current)
       void copyText(text)
     }
-    host.addEventListener('mousedown', flushPendingClipboard)
-    host.addEventListener('mouseup', flushPendingClipboard)
-    host.addEventListener('keydown', flushPendingClipboard)
+    window.addEventListener('mousedown', flushPendingClipboard, { capture: true })
+    window.addEventListener('mouseup', flushPendingClipboard, { capture: true })
+    window.addEventListener('keydown', flushPendingClipboard, { capture: true })
 
     term.open(host)
 
@@ -807,9 +818,9 @@ export function ProjectTerminal({
       host.removeEventListener('paste', onPaste, { capture: true })
       host.removeEventListener('dragover', onDragOver)
       host.removeEventListener('drop', onDrop)
-      host.removeEventListener('mousedown', flushPendingClipboard)
-      host.removeEventListener('mouseup', flushPendingClipboard)
-      host.removeEventListener('keydown', flushPendingClipboard)
+      window.removeEventListener('mousedown', flushPendingClipboard, { capture: true })
+      window.removeEventListener('mouseup', flushPendingClipboard, { capture: true })
+      window.removeEventListener('keydown', flushPendingClipboard, { capture: true })
       window.clearTimeout(pendingClipboardTimeoutRef.current)
       onData.dispose()
       onResize.dispose()
