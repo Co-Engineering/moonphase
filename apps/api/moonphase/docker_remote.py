@@ -36,6 +36,11 @@ class ContainerInfo:
     name: str
     state: str
     status: str
+    # The image this container was created from. A container keeps it for
+    # life — there is no changing it without recreating — so comparing it
+    # against the environment's current image is how a stale container is
+    # recognised. See _recreate_if_stale in routers/projects.py.
+    image: str = ""
 
 
 async def probe(conn: asyncssh.SSHClientConnection) -> DockerInfo:
@@ -138,7 +143,7 @@ async def inspect(conn: asyncssh.SSHClientConnection, name: str) -> ContainerInf
     result = await ssh.run(
         conn,
         "docker inspect --format "
-        "'{{.Id}}|{{.Name}}|{{.State.Status}}|{{.State.StartedAt}}' "
+        "'{{.Id}}|{{.Name}}|{{.State.Status}}|{{.State.StartedAt}}|{{.Config.Image}}' "
         + shlex.quote(name),
         timeout=30,
     )
@@ -152,6 +157,11 @@ async def inspect(conn: asyncssh.SSHClientConnection, name: str) -> ContainerInf
         name=parts[1].lstrip("/"),
         state=parts[2],
         status=parts[3] if len(parts) > 3 else parts[2],
+        # Absent from an older daemon's output, or from a caller that
+        # stubbed the format: an empty image means "unknown", and the
+        # staleness check treats unknown as "leave it alone" rather than
+        # recreating a container it cannot actually judge.
+        image=parts[4] if len(parts) > 4 else "",
     )
 
 

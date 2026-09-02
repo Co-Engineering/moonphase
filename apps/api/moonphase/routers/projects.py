@@ -580,7 +580,83 @@ def _session_name_for(
     return f"{base}-{suffix}"
 
 
+async def _current_image_for(principal: Principal, project: dict[str, Any]) -> str | None:
+    """The image this project *would* be created with today, or None if unknown.
+
+    None rather than an exception: an environment that no longer resolves — a
+    custom one someone deleted — must not stop the container starting. It only
+    means we cannot judge staleness, which is the same as having nothing to say.
+    """
+    try:
+        async with user_session(principal.claims) as conn:
+            rows = await queries.list_environments(conn)
+        return environments.resolve(project.get("environment"), rows).image
+    except Exception:  # noqa: BLE001 — staleness is advisory, never fatal
+        return None
+
+
+async def _recreate_if_stale(
+    principal: Principal,
+    ctx: runtime.ProjectContext,
+    container: docker_remote.ContainerInfo,
+) -> bool:
+    """Rebuild a container whose image is no longer the one it should have.
+
+    A container keeps its creation-time image for life; there is no changing
+    it without recreating. So every fix that lands in the image — a new
+    RECIPE_VERSION, a rebuilt base — reaches existing projects only if
+    something recreates them, and until v0.10.6 nothing did. The symptom that
+    forced this was a real one: after the worker's kernel changed, Sysbox's
+    ID-mapped mounts stopped resolving the old images' layer ownership, so
+    every root-owned binary showed up as `nobody` inside the container and
+    `sudo` refused to run at all — breaking the one thing Docker access
+    depends on. Bumping RECIPE_VERSION fixed new containers and left every
+    existing one broken, with nothing to do but recreate it by hand.
+
+    Only the container is replaced. Both volumes carry the actual work and are
+    reattached by name, which is what makes this safe enough to do without
+    asking: `/home/dev` and `/workspace` come back exactly as they were, and
+    what is lost is whatever was installed into the container's own layer —
+    which, on a container this check considers stale, is not reachable anyway.
+    """
+    wanted = await _current_image_for(principal, ctx.project)
+    if not wanted or not container.image or container.image == wanted:
+        return False
+
+    log.info(
+        "recreating %s: image %s is stale, current is %s",
+        ctx.container,
+        container.image,
+        wanted,
+    )
+    project = ctx.project
+    await _provision_container(
+        principal,
+        org_id=project["org_id"],
+        server_id=project["server_id"],
+        container=ctx.container,
+        workspace_volume=project["workspace_volume"],
+        home_volume=project["home_volume"],
+        environment=environments.resolve(
+            project.get("environment"),
+            await _environment_rows(principal),
+        ),
+        repo_url=project.get("repo_url"),
+        preview_port=project.get("preview_port"),
+        cpus=None,
+        memory=None,
+        docker_access=bool(project.get("docker_access")),
+    )
+    return True
+
+
+async def _environment_rows(principal: Principal) -> list[dict[str, Any]]:
+    async with user_session(principal.claims) as conn:
+        return await queries.list_environments(conn)
+
+
 async def _start_container(
+    principal: Principal,
     ctx: runtime.ProjectContext,
 ) -> Any:
     """Get the project's container running, and its SSH connection. Returns conn_ssh."""
@@ -588,6 +664,9 @@ async def _start_container(
     container = await docker_remote.inspect(conn_ssh, ctx.container)
     if container is None:
         raise HTTPException(status_code=409, detail="The project container is gone.")
+    if await _recreate_if_stale(principal, ctx, container):
+        # _provision_container leaves the new container running.
+        return conn_ssh
     if container.state != "running":
         await docker_remote.start(conn_ssh, ctx.container)
     return conn_ssh
@@ -609,7 +688,7 @@ async def _prepare_space(
     point. `conn_ssh` lets a caller that already started the container reuse
     the connection rather than fetching it again.
     """
-    conn_ssh = conn_ssh or await _start_container(ctx)
+    conn_ssh = conn_ssh or await _start_container(principal, ctx)
 
     workdir, resolved_branch = await workspaces.ensure_worktree(
         conn_ssh,
@@ -659,7 +738,7 @@ async def list_branches(
     profile = await runtime.load_session_profile(
         principal.claims, ctx.project, ctx.harness
     )
-    conn_ssh = await _start_container(ctx)
+    conn_ssh = await _start_container(principal, ctx)
     return await workspaces.list_branches(
         conn_ssh,
         ctx.container,
@@ -741,7 +820,7 @@ async def create_session(
         existing = await queries.get_sessions(conn, project_id)
     taken = {str(row["tmux_session"]) for row in existing}
 
-    conn_ssh = await _start_container(ctx)
+    conn_ssh = await _start_container(principal, ctx)
 
     requested = payload.name if payload and payload.name else None
     if requested:
@@ -833,15 +912,15 @@ async def start_session(
                 f"Session {name!r} belongs to someone else. You can watch it, "
                 "but starting or restarting it would run it on their account."
             )
-        conn_ssh = await _start_container(ctx)
+        conn_ssh = await _start_container(principal, ctx)
     elif mine:
         name = str(mine[0]["tmux_session"])
-        conn_ssh = await _start_container(ctx)
+        conn_ssh = await _start_container(principal, ctx)
     else:
         # First attach, no name given: same deal as an unnamed `create_session`
         # — dodge a branch left over from a same-named session closed earlier,
         # so this does not silently resume someone's very first session.
-        conn_ssh = await _start_container(ctx)
+        conn_ssh = await _start_container(principal, ctx)
         also_avoid = await workspaces.existing_branch_names(conn_ssh, ctx.container)
         name = _session_name_for(principal, taken, also_avoid)
 
