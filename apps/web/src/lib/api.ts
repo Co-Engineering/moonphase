@@ -366,6 +366,22 @@ export function checkedAgo(item: { checked_at?: string | null }): string {
   return `last checked ${Math.round(minutes / 60)}h ago`
 }
 
+/** How long since the session's state last actually changed — "since when",
+ *  not "is that still true" (which is what `checkedAgo` answers). This is
+ *  what belongs next to a session in a list: an always-idle session's
+ *  `checked_at` ticks up every poll and says nothing, while `activity_at`
+ *  says how recently it was really used. */
+export function activityAgo(item: { activity_at?: string | null }): string {
+  if (!item.activity_at) return 'no activity yet'
+  const seconds = Math.round((Date.now() - Date.parse(item.activity_at)) / 1000)
+  if (seconds < 90) return `${seconds}s ago`
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 90) return `${minutes} min ago`
+  const hours = Math.round(minutes / 60)
+  if (hours < 36) return `${hours}h ago`
+  return `${Math.round(hours / 24)}d ago`
+}
+
 export type ActivityState =
   | 'unknown'
   | 'working'
@@ -557,6 +573,12 @@ export const api = {
     request<Session>(
       `/api/projects/${projectId}/sessions/${encodeURIComponent(name)}/rename`,
       { method: 'PATCH', body: JSON.stringify({ name: displayName }) },
+    ),
+  /** A new session in the same project: same conversation, same changes so far. */
+  duplicateSession: (projectId: string, name: string) =>
+    request<Session>(
+      `/api/projects/${projectId}/sessions/${encodeURIComponent(name)}/duplicate`,
+      { method: 'POST' },
     ),
   detachClients: (projectId: string, name: string) =>
     request<{ detached: number }>(

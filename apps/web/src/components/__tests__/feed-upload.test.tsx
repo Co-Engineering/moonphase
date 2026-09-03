@@ -155,3 +155,39 @@ describe('attaching an image in the feed', () => {
     expect(upload).not.toHaveBeenCalled()
   })
 })
+
+describe('attaching a non-image file in the feed', () => {
+  it('uploads it into the working tree, not the feed image endpoint', async () => {
+    const feedUpload = vi.fn()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.includes('/feed/upload')) {
+          feedUpload()
+          return new Response(JSON.stringify({ path: '/wrong/endpoint' }), { status: 200 })
+        }
+        if (url.includes('/sessions/upload')) {
+          return new Response(
+            JSON.stringify({ path: '/home/dev/sessions/s1/work/notes.txt' }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          )
+        }
+        return emptyPage()
+      }),
+    )
+    vi.stubGlobal('WebSocket', StubSocket)
+
+    const { container } = render(<Feed projectId="p1" session="s1" running />)
+    const fileInput = container.querySelector('.feed-file-input') as HTMLInputElement
+    const file = new File(['hello'], 'notes.txt', { type: 'text/plain' })
+    fireEvent.change(fileInput, { target: { files: [file] } })
+
+    // No thumbnail — a text file has nothing to preview — but the filename
+    // shows up as a chip, and it does not go through the image endpoint.
+    expect(container.querySelector('.feed-attachment.file')).toBeTruthy()
+    expect(screen.getByText('notes.txt')).toBeTruthy()
+    await waitFor(() => expect(screen.getByText('Send')).not.toBeDisabled())
+    expect(feedUpload).not.toHaveBeenCalled()
+  })
+})

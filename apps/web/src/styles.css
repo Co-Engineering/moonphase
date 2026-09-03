@@ -146,6 +146,25 @@ pre {
   height: 100%;
 }
 
+/* Collapsing the whole sidebar to reclaim width — a laptop with two windows
+   side by side is the case this is for. Scoped to the width the mobile
+   drawer below does *not* already own: under 720px the sidebar is an
+   overlay regardless, and this and that must never both apply at once. */
+@media (min-width: 721px) {
+  .app.sidebar-collapsed {
+    /* One track, not two with the first at 0: `display: none` below takes
+       .sidebar out of grid placement entirely, so a still-two-track grid
+       would shift .main into the *first* (0-width) track instead of the
+       second — a blank page, not a wider one. One track sidesteps that,
+       the same way the mobile layout below already does. */
+    grid-template-columns: 1fr;
+  }
+
+  .app.sidebar-collapsed .sidebar {
+    display: none;
+  }
+}
+
 .sidebar {
   background: var(--bg-panel);
   border-right: 1px solid var(--border);
@@ -1452,6 +1471,26 @@ button.linkish:hover:not(:disabled) {
   display: block;
 }
 
+/* A non-image attachment has no useful thumbnail, so it grows sideways for
+   a filename instead of staying a fixed square. */
+.feed-attachment.file {
+  width: auto;
+  min-width: 52px;
+  max-width: 140px;
+  padding: 0 22px 0 8px;
+  display: flex;
+  align-items: center;
+}
+
+.feed-attachment-file {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .feed-attachment-status {
   position: absolute;
   inset: 0;
@@ -1922,6 +1961,14 @@ button.linkish:hover:not(:disabled) {
   font-size: 10px;
 }
 
+.session-ago {
+  margin-left: 6px;
+  flex-shrink: 0;
+  color: var(--text-faint);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Preview opens the whole project, so it reads as the primary action in the
  * ports strip rather than another per-port control. */
 .ports-preview {
@@ -1962,6 +2009,23 @@ button.linkish:hover:not(:disabled) {
 .tree-project-row,
 .tree-session-row {
   position: relative;
+}
+
+.tree-session-row[draggable='true'] {
+  cursor: grab;
+}
+
+/* Where a drop would land — a line rather than a highlight, since a
+   highlighted row reads as "select this", not "insert here". */
+.tree-session-row.drag-over::before {
+  content: '';
+  position: absolute;
+  left: 22px;
+  right: 8px;
+  bottom: -1px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
 }
 
 /* Collapsing a server's projects or a project's sessions. A sibling of the

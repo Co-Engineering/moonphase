@@ -44,3 +44,37 @@ export function useCollapsed(storageKey: string) {
 
   return [collapsed, toggle] as const
 }
+
+function readFlag(key: string): boolean {
+  try {
+    return window.localStorage.getItem(key) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writeFlag(key: string, value: boolean): void {
+  try {
+    if (value) window.localStorage.setItem(key, '1')
+    else window.localStorage.removeItem(key)
+  } catch {
+    // Private browsing. The toggle still works for this session.
+  }
+}
+
+/** A single on/off preference, persisted under `storageKey`. Same reasoning
+ *  as `useCollapsed`, for the one case that isn't a set of ids: whether the
+ *  whole sidebar is collapsed, not just something inside it. */
+export function useCollapsedFlag(storageKey: string) {
+  const [collapsed, setCollapsed] = useState<boolean>(() => readFlag(storageKey))
+
+  const toggle = useCallback(() => {
+    setCollapsed((prev) => {
+      const next = !prev
+      writeFlag(storageKey, next)
+      return next
+    })
+  }, [storageKey])
+
+  return [collapsed, toggle] as const
+}

@@ -104,6 +104,20 @@ describe('starting sessions', () => {
     await waitFor(() => expect(create).toHaveBeenCalledWith('p1', 'refactor', undefined))
   })
 
+  it('also takes a name for the very first session, not just later ones', async () => {
+    const create = vi.spyOn(api, 'createSession').mockResolvedValue(
+      session({ tmux_session: 'refactor' }),
+    )
+    view([])
+
+    fireEvent.change(await screen.findByLabelText('New session name'), {
+      target: { value: 'refactor' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Start my session' }))
+
+    await waitFor(() => expect(create).toHaveBeenCalledWith('p1', 'refactor', undefined))
+  })
+
   it('lets you pick a starting branch', async () => {
     vi.spyOn(api, 'branches').mockResolvedValue(['main', 'staging'])
     const create = vi.spyOn(api, 'createSession').mockResolvedValue(

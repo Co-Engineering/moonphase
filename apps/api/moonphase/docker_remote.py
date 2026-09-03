@@ -260,6 +260,33 @@ async def exec_capture(
     return await ssh.run(conn, " ".join(shlex.quote(a) for a in args), timeout=timeout)
 
 
+async def copy_path(
+    conn: asyncssh.SSHClientConnection,
+    container: str,
+    src: str,
+    dst: str,
+    *,
+    timeout: float = 60.0,
+) -> None:
+    """Copy `src` to `dst`, both inside `container`.
+
+    A no-op, not an error, when `src` does not exist — a session that has not
+    written anything at that path yet (no transcript, say) is not a failure.
+
+    `-a` rather than `-r`: it preserves modification times, which matters when
+    `src` holds more than one file, since whatever later decides which one is
+    "the newest" needs that ordering to survive the copy.
+    """
+    parent = shlex.quote(dst.rsplit("/", 1)[0])
+    quoted_src = shlex.quote(src)
+    quoted_dst = shlex.quote(dst)
+    script = (
+        f"[ -e {quoted_src} ] || exit 0; mkdir -p {parent} && cp -a {quoted_src} {quoted_dst}"
+    )
+    result = await exec_capture(conn, container, ["sh", "-c", script], timeout=timeout)
+    result.check(f"Copying {src} to {dst} inside {container}")
+
+
 def exec_tty_command(
     container: str,
     command: list[str],

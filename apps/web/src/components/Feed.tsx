@@ -1,17 +1,29 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, feedUrl, type DiffLine, type FeedEvent, type Prompt } from '../lib/api'
+import {
+  api,
+  feedUrl,
+  uploadSessionFile,
+  type DiffLine,
+  type FeedEvent,
+  type Prompt,
+} from '../lib/api'
 import { Markdown } from './Markdown'
 
-// Mirrors the backend's own limit (feed.py's _MAX_UPLOAD_BYTES) so an
-// oversized file is refused here — instantly, before it ever leaves the
-// device — rather than after however long a phone upload takes to fail.
+// Mirrors the backend's own limit (feed.py's and terminal.py's
+// _MAX_UPLOAD_BYTES, both 15 MB) so an oversized file is refused here —
+// instantly, before it ever leaves the device — rather than after however
+// long an upload takes to fail.
 const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024
-const MAX_ATTACHMENT_MESSAGE = 'Images are limited to 15 MB.'
+const MAX_ATTACHMENT_MESSAGE = 'Attachments are limited to 15 MB.'
 
 interface Attachment {
   id: string
   file: File
-  previewUrl: string
+  /** Images get their own preview and land in the session's home, same as
+   *  before; anything else has no useful thumbnail and goes to the working
+   *  tree instead — see `addFiles`. */
+  kind: 'image' | 'file'
+  previewUrl?: string
   /** Set once the upload lands and the container has a path to point at. */
   path: string | null
   uploading: boolean
@@ -99,7 +111,7 @@ export function Feed({
   // Object URLs are the browser's, not React's — they leak until revoked, so
   // every attachment that ever existed gets cleaned up on the way out.
   const revokeAttachments = useCallback((list: Attachment[]) => {
-    for (const a of list) URL.revokeObjectURL(a.previewUrl)
+    for (const a of list) if (a.previewUrl) URL.revokeObjectURL(a.previewUrl)
   }, [])
   const attachmentsRef = useRef<Attachment[]>([])
   useEffect(() => {
@@ -109,14 +121,16 @@ export function Feed({
 
   const addFiles = useCallback(
     (files: Iterable<File>) => {
-      const images = Array.from(files).filter((f) => f.type.startsWith('image/'))
-      if (!images.length) return
-      const next: Attachment[] = images.map((file) => {
+      const incoming = Array.from(files)
+      if (!incoming.length) return
+      const next: Attachment[] = incoming.map((file) => {
+        const isImage = file.type.startsWith('image/')
         const tooLarge = file.size > MAX_ATTACHMENT_BYTES
         return {
           id: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2)}`,
           file,
-          previewUrl: URL.createObjectURL(file),
+          kind: isImage ? 'image' : 'file',
+          previewUrl: isImage ? URL.createObjectURL(file) : undefined,
           path: null,
           uploading: !tooLarge,
           error: tooLarge ? MAX_ATTACHMENT_MESSAGE : null,
@@ -125,8 +139,17 @@ export function Feed({
       setAttachments((current) => [...current, ...next])
       for (const attachment of next) {
         if (attachment.error) continue // too large — nothing to upload
-        api
-          .uploadFeedImage(projectId, attachment.file, session)
+        // Images land in the session's home (feed/upload) — a reference a
+        // message points at, not meant to show up as an untracked file in
+        // `git status`. Anything else goes into the working tree instead,
+        // through the same endpoint the terminal's own upload button uses:
+        // a spec, a CSV or a config file dropped here is meant to become
+        // part of the project, not just be glanced at once.
+        const upload =
+          attachment.kind === 'image'
+            ? api.uploadFeedImage(projectId, attachment.file, session)
+            : uploadSessionFile(projectId, attachment.file, session)
+        upload
           .then((res) =>
             setAttachments((current) =>
               current.map((a) =>
@@ -414,8 +437,17 @@ export function Feed({
         {attachments.length > 0 && (
           <div className="feed-attachments">
             {attachments.map((a) => (
-              <div key={a.id} className={`feed-attachment${a.error ? ' error' : ''}`}>
-                <img src={a.previewUrl} alt="" />
+              <div
+                key={a.id}
+                className={`feed-attachment${a.kind === 'file' ? ' file' : ''}${a.error ? ' error' : ''}`}
+              >
+                {a.kind === 'image' ? (
+                  <img src={a.previewUrl} alt="" />
+                ) : (
+                  <span className="feed-attachment-file" title={a.file.name}>
+                    {a.file.name}
+                  </span>
+                )}
                 {(a.uploading || a.error) && (
                   <div className="feed-attachment-status" title={a.error ?? undefined}>
                     {a.uploading ? (
@@ -429,7 +461,7 @@ export function Feed({
                   type="button"
                   className="feed-attachment-remove"
                   onClick={() => removeAttachment(a.id)}
-                  aria-label="Remove image"
+                  aria-label={a.kind === 'image' ? 'Remove image' : 'Remove file'}
                 >
                   ×
                 </button>
@@ -442,7 +474,6 @@ export function Feed({
             ref={fileInputRef}
             className="feed-file-input"
             type="file"
-            accept="image/*"
             multiple
             tabIndex={-1}
             onChange={(e) => {
@@ -456,9 +487,9 @@ export function Feed({
             title={
               readOnly
                 ? "This session belongs to someone else — only they can answer"
-                : 'Attach an image'
+                : 'Attach a file'
             }
-            aria-label="Attach an image"
+            aria-label="Attach a file"
             disabled={!running}
             onClick={() => (readOnly ? onRefusedInput?.() : fileInputRef.current?.click())}
           >
