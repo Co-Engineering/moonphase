@@ -187,10 +187,19 @@ async def send(
     )
 
     def _send() -> None:
+        # Not the raw PEM string: pywebpush only treats `vapid_private_key` as
+        # PEM when it is already a `Vapid01` instance. A plain string that
+        # isn't a file path goes through `Vapid.from_string()` instead, which
+        # expects a bare base64/DER key with no PEM armor — handed a real PEM
+        # block, it fails deep inside `cryptography` with an opaque "ASN.1
+        # parsing error: invalid length", for every key, valid or not.
+        # Parsing it ourselves and passing the object sidesteps that branch
+        # entirely.
+        vapid = Vapid01.from_pem(settings.moonphase_vapid_private_key.encode())
         webpush(
             subscription_info=subscription.to_info(),
             data=payload,
-            vapid_private_key=settings.moonphase_vapid_private_key,
+            vapid_private_key=vapid,
             vapid_claims={"sub": settings.moonphase_vapid_subject},
             timeout=15,
         )
