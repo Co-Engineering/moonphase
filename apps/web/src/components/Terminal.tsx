@@ -69,6 +69,35 @@ export function isPlainPasteCombo(
 }
 
 /**
+ * Plain Ctrl+C — copies the current selection instead of interrupting,
+ * matching VS Code's own integrated terminal. Only meaningful alongside a
+ * selection to act on: see the handler below for why that is Shift+drag
+ * specifically, not a plain one.
+ *
+ * Reusing the paste combo's exact shape (Ctrl, no Cmd/Shift/Alt) rather than
+ * a Ctrl+Shift+C "copy" chord some emulators use instead: this project's own
+ * one prior attempt at copy-on-select already trained people to expect a
+ * plain drag-and-copy, and conditioning the *key* on whether a selection
+ * exists — rather than asking for a different chord — is what makes "select,
+ * then Ctrl+C" not a second thing to learn. It is exactly as safe as it
+ * sounds: nothing selects text here without a deliberate Shift+drag first,
+ * so a plain Ctrl+C with nothing selected is untouched and keeps sending the
+ * interrupt byte, unconditionally — which is overwhelmingly what it is
+ * pressed for.
+ */
+export function isCopySelectionCombo(
+  event: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'shiftKey' | 'altKey'>,
+): boolean {
+  return (
+    event.key.toLowerCase() === 'c' &&
+    event.ctrlKey &&
+    !event.metaKey &&
+    !event.shiftKey &&
+    !event.altKey
+  )
+}
+
+/**
  * Wraps a filename for safe insertion into a shell command line: single
  * quotes, with any embedded single quote escaped the POSIX way (close the
  * quote, an escaped literal quote, reopen it). Used when an uploaded file's
@@ -765,6 +794,20 @@ export function ProjectTerminal({
         },
       })
       if (shiftEnterResult === false) return false
+
+      if (event.type === 'keydown' && isCopySelectionCombo(event) && term.hasSelection()) {
+        event.preventDefault()
+        event.stopPropagation()
+        void copyText(term.getSelection())
+        // Cleared rather than left standing: a second, unrelated Ctrl+C
+        // moments later — the far more common reason to press it — must
+        // land as the interrupt it looks like, not silently copy a
+        // selection whoever's looking at the screen has forgotten is
+        // still there.
+        term.clearSelection()
+        return false
+      }
+
       if (event.type !== 'keydown' || !isPlainPasteCombo(event)) return true
 
       event.preventDefault()

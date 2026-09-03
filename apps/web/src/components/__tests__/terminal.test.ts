@@ -5,6 +5,7 @@ import {
   clipboardImagePasteFollowUp,
   decodeOsc52ClipboardPayload,
   handleShiftEnterKeydown,
+  isCopySelectionCombo,
   isPlainPasteCombo,
   readClipboardImage,
   isShiftEnter,
@@ -15,6 +16,12 @@ function pasteCombo(
   overrides: Partial<{ key: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }> = {},
 ) {
   return { key: 'v', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false, ...overrides }
+}
+
+function copyCombo(
+  overrides: Partial<{ key: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }> = {},
+) {
+  return { key: 'c', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false, ...overrides }
 }
 
 function fakeEvent(overrides: Partial<{ key: string; shiftKey: boolean; type: string }> = {}) {
@@ -162,6 +169,32 @@ describe('isPlainPasteCombo', () => {
 
   it('is false for Ctrl+anything-else', () => {
     expect(isPlainPasteCombo(pasteCombo({ key: 'c' }))).toBe(false)
+  })
+})
+
+describe('isCopySelectionCombo', () => {
+  it('is true for a plain Ctrl+C', () => {
+    expect(isCopySelectionCombo(copyCombo())).toBe(true)
+  })
+
+  it('is false for Cmd+C', () => {
+    expect(isCopySelectionCombo(copyCombo({ ctrlKey: false, metaKey: true }))).toBe(false)
+  })
+
+  it('is false for Ctrl+Shift+C', () => {
+    expect(isCopySelectionCombo(copyCombo({ shiftKey: true }))).toBe(false)
+  })
+
+  it('is false for Ctrl+Alt+C', () => {
+    expect(isCopySelectionCombo(copyCombo({ altKey: true }))).toBe(false)
+  })
+
+  it('is false for a bare C with no modifier', () => {
+    expect(isCopySelectionCombo(copyCombo({ ctrlKey: false }))).toBe(false)
+  })
+
+  it('is false for Ctrl+anything-else', () => {
+    expect(isCopySelectionCombo(copyCombo({ key: 'v' }))).toBe(false)
   })
 })
 
