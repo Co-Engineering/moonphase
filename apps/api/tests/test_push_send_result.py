@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 
 import pytest
+from py_vapid import Vapid01
 from pywebpush import WebPushException
 
 from moonphase import push
@@ -29,8 +30,14 @@ def _configured(monkeypatch):
     get_settings.cache_clear()
     key = base64.urlsafe_b64encode(b"x" * 32).decode()
     monkeypatch.setenv("MOONPHASE_SECRET_KEY", key)
-    monkeypatch.setenv("MOONPHASE_VAPID_PUBLIC_KEY", "public-key")
-    monkeypatch.setenv("MOONPHASE_VAPID_PRIVATE_KEY", "private-key")
+    # A real keypair, not a placeholder string: send() parses this PEM itself
+    # before ever reaching the mocked webpush() below, so a fixture that
+    # doesn't actually parse is a fixture that can't catch send() and
+    # generate_keypair() disagreeing about the key's format — which is
+    # exactly the bug this file's tests all used to fly straight past.
+    public, private = push.generate_keypair()
+    monkeypatch.setenv("MOONPHASE_VAPID_PUBLIC_KEY", public)
+    monkeypatch.setenv("MOONPHASE_VAPID_PRIVATE_KEY", private)
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
@@ -48,6 +55,28 @@ async def test_a_successful_send_is_delivered_and_alive(monkeypatch) -> None:
     assert result.delivered is True
     assert result.alive is True
     assert result.error is None
+
+
+async def test_send_hands_webpush_a_parsed_key_not_the_raw_pem_string(monkeypatch) -> None:
+    """The actual bug: generate_keypair() emits PEM, but pywebpush only
+    treats `vapid_private_key` as PEM when it is already a `Vapid01`
+    instance -- any other string (a file path or not) goes through
+    `Vapid.from_string()`, which expects a bare base64/DER key with no PEM
+    armor and fails deep inside `cryptography` with an opaque "ASN.1 parsing
+    error: invalid length", for every key, valid or not. Every other test in
+    this file would pass whether send() got this right or not, since none of
+    them inspect what was actually passed to webpush() -- this one does."""
+    captured: dict[str, object] = {}
+
+    def _capture(**kwargs: object) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(push, "webpush", _capture)
+
+    result = await push.send(_subscription(), title="t", body="b")
+
+    assert result.delivered is True, result.error
+    assert isinstance(captured["vapid_private_key"], Vapid01)
 
 
 async def test_a_gone_subscription_is_not_delivered_and_not_alive(monkeypatch) -> None:
