@@ -553,6 +553,16 @@ async def stop_project(
 # one container neither authenticate as each other nor overwrite each other.
 
 
+def _unique_name(base: str, blocked: set[str]) -> str:
+    """`base`, or `base-2`, `base-3`, ... — whichever is not in `blocked`."""
+    if base not in blocked:
+        return base
+    suffix = 2
+    while f"{base}-{suffix}" in blocked:
+        suffix += 1
+    return f"{base}-{suffix}"
+
+
 def _session_name_for(
     principal: Principal, taken: set[str], also_avoid: set[str] = frozenset()
 ) -> str:
@@ -571,13 +581,7 @@ def _session_name_for(
     frees its name for reuse on purpose.
     """
     base = sessions.sanitise_name((principal.email or "session").split("@")[0])
-    blocked = taken | also_avoid
-    if base not in blocked:
-        return base
-    suffix = 2
-    while f"{base}-{suffix}" in blocked:
-        suffix += 1
-    return f"{base}-{suffix}"
+    return _unique_name(base, taken | also_avoid)
 
 
 async def _current_image_for(principal: Principal, project: dict[str, Any]) -> str | None:
@@ -1059,6 +1063,135 @@ async def rename_session(
     if row is None:
         raise HTTPException(status_code=404, detail="No such session.")
     return SessionOut.model_validate(row)
+
+
+@router.post(
+    "/{project_id}/sessions/{name}/duplicate",
+    response_model=SessionOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def duplicate_session(
+    project_id: UUID, name: str, principal: Principal = Depends(current_principal)
+) -> SessionOut:
+    """Copy one of your sessions — its conversation and everything it has
+    changed, committed or not — into a new session in this project.
+
+    Yours only, with no admin override: this is the one place in the file
+    that deliberately does not offer one, because a session's conversation is
+    the private part, not just the account it runs on.
+    """
+    source_name = sessions.sanitise_name(name)
+    try:
+        ctx = await runtime.load_project_context(principal.claims, project_id)
+    except NotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    async with user_session(principal.claims) as conn:
+        source_row = await queries.get_session(conn, project_id, source_name)
+        if source_row is None:
+            raise HTTPException(status_code=404, detail="No such session.")
+        if not source_row.get("is_mine"):
+            raise Forbidden(
+                f"Session {source_name!r} belongs to someone else. Only they "
+                "can duplicate it."
+            )
+        existing = await queries.get_sessions(conn, project_id)
+    taken = {str(row["tmux_session"]) for row in existing}
+
+    conn_ssh = await _start_container(principal, ctx)
+
+    # Named from the source session, not the caller's email — and dodging a
+    # leftover branch of the same name exactly like an unnamed create does,
+    # since ensure_worktree silently ignores start_point once that branch
+    # already exists on disk.
+    also_avoid = await workspaces.existing_branch_names(conn_ssh, ctx.container)
+    new_name = _unique_name(source_name, taken | also_avoid)
+
+    profile = await _profile_or_409(principal, ctx, new_name)
+
+    source_space = SessionSpace(
+        home=str(source_row["home_dir"]), workdir=str(source_row["workdir"])
+    )
+    snapshot_sha = await workspaces.snapshot_worktree(
+        conn_ssh,
+        ctx.container,
+        source_space.workdir,
+        author_name=profile.git_user_name or (principal.email or "Moonphase"),
+        author_email=profile.git_user_email or (principal.email or "moonphase@localhost"),
+    )
+
+    space, workdir, branch = await _prepare_space(
+        principal, ctx, new_name, profile, branch=snapshot_sha, conn_ssh=conn_ssh
+    )
+
+    # HOME has to exist before anything lands in <home>/.claude/projects/...
+    # below; ensure_session would create it too, but only after the copy.
+    await sessions.ensure_home(conn_ssh, ctx.container, space)
+
+    harness = harness_registry.get(ctx.harness)
+    await docker_remote.copy_path(
+        conn_ssh,
+        ctx.container,
+        harness.transcript_dir(source_space),
+        harness.transcript_dir(space),
+    )
+
+    try:
+        await sessions.ensure_session(
+            conn_ssh,
+            ctx.container,
+            harness_kind=ctx.harness,
+            workspace_profile=profile,
+            session=new_name,
+            space=space,
+            # The one difference from create_session: there is a conversation
+            # at the transcript path just copied above, waiting to be resumed.
+            resume=True,
+        )
+    except SSHError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    async with user_session(principal.claims) as conn:
+        row = await queries.upsert_session(
+            conn,
+            project_id=project_id,
+            harness=ctx.harness,
+            tmux_session=new_name,
+            state="running",
+            user_id=principal.user_id,
+            workdir=workdir,
+            home_dir=space.home,
+            branch=branch,
+            transcript_path=harness.transcript_dir(space),
+            mark_started=True,
+        )
+        # Settings/CLAUDE.md/MCP/skills/env, for full fidelity. Usage cursors
+        # are deliberately left out — upsert_session never sets them, so the
+        # new session simply starts without any, rather than inheriting the
+        # source's and double-counting against its limits.
+        source_cfg = await queries.get_session_config(conn, project_id, source_name)
+        if source_cfg:
+            await queries.update_session_config(
+                conn,
+                project_id,
+                new_name,
+                claude_settings_json=source_cfg.get("claude_settings_json"),
+                claude_md=source_cfg.get("claude_md"),
+                mcp_json=source_cfg.get("mcp_json"),
+                skills={
+                    str(k): str(v)
+                    for k, v in profile_module.parse_json_object(
+                        source_cfg.get("skills_json")
+                    ).items()
+                },
+                env_vars={
+                    str(k): str(v)
+                    for k, v in profile_module.parse_json_object(
+                        source_cfg.get("env_vars")
+                    ).items()
+                },
+            )
+    return SessionOut.model_validate({**row, "alive": True, "attached_clients": 0})
 
 
 @router.post(

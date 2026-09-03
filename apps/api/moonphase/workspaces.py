@@ -210,6 +210,10 @@ async def ensure_worktree(
     `start_point` that is not the repository's default branch usually is not on
     disk yet — `token` is the caller's GitHub credential, so a private repo's
     other branches can still be fetched.
+
+    `start_point` may also be a raw commit SHA — the output of
+    `snapshot_worktree`, say. A SHA is always already local (every session's
+    worktree shares one object database), so it resolves without a fetch.
     """
     await ensure_repository(
         conn, container, author_name=author_name, author_email=author_email
@@ -228,18 +232,22 @@ async def ensure_worktree(
             raise SSHError(f"{start_point!r} is not a usable branch name.")
         quoted_start = shlex.quote(start_point)
         start_clause = f"""
-  if ! git show-ref --verify --quiet refs/heads/{quoted_start} && \\
-     ! git show-ref --verify --quiet refs/remotes/origin/{quoted_start}; then
-    GIT_TERMINAL_PROMPT=0 git {_git_env_flags(token)} fetch --quiet --depth 50 \\
-      origin {quoted_start}:refs/remotes/origin/{quoted_start} 2>/dev/null || true
-  fi
-  if git show-ref --verify --quiet refs/heads/{quoted_start}; then
+  if git cat-file -e {quoted_start}^{{commit}} 2>/dev/null; then
     START_REF={quoted_start}
-  elif git show-ref --verify --quiet refs/remotes/origin/{quoted_start}; then
-    START_REF=origin/{quoted_start}
   else
-    echo "No branch called {start_point!r} was found locally or on origin." >&2
-    exit 1
+    if ! git show-ref --verify --quiet refs/heads/{quoted_start} && \\
+       ! git show-ref --verify --quiet refs/remotes/origin/{quoted_start}; then
+      GIT_TERMINAL_PROMPT=0 git {_git_env_flags(token)} fetch --quiet --depth 50 \\
+        origin {quoted_start}:refs/remotes/origin/{quoted_start} 2>/dev/null || true
+    fi
+    if git show-ref --verify --quiet refs/heads/{quoted_start}; then
+      START_REF={quoted_start}
+    elif git show-ref --verify --quiet refs/remotes/origin/{quoted_start}; then
+      START_REF=origin/{quoted_start}
+    else
+      echo "No branch called {start_point!r} was found locally or on origin." >&2
+      exit 1
+    fi
   fi
 """
 
@@ -273,6 +281,51 @@ fi
             await _clear_fetch_credential(conn, container)
     result.check(f"Creating a working directory for session {session!r}")
     return workdir, branch
+
+
+async def snapshot_worktree(
+    conn: asyncssh.SSHClientConnection,
+    container: str,
+    workdir: str,
+    *,
+    author_name: str,
+    author_email: str,
+) -> str:
+    """A commit capturing `workdir` exactly as it is right now. Returns its SHA.
+
+    Staged, unstaged and untracked files all go in, the same as a save point —
+    but nothing here touches `workdir` itself: this is for handing another
+    worktree a starting point, not for the session it runs. `GIT_INDEX_FILE`
+    points `add` and `write-tree` at a throwaway copy of the real index, and
+    `commit-tree` makes the commit directly, so the real index, HEAD and the
+    working tree are never in the blast radius even if this fails halfway.
+
+    Returns the current HEAD unchanged if nothing was dirty, rather than
+    manufacturing an empty commit.
+    """
+    d = shlex.quote(workdir)
+    quoted_name = shlex.quote(author_name)
+    quoted_email = shlex.quote(author_email)
+    script = f"""
+set -e
+cd {d}
+HEAD=$(git rev-parse HEAD)
+if [ -n "$(git status --porcelain -uall)" ]; then
+  REAL_INDEX=$(git rev-parse --git-path index)
+  SCRATCH_INDEX=$(mktemp)
+  cp "$REAL_INDEX" "$SCRATCH_INDEX"
+  GIT_INDEX_FILE="$SCRATCH_INDEX" git add -A
+  TREE=$(GIT_INDEX_FILE="$SCRATCH_INDEX" git write-tree)
+  rm -f "$SCRATCH_INDEX"
+  git -c user.name={quoted_name} -c user.email={quoted_email} \
+      commit-tree "$TREE" -p "$HEAD" -m 'Moonphase: duplicate-session snapshot'
+else
+  echo "$HEAD"
+fi
+"""
+    result = await _run(conn, container, script)
+    result.check(f"Capturing the current state of {workdir!r}")
+    return result.stdout.strip().splitlines()[-1]
 
 
 async def list_branches(

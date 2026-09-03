@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Session as AuthSession } from '@supabase/supabase-js'
 import { client, configure } from './lib/supabase'
 import {
+  activityAgo,
   api,
   canControl,
   checkedAgo,
@@ -12,7 +13,8 @@ import {
   setupState,
 } from './lib/api'
 import { useResource } from './lib/useResource'
-import { useCollapsed } from './lib/collapsed'
+import { useCollapsed, useCollapsedFlag } from './lib/collapsed'
+import { useSessionOrder } from './lib/sessionOrder'
 import { Logo } from './components/Logo'
 import { ProjectTerminal } from './components/Terminal'
 import { Auth } from './routes/Auth'
@@ -215,6 +217,20 @@ function Shell({ email }: { email: string }) {
   const [showAddServer, setShowAddServer] = useState(false)
   const [showNewProject, setShowNewProject] = useState(false)
   const [showSidebar, setShowSidebar] = useState(false)
+  const [sidebarCollapsed, toggleSidebarCollapsed] = useCollapsedFlag('moonphase.sidebarCollapsed')
+  // One button, two jobs depending on how much room there is: on a phone it
+  // opens and closes the sidebar as an overlay (never remembered — starting
+  // a fresh visit with it pinned open would cover the content); on a wider
+  // window there is room for both at once, so this collapses/expands the
+  // sidebar in place instead, and that choice *is* remembered, the same as
+  // the per-project and per-server collapse already are.
+  const toggleSidebar = useCallback(() => {
+    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 720px)').matches) {
+      setShowSidebar((v) => !v)
+    } else {
+      toggleSidebarCollapsed()
+    }
+  }, [toggleSidebarCollapsed])
   const [showSettings, setShowSettings] = useState(false)
   const [showHost, setShowHost] = useState(false)
   const [renaming, setRenaming] = useState<
@@ -228,6 +244,7 @@ function Shell({ email }: { email: string }) {
   const [showSearch, setShowSearch] = useState(false)
   const [collapsedServers, toggleServerCollapsed] = useCollapsed('moonphase.collapsedServers')
   const [collapsedProjects, toggleProjectCollapsed] = useCollapsed('moonphase.collapsedProjects')
+  const { orderedSessions, moveSession } = useSessionOrder()
 
   // ⌘K / Ctrl-K. Registered here rather than inside the modal because its
   // whole job is opening the modal when it is not mounted.
@@ -293,6 +310,18 @@ function Shell({ email }: { email: string }) {
     [reloadAll],
   )
 
+  // Landing in the copy is the point of duplicating — nobody duplicates a
+  // session to then go find it themselves.
+  const duplicateSession = useCallback(
+    (projectId: string, tmuxSession: string) => {
+      void api.duplicateSession(projectId, tmuxSession).then((created) => {
+        selectProject(projectId, created.tmux_session)
+        reloadAll()
+      })
+    },
+    [reloadAll, selectProject],
+  )
+
   // A notification names the thing that needs answering, and tapping it has to
   // land there. It arrives two ways: as query parameters when the app is
   // opened cold, and as a message from the service worker when a window is
@@ -337,7 +366,11 @@ function Shell({ email }: { email: string }) {
   }, [servers.data, projects.data])
 
   return (
-    <div className={`app${showSidebar ? ' show-sidebar' : ''}`}>
+    <div
+      className={`app${showSidebar ? ' show-sidebar' : ''}${
+        sidebarCollapsed ? ' sidebar-collapsed' : ''
+      }`}
+    >
       <aside className="sidebar">
         <div className="brand">
           <span className="glyph">
@@ -463,9 +496,18 @@ function Shell({ email }: { email: string }) {
                           ? selected.session
                           : undefined
                       }
-                      sessions={(sessions.data ?? []).filter(
-                        (s) => s.project_id === project.id,
+                      sessions={orderedSessions(
+                        project.id,
+                        (sessions.data ?? []).filter((s) => s.project_id === project.id),
                       )}
+                      onReorderSession={(dragged, before) =>
+                        moveSession(
+                          project.id,
+                          (sessions.data ?? []).filter((s) => s.project_id === project.id),
+                          dragged,
+                          before,
+                        )
+                      }
                       onSelect={selectProject}
                       collapsed={collapsedProjects.has(project.id)}
                       onToggleCollapse={() => toggleProjectCollapsed(project.id)}
@@ -495,6 +537,9 @@ function Shell({ email }: { email: string }) {
                         })
                       }
                       onCloseSession={(item) => closeSession(project.id, item.tmux_session)}
+                      onDuplicateSession={(item) =>
+                        duplicateSession(project.id, item.tmux_session)
+                      }
                       onConfigure={(item) =>
                         setConfigureTarget({ projectId: item.id, projectName: item.name })
                       }
@@ -526,7 +571,18 @@ function Shell({ email }: { email: string }) {
                       ? selected.session
                       : undefined
                   }
-                  sessions={(sessions.data ?? []).filter((s) => s.project_id === project.id)}
+                  sessions={orderedSessions(
+                    project.id,
+                    (sessions.data ?? []).filter((s) => s.project_id === project.id),
+                  )}
+                  onReorderSession={(dragged, before) =>
+                    moveSession(
+                      project.id,
+                      (sessions.data ?? []).filter((s) => s.project_id === project.id),
+                      dragged,
+                      before,
+                    )
+                  }
                   onSelect={selectProject}
                   subtitle={project.server_name ?? undefined}
                   collapsed={collapsedProjects.has(project.id)}
@@ -551,6 +607,9 @@ function Shell({ email }: { email: string }) {
                     })
                   }
                   onCloseSession={(item) => closeSession(project.id, item.tmux_session)}
+                  onDuplicateSession={(item) =>
+                    duplicateSession(project.id, item.tmux_session)
+                  }
                   onConfigure={(item) =>
                     setConfigureTarget({ projectId: item.id, projectName: item.name })
                   }
@@ -621,7 +680,7 @@ function Shell({ email }: { email: string }) {
             sessions={(sessions.data ?? []).filter((s) => s.project_id === activeProject.id)}
             onEnter={(name) => selectProject(activeProject.id, name)}
             onChanged={reloadAll}
-            onToggleSidebar={() => setShowSidebar(true)}
+            onToggleSidebar={toggleSidebar}
             onShare={() =>
               setShareTarget({
                 kind: 'projects',
@@ -640,7 +699,7 @@ function Shell({ email }: { email: string }) {
             server={activeServer}
             onChanged={reloadAll}
             onNewProject={() => setShowNewProject(true)}
-            onToggleSidebar={() => setShowSidebar(true)}
+            onToggleSidebar={toggleSidebar}
             onShare={() =>
               setShareTarget({
                 kind: 'servers',
@@ -652,7 +711,12 @@ function Shell({ email }: { email: string }) {
         ) : (
           <>
             <div className="topbar">
-              <button className="ghost" onClick={() => setShowSidebar(true)}>
+              <button
+                className="ghost"
+                onClick={toggleSidebar}
+                title="Toggle sidebar"
+                aria-label="Toggle sidebar"
+              >
                 ☰
               </button>
               <h1>Moonphase</h1>
@@ -807,8 +871,10 @@ function ProjectRow({
   onRename,
   onRenameSession,
   onCloseSession,
+  onDuplicateSession,
   onConfigure,
   onConfigureSession,
+  onReorderSession,
 }: {
   project: Project
   active: boolean
@@ -823,10 +889,14 @@ function ProjectRow({
   onRename?: (project: Project) => void
   onRenameSession?: (session: Session) => void
   onCloseSession?: (session: Session) => void
+  onDuplicateSession?: (session: Session) => void
   onConfigure?: (project: Project) => void
   onConfigureSession?: (session: Session) => void
+  /** `beforeName` is null when dropped after the last session. */
+  onReorderSession?: (draggedName: string, beforeName: string | null) => void
 }) {
   const hasSessions = project.status === 'running' && sessions.length > 0
+  const [draggingOver, setDraggingOver] = useState<string | null>(null)
   return (
     <>
       {/* The row and its menu together, so the menu is positioned
@@ -917,7 +987,42 @@ function ProjectRow({
       {hasSessions &&
         !collapsed &&
         sessions.map((session) => (
-          <div className="tree-session-row" key={session.id}>
+          <div
+            className={`tree-session-row${
+              draggingOver === session.tmux_session ? ' drag-over' : ''
+            }`}
+            key={session.id}
+            draggable={Boolean(onReorderSession)}
+            onDragStart={(e) => {
+              e.dataTransfer.effectAllowed = 'move'
+              e.dataTransfer.setData('text/plain', session.tmux_session)
+            }}
+            onDragOver={(e) => {
+              if (!onReorderSession) return
+              e.preventDefault()
+              setDraggingOver(session.tmux_session)
+            }}
+            onDragLeave={() =>
+              setDraggingOver((current) => (current === session.tmux_session ? null : current))
+            }
+            onDrop={(e) => {
+              if (!onReorderSession) return
+              e.preventDefault()
+              setDraggingOver(null)
+              const draggedName = e.dataTransfer.getData('text/plain')
+              if (!draggedName) return
+              // Which half of the row it landed on decides before-vs-after —
+              // dropping below the last session is the only way to reach
+              // "last", so that half has to mean something.
+              const rect = e.currentTarget.getBoundingClientRect()
+              const droppedBelow = e.clientY - rect.top > rect.height / 2
+              const index = sessions.findIndex((s) => s.tmux_session === session.tmux_session)
+              const beforeName = droppedBelow
+                ? (sessions[index + 1]?.tmux_session ?? null)
+                : session.tmux_session
+              onReorderSession(draggedName, beforeName)
+            }}
+          >
           <button
             className={`tree-row tree-session activity-${liveActivity(session)}${
               active && activeSession === session.tmux_session ? ' active' : ''
@@ -936,6 +1041,14 @@ function ProjectRow({
             {!session.is_mine && (
               <span className="session-theirs">
                 {session.owner?.split('@')[0] ?? 'shared'}
+              </span>
+            )}
+            {session.activity_at && (
+              // `activity_at`, not `checked_at`: this is "how long since it was
+              // last actually used", not "how long since we last looked" — an
+              // idle session's checked_at ticks up every poll and says nothing.
+              <span className="session-ago" title={checkedAgo(session)}>
+                {activityAgo(session)}
               </span>
             )}
             {liveActivity(session) === 'awaiting_input' && (
@@ -963,6 +1076,12 @@ function ProjectRow({
                     ? undefined
                     : "someone else's",
                 onSelect: () => onConfigureSession?.(session),
+              },
+              {
+                label: 'Duplicate',
+                detail: 'Copies the conversation and everything changed so far.',
+                disabledReason: session.is_mine ? undefined : 'not yours',
+                onSelect: () => onDuplicateSession?.(session),
               },
               {
                 label: 'Close session',
@@ -1073,7 +1192,7 @@ export function ProjectView({
     return (
       <>
         <div className="topbar">
-          <button className="ghost" onClick={onToggleSidebar}>
+          <button className="ghost" onClick={onToggleSidebar} title="Toggle sidebar" aria-label="Toggle sidebar">
             ☰
           </button>
           <h1>{project.name}</h1>
@@ -1127,7 +1246,7 @@ export function ProjectView({
   return (
     <>
       <div className="topbar">
-        <button className="ghost" onClick={onToggleSidebar}>
+        <button className="ghost" onClick={onToggleSidebar} title="Toggle sidebar" aria-label="Toggle sidebar">
           ☰
         </button>
         <h1>{project.name}</h1>
@@ -1330,10 +1449,9 @@ export function ProjectView({
                 <input
                   value={newSession}
                   onChange={(e) => setNewSession(e.target.value)}
-                  placeholder={mine.length ? 'Name it (optional)' : ''}
+                  placeholder="Name it (optional)"
                   aria-label="New session name"
                   disabled={busy}
-                  style={{ display: mine.length ? undefined : 'none' }}
                 />
                 <select
                   value={newBranch}
@@ -1498,7 +1616,7 @@ function ServerView({
   return (
     <>
       <div className="topbar">
-        <button className="ghost" onClick={onToggleSidebar}>
+        <button className="ghost" onClick={onToggleSidebar} title="Toggle sidebar" aria-label="Toggle sidebar">
           ☰
         </button>
         <h1>{server.name}</h1>
