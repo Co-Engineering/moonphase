@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   api,
   feedUrl,
@@ -64,6 +64,41 @@ function merge(current: FeedEvent[], incoming: FeedEvent[]): FeedEvent[] {
   const seen = new Set(current.map((e) => e.id))
   const fresh = incoming.filter((e) => !seen.has(e.id))
   return fresh.length ? [...current, ...fresh].slice(-MAX_EVENTS) : current
+}
+
+// Below this, two timestamps a row apart are not a gap worth marking — the
+// same burst of tool calls that always lands together while the agent works.
+const TIME_GAP_MS = 60_000
+
+type FeedListRow = { kind: 'event'; event: FeedEvent } | { kind: 'divider'; key: string; label: string }
+
+/** A stamp inserted wherever more than `TIME_GAP_MS` passed since the last
+ *  timestamped row — including one before the very first — so scrolling
+ *  through history shows where the time actually went, without repeating a
+ *  clock on every line. */
+function insertTimeDividers(events: FeedEvent[]): FeedListRow[] {
+  const rows: FeedListRow[] = []
+  let last: number | null = null
+  for (const event of events) {
+    const at = event.at ? Date.parse(event.at) : NaN
+    if (!Number.isNaN(at) && (last === null || at - last > TIME_GAP_MS)) {
+      rows.push({ kind: 'divider', key: `t-${event.id}`, label: formatEventTime(at) })
+    }
+    if (!Number.isNaN(at)) last = at
+    rows.push({ kind: 'event', event })
+  }
+  return rows
+}
+
+function formatEventTime(at: number): string {
+  const d = new Date(at)
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  const now = new Date()
+  if (d.toDateString() === now.toDateString()) return time
+  const yesterday = new Date(now)
+  yesterday.setDate(now.getDate() - 1)
+  if (d.toDateString() === yesterday.toDateString()) return `Yesterday ${time}`
+  return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`
 }
 
 /**
@@ -356,6 +391,11 @@ export function Feed({
     ? [...events].reverse().find((e) => e.kind === 'tool' && e.diff?.length)
     : undefined
 
+  // A stamp before a real gap, not on every row: a burst of tool calls a
+  // second apart says nothing a clock would help with, but catching up on a
+  // session you stepped away from does need to know where the gap was.
+  const rows = useMemo(() => insertTimeDividers(events), [events])
+
   return (
     <div className="feed">
       <div className="feed-scroll" ref={scrollerRef} onScroll={onScroll}>
@@ -372,7 +412,15 @@ export function Feed({
         ) : events.length === 0 ? (
           <div className="empty">Waiting for the first message…</div>
         ) : (
-          events.map((event) => <FeedRow key={event.id} event={event} />)
+          rows.map((row) =>
+            row.kind === 'divider' ? (
+              <div className="feed-time-divider" key={row.key}>
+                {row.label}
+              </div>
+            ) : (
+              <FeedRow key={row.event.id} event={row.event} />
+            ),
+          )
         )}
         <div ref={bottomRef} />
       </div>
@@ -487,10 +535,12 @@ export function Feed({
             title={
               readOnly
                 ? "This session belongs to someone else — only they can answer"
-                : 'Attach a file'
+                : prompt
+                  ? 'Answer the question above first'
+                  : 'Attach a file'
             }
             aria-label="Attach a file"
-            disabled={!running}
+            disabled={!running || !!prompt}
             onClick={() => (readOnly ? onRefusedInput?.() : fileInputRef.current?.click())}
           >
             +
@@ -510,7 +560,7 @@ export function Feed({
                 onRefusedInput?.()
                 return
               }
-              if (!running || sending || attachments.some((a) => a.uploading)) return
+              if (!running || sending || prompt || attachments.some((a) => a.uploading)) return
               if (!message.trim() && attachments.length === 0) return
               void send(message, attachments)
             }}
@@ -524,13 +574,15 @@ export function Feed({
             placeholder={
               readOnly
                 ? 'Read-only — this session is someone else\u2019s'
-                : activity === 'working'
-                  ? 'Claude is working…'
-                  : 'Send a message'
+                : prompt
+                  ? 'Tap a choice above to answer'
+                  : activity === 'working'
+                    ? 'Claude is working…'
+                    : 'Send a message'
             }
             readOnly={readOnly}
             onClick={() => readOnly && onRefusedInput?.()}
-            disabled={!running || sending}
+            disabled={!running || sending || !!prompt}
           />
           <button
             className="primary"
@@ -538,6 +590,7 @@ export function Feed({
             disabled={
               !running ||
               sending ||
+              !!prompt ||
               attachments.some((a) => a.uploading) ||
               (!readOnly && !message.trim() && attachments.length === 0)
             }
