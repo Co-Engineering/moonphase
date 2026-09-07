@@ -55,15 +55,22 @@ describe('sign-in methods when the domain is missing', () => {
     // signal to await before the draft itself has actually caught up;
     // retrying the click until a call lands with the corrected values
     // sidesteps the race instead of guessing how many renders it takes.
-    await waitFor(() => {
-      // Two cards on this tab, each with its own "Save" button — the second
-      // one belongs to "Ways to sign in". Re-queried every attempt since a
-      // fresh render can replace the earlier elements.
-      const saveButtons = screen.getAllByRole('button', { name: /^save$/i })
-      saveButtons[saveButtons.length - 1].click()
-      expect(save).toHaveBeenCalledWith(
-        expect.objectContaining({ google_enabled: false, microsoft_enabled: false }),
-      )
-    })
+    await waitFor(
+      () => {
+        // Two cards on this tab, each with its own "Save" button — the second
+        // one belongs to "Ways to sign in". Re-queried every attempt since a
+        // fresh render can replace the earlier elements.
+        const saveButtons = screen.getAllByRole('button', { name: /^save$/i })
+        saveButtons[saveButtons.length - 1].click()
+        expect(save).toHaveBeenCalledWith(
+          expect.objectContaining({ google_enabled: false, microsoft_enabled: false }),
+        )
+      },
+      // Real timers, and every retry does real work (a click, a render) —
+      // the default 1000ms budget is comfortable on a laptop but has flaked
+      // on CI's shared runners, failing a test whose logic was never wrong,
+      // just rushed.
+      { timeout: 5000 },
+    )
   })
 })
