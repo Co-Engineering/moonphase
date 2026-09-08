@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Session as AuthSession } from '@supabase/supabase-js'
 import { client, configure } from './lib/supabase'
 import {
@@ -7,6 +7,7 @@ import {
   canControl,
   checkedAgo,
   liveActivity,
+  type ActivityState,
   type Project,
   type Server,
   type Session,
@@ -15,6 +16,9 @@ import {
 import { useResource } from './lib/useResource'
 import { useCollapsed, useCollapsedFlag } from './lib/collapsed'
 import { useSessionOrder } from './lib/sessionOrder'
+import { playAlertSound } from './lib/sound'
+import { readSoundAlertPreference } from './lib/soundAlertPreference'
+import { justStartedWaiting } from './lib/sessionActivity'
 import { Logo } from './components/Logo'
 import { ProjectTerminal } from './components/Terminal'
 import { Auth } from './routes/Auth'
@@ -271,6 +275,23 @@ function Shell({ email }: { email: string }) {
   // Every session, in one query and without touching a server. Listing what
   // exists must not cost a connection to a machine that may be asleep.
   const sessions = useResource(() => api.allSessions(), [], { pollMs: 10000 })
+
+  // A sound for the case push notifications don't cover: sitting right here
+  // with the app open, looking at a different session than the one that just
+  // started waiting. Compares this poll's activity against the previous
+  // one — null on the first poll, deliberately, so opening the app to a
+  // session that was already waiting doesn't announce itself as new.
+  const previousActivityRef = useRef<Map<string, ActivityState> | null>(null)
+  useEffect(() => {
+    const list = sessions.data
+    if (!list) return
+    const current = new Map(list.map((s) => [s.id, liveActivity(s)]))
+    const preference = readSoundAlertPreference()
+    if (preference.enabled && justStartedWaiting(previousActivityRef.current, current, list)) {
+      playAlertSound(preference.choice)
+    }
+    previousActivityRef.current = current
+  }, [sessions.data])
 
   const reloadAll = useCallback(() => {
     void servers.reload(true)

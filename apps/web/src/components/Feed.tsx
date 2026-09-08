@@ -396,9 +396,32 @@ export function Feed({
   // session you stepped away from does need to know where the gap was.
   const rows = useMemo(() => insertTimeDividers(events), [events])
 
+  // What you last asked for, pinned above the scroll so it survives being
+  // buried under everything the agent did in response — the terminal has no
+  // equivalent (there's nothing to pin above a real PTY), which is exactly
+  // why this exists here instead.
+  const lastUserMessage = useMemo(
+    () => [...events].reverse().find((e) => e.kind === 'user'),
+    [events],
+  )
+  const scrollToEvent = useCallback((id: string) => {
+    document.getElementById(`feed-event-${id}`)?.scrollIntoView({ block: 'start' })
+  }, [])
+
   return (
     <div className="feed">
       <div className="feed-scroll" ref={scrollerRef} onScroll={onScroll}>
+        {lastUserMessage && (
+          <button
+            type="button"
+            className="feed-pinned-ask"
+            title="Jump to this message"
+            onClick={() => scrollToEvent(lastUserMessage.id)}
+          >
+            <span className="feed-pinned-label">Last asked</span>
+            <span className="feed-pinned-text">{lastUserMessage.text}</span>
+          </button>
+        )}
         {!running ? (
           <div className="empty">
             <h3>Project is not running</h3>
@@ -418,7 +441,9 @@ export function Feed({
                 {row.label}
               </div>
             ) : (
-              <FeedRow key={row.event.id} event={row.event} />
+              <div key={row.event.id} id={`feed-event-${row.event.id}`}>
+                <FeedRow event={row.event} />
+              </div>
             ),
           )
         )}

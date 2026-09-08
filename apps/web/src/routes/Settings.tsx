@@ -22,6 +22,8 @@ import {
   type WorkspaceProfile,
 } from '../lib/api'
 import { copyText } from '../lib/clipboard'
+import { playAlertSound, soundChoiceLabel, SOUND_CHOICES, type SoundChoice } from '../lib/sound'
+import { useSoundAlertPreference } from '../lib/soundAlertPreference'
 
 interface Props {
   onClose: () => void
@@ -1120,6 +1122,7 @@ function NotificationsPanel({ run }: { run: Runner }) {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [working, setWorking] = useState(false)
+  const [soundPreference, updateSoundPreference] = useSoundAlertPreference()
 
   const support = pushSupport()
 
@@ -1236,6 +1239,39 @@ function NotificationsPanel({ run }: { run: Runner }) {
           )}
         </div>
       )}
+
+      <h3>Sound alert</h3>
+      <p className="hint">
+        Push is for when you have walked away. This is for the opposite case — sitting
+        right here with a different session open when one of yours starts waiting on you.
+      </p>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={soundPreference.enabled}
+          onChange={(e) => updateSoundPreference({ enabled: e.target.checked })}
+        />
+        <span>Play a sound when a session needs me</span>
+      </label>
+      {soundPreference.enabled && (
+        <div className="actions">
+          <select
+            value={soundPreference.choice}
+            aria-label="Sound"
+            onChange={(e) => updateSoundPreference({ choice: e.target.value as SoundChoice })}
+          >
+            {SOUND_CHOICES.map((choice) => (
+              <option key={choice} value={choice}>
+                {soundChoiceLabel(choice)}
+              </option>
+            ))}
+          </select>
+          <button type="button" onClick={() => playAlertSound(soundPreference.choice)}>
+            Preview
+          </button>
+        </div>
+      )}
+
       {/* `run` is unused here: enabling push changes nothing the rest of the
           settings dialog displays. */}
       {void run}

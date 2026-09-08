@@ -1074,6 +1074,46 @@ button.linkish:hover:not(:disabled) {
   line-height: 1.55;
 }
 
+/* Pinned to the top of .feed-scroll — extended over its padding by the
+   negative margin, so it sits flush against the real edge instead of
+   leaving a gap the container's own top padding would otherwise show. */
+.feed-pinned-ask {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: block;
+  width: calc(100% + 32px);
+  margin: -14px -16px 12px;
+  padding: 8px 16px;
+  text-align: left;
+  background: var(--bg-panel);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.feed-pinned-ask:hover {
+  background: var(--bg-elev);
+}
+
+.feed-pinned-label {
+  display: block;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-faint);
+  margin-bottom: 2px;
+}
+
+.feed-pinned-text {
+  display: block;
+  color: var(--text);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Subagent traffic still matters, but should not compete with the main
    conversation for attention. */
 .feed-row.sidechain {
