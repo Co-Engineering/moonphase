@@ -103,6 +103,7 @@ jobs:
             -e GOTRUE_JWT_SECRET=test-jwt-secret-at-least-32-characters-long \
             -e GOTRUE_JWT_AUD=authenticated \
             -e GOTRUE_JWT_DEFAULT_GROUP_NAME=authenticated \
+            `# deprecated but required — see the fuller note in docker-compose.yml` \
             -e GOTRUE_MAILER_AUTOCONFIRM=true \
             supabase/gotrue:v2.177.0
 

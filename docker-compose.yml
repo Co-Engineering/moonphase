@@ -65,6 +65,15 @@ services:
       GOTRUE_JWT_SECRET: ${SUPABASE_JWT_SECRET:?set SUPABASE_JWT_SECRET in .env}
       GOTRUE_JWT_EXP: "3600"
       GOTRUE_JWT_AUD: authenticated
+      # Deprecated, and GoTrue says so in the logs on every config reload —
+      # but leave it. Without it, a new user's `auth.users.role` column comes
+      # back empty instead of `authenticated`, which is a real, reproduced
+      # break (supabase/auth#1362), and two years after the deprecation
+      # notice there is still no replacement. A GoTrue maintainer confirmed
+      # directly on that issue that the warning is about using this for a
+      # *custom* role, not about the `authenticated` value itself: "It will
+      # be using `authenticated` or there'll be another way to define roles
+      # in the future." Safe to revisit once that other way exists.
       GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
       # Self-hosted and single-tenant: you are the only one signing up, and
       # there is no mail server. Turn confirmation on once you have one.
