@@ -293,6 +293,20 @@ pre {
   overflow: hidden;
 }
 
+/* Two ways to reach the same actions: buttons on a wide topbar, one menu on
+   a narrow one. Which shows is decided per viewport width below. */
+.topbar-actions-menu {
+  display: none;
+}
+
+.topbar-actions-menu .row-menu {
+  /* .row-menu is normally positioned against the sidebar row it belongs to;
+     here it is one flex child among the topbar's own, so it needs to sit in
+     that flow instead of floating over whatever the topbar's own relative
+     ancestor happens to be. */
+  position: static;
+}
+
 .topbar {
   height: 48px;
   border-bottom: 1px solid var(--border);
@@ -1076,6 +1090,13 @@ button.linkish:hover:not(:disabled) {
   margin-bottom: 3px;
 }
 
+.feed-time-divider {
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-faint);
+  margin: 14px 0;
+}
+
 .feed-user .feed-who {
   color: var(--accent);
 }
@@ -1558,6 +1579,18 @@ button.linkish:hover:not(:disabled) {
   .topbar button {
     font-size: 12px;
     padding: 5px 9px;
+  }
+
+  /* Share/Window/Restart harness/Stop, as a row of buttons, wrapped into a
+     second and third row of chrome above content someone likely opened this
+     to answer right now. One menu instead keeps the topbar to a single row
+     beside the view tabs. */
+  .topbar-actions {
+    display: none;
+  }
+
+  .topbar-actions-menu {
+    display: block;
   }
 
   .feed-scroll {

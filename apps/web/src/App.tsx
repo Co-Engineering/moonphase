@@ -1288,52 +1288,124 @@ export function ProjectView({
             Changes
           </button>
         </div>
-        {project.access === 'admin' && (
-          <button onClick={onShare} title="Give someone else access to this session">
-            Share{project.share_count > 0 ? ` (${project.share_count})` : ''}
-          </button>
-        )}
-        {session && (
-          <button
-            disabled={busy}
-            title="Open this session in its own window — one per monitor, tiled by your window manager"
-            onClick={() =>
-              void act(() =>
-                openSessionWindow({
-                  projectId: project.id,
-                  session,
-                  title: `${session} — ${project.name}`,
-                  url: sessionWindowUrl(project.id, session),
-                }),
-              )
-            }
-          >
-            Window
-          </button>
-        )}
-        {drivable && (
-          <button
-            disabled={busy}
-            onClick={() => void act(() => api.startSession(project.id, true, session ?? undefined))}
-            title="Kill this session and start the harness fresh"
-          >
-            Restart harness
-          </button>
-        )}
-        {drivable &&
-          (project.status === 'running' ? (
-            <button disabled={busy} onClick={() => void act(() => api.stopProject(project.id))}>
-              Stop
+        <div className="topbar-actions">
+          {project.access === 'admin' && (
+            <button onClick={onShare} title="Give someone else access to this session">
+              Share{project.share_count > 0 ? ` (${project.share_count})` : ''}
             </button>
-          ) : (
+          )}
+          {session && (
             <button
-              className="primary"
               disabled={busy}
-              onClick={() => void act(() => api.startProject(project.id))}
+              title="Open this session in its own window — one per monitor, tiled by your window manager"
+              onClick={() =>
+                void act(() =>
+                  openSessionWindow({
+                    projectId: project.id,
+                    session,
+                    title: `${session} — ${project.name}`,
+                    url: sessionWindowUrl(project.id, session),
+                  }),
+                )
+              }
             >
-              Start
+              Window
             </button>
-          ))}
+          )}
+          {drivable && (
+            <button
+              disabled={busy}
+              onClick={() => void act(() => api.startSession(project.id, true, session ?? undefined))}
+              title="Kill this session and start the harness fresh"
+            >
+              Restart harness
+            </button>
+          )}
+          {drivable &&
+            (project.status === 'running' ? (
+              <button disabled={busy} onClick={() => void act(() => api.stopProject(project.id))}>
+                Stop
+              </button>
+            ) : (
+              <button
+                className="primary"
+                disabled={busy}
+                onClick={() => void act(() => api.startProject(project.id))}
+              >
+                Start
+              </button>
+            ))}
+        </div>
+        {/* Same actions, one tap behind a menu instead of a row of buttons —
+            a phone-width topbar has no room for four buttons beside the view
+            tabs without wrapping into a second row of chrome above content
+            someone very likely opened this to answer right now. Folding
+            Stop and Restart harness in here also means they pick up
+            RowMenu's own confirm-before-danger-actions step, which the bare
+            buttons never had — a real mis-tap risk when they used to sit
+            exactly where a thumb reaching to scroll would land. */}
+        <div className="topbar-actions-menu">
+          <RowMenu
+            label={project.name}
+            actions={[
+              ...(project.access === 'admin'
+                ? [
+                    {
+                      label: `Share${project.share_count > 0 ? ` (${project.share_count})` : ''}`,
+                      disabledReason: busy ? 'Busy…' : undefined,
+                      onSelect: () => onShare(),
+                    },
+                  ]
+                : []),
+              ...(session
+                ? [
+                    {
+                      label: 'Window',
+                      disabledReason: busy ? 'Busy…' : undefined,
+                      onSelect: () =>
+                        void act(() =>
+                          openSessionWindow({
+                            projectId: project.id,
+                            session,
+                            title: `${session} — ${project.name}`,
+                            url: sessionWindowUrl(project.id, session),
+                          }),
+                        ),
+                    },
+                  ]
+                : []),
+              ...(drivable
+                ? [
+                    {
+                      label: 'Restart harness',
+                      danger: true,
+                      detail: 'Kills this session and starts the harness fresh.',
+                      disabledReason: busy ? 'Busy…' : undefined,
+                      onSelect: () =>
+                        void act(() => api.startSession(project.id, true, session ?? undefined)),
+                    },
+                  ]
+                : []),
+              ...(drivable
+                ? [
+                    project.status === 'running'
+                      ? {
+                          label: 'Stop',
+                          danger: true,
+                          detail: 'Stops the container. Nothing is lost — start it again anytime.',
+                          disabledReason: busy ? 'Busy…' : undefined,
+                          onSelect: () => void act(() => api.stopProject(project.id)),
+                        }
+                      : {
+                          label: 'Start',
+                          disabledReason: busy ? 'Busy…' : undefined,
+                          onSelect: () => void act(() => api.startProject(project.id)),
+                        },
+                  ]
+                : []),
+            ]}
+          />
+        </div>
       </div>
 
       {error && (
