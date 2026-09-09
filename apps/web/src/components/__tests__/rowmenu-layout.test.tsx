@@ -57,6 +57,30 @@ function positionOf(className: string): string {
   return value
 }
 
+/** What the stylesheet declares for `property` on an element carrying just this class. */
+function declaredStyle(className: string, property: string): string {
+  const style = document.createElement('style')
+  style.textContent = styles
+  document.head.append(style)
+
+  const el = document.createElement('div')
+  el.className = className
+  document.body.append(el)
+
+  let value = ''
+  for (const rule of Array.from(style.sheet?.cssRules ?? [])) {
+    if (!(rule instanceof CSSStyleRule)) continue
+    const declared = rule.style.getPropertyValue(property)
+    if (declared && el.matches(rule.selectorText)) {
+      value = declared
+    }
+  }
+
+  style.remove()
+  el.remove()
+  return value
+}
+
 describe('a row menu is positioned against its own row', () => {
   // Every kind of row that carries one. A menu inside a row that establishes
   // no containing block escapes to an ancestor, which is the bug.
@@ -73,5 +97,21 @@ describe('a row menu is positioned against its own row', () => {
     // than on their own rows — so it must not be the thing they resolve
     // against any more.
     expect(positionOf('tree-server')).not.toBe('relative')
+  })
+})
+
+/**
+ * `.row-menu` is `position: absolute; right: 6px`, deliberately overlapping
+ * the row's own right edge rather than sitting after it — the row's content
+ * is expected to stay clear of that space on its own. A row's `.name` does,
+ * via ellipsis, but a trailing `.shared-tag` does not shrink and used to run
+ * right up to the row's own padding boundary, landing directly under the
+ * menu button. `.tree-row` reserves room on the left for a sibling
+ * `.tree-toggle` the same way; this is the same reservation on the right.
+ */
+describe('a shared-tag does not collide with the row menu behind it', () => {
+  it('.tree-row reserves enough right padding to clear .row-menu', () => {
+    const reserved = parseFloat(declaredStyle('tree-row', 'padding-right'))
+    expect(reserved).toBeGreaterThanOrEqual(32)
   })
 })
