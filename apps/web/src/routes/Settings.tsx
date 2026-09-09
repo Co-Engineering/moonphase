@@ -959,14 +959,22 @@ function EnvironmentsTab({ busy, run }: { busy: boolean; run: Runner }) {
     }, `Removed ${env.display_name}.`)
 
   if (draft) {
+    const editingCustom = items.some((e) => e.key === draft.key && !e.builtin)
+    const customisingBuiltin = !editingCustom && items.some((e) => e.key === draft.key && e.builtin)
     return (
       <>
-        <h3>{items.some((e) => e.key === draft.key && !e.builtin) ? 'Edit' : 'New'} environment</h3>
+        <h3>{editingCustom ? 'Edit' : customisingBuiltin ? 'Customise' : 'New'} environment</h3>
         <p className="hint">
           Any Debian or Ubuntu family image works — Moonphase installs tmux, the harness
           and its own tooling on top. The image is built on your server, so nothing needs
           publishing anywhere.
         </p>
+        {customisingBuiltin && (
+          <p className="hint">
+            Saved under the same key as the built-in it came from, so every project already
+            using it switches to your version automatically — nothing to update per project.
+          </p>
+        )}
 
         {error && <div className="banner error">{error}</div>}
 
@@ -1264,37 +1272,39 @@ function NotificationsPanel({ run }: { run: Runner }) {
         </div>
       )}
 
-      <h3>Sound alert</h3>
-      <p className="hint">
-        Push is for when you have walked away. This is for the opposite case — sitting
-        right here with a different session open when one of yours starts waiting on you.
-      </p>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={soundPreference.enabled}
-          onChange={(e) => updateSoundPreference({ enabled: e.target.checked })}
-        />
-        <span>Play a sound when a session needs me</span>
-      </label>
-      {soundPreference.enabled && (
-        <div className="actions">
-          <select
-            value={soundPreference.choice}
-            aria-label="Sound"
-            onChange={(e) => updateSoundPreference({ choice: e.target.value as SoundChoice })}
-          >
-            {SOUND_CHOICES.map((choice) => (
-              <option key={choice} value={choice}>
-                {soundChoiceLabel(choice)}
-              </option>
-            ))}
-          </select>
-          <button type="button" onClick={() => playAlertSound(soundPreference.choice)}>
-            Preview
-          </button>
-        </div>
-      )}
+      <div style={{ marginTop: 18 }}>
+        <h3>Sound alert</h3>
+        <p className="hint">
+          Push is for when you have walked away. This is for the opposite case — sitting
+          right here with a different session open when one of yours starts waiting on you.
+        </p>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={soundPreference.enabled}
+            onChange={(e) => updateSoundPreference({ enabled: e.target.checked })}
+          />
+          <span>Play a sound when a session needs me</span>
+        </label>
+        {soundPreference.enabled && (
+          <div className="actions">
+            <select
+              value={soundPreference.choice}
+              aria-label="Sound"
+              onChange={(e) => updateSoundPreference({ choice: e.target.value as SoundChoice })}
+            >
+              {SOUND_CHOICES.map((choice) => (
+                <option key={choice} value={choice}>
+                  {soundChoiceLabel(choice)}
+                </option>
+              ))}
+            </select>
+            <button type="button" onClick={() => playAlertSound(soundPreference.choice)}>
+              Preview
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* `run` is unused here: enabling push changes nothing the rest of the
           settings dialog displays. */}

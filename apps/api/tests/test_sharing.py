@@ -261,6 +261,49 @@ async def test_the_host_can_see_that_it_exists_but_not_what_it_is_doing(
         assert await queries.delete_project(conn, project["id"]) is True
 
 
+async def test_a_server_creator_keeps_host_access_after_leaving_its_org(
+    cast_of_three,
+) -> None:
+    """server_access_for grants 'admin' two ways — org role, or being the
+    row's own created_by — so a server survives its creator later leaving
+    the org that owns it, or never having belonged to it at all (created
+    before an org existed to join, a since-cleaned-up membership). Before
+    this fix, project_access_for's 'host' branch only replicated the
+    org-role half of that grant: a server admin reached purely through
+    created_by got a fully-populated server page, but every project on it —
+    including the resource breakdown naming each one and how much space it
+    uses — came back as if none existed.
+    """
+    alice, bob, _ = cast_of_three
+    async with user_session(bob.claims) as conn:
+        bob_org = await queries.personal_org_id(conn)
+
+    # Alice created this server, but it belongs to Bob's org and she was
+    # never a member of it — service_session bypasses the insert policy that
+    # would otherwise require that membership, the same way it stands in for
+    # "no request to scope against" everywhere else in this file.
+    async with service_session() as conn:
+        server = await queries.insert_server(
+            conn,
+            org_id=bob_org,
+            name=f"orphaned-{uuid.uuid4().hex[:6]}",
+            host="10.0.0.9",
+            port=22,
+            ssh_user="deploy",
+            auth_mode="managed_key",
+            created_by=alice.id,
+        )
+        await queries.update_server_state(conn, server["id"], status="online")
+
+    project = await _project_for(bob, server, org_id=bob_org)
+
+    async with user_session(alice.claims) as conn:
+        assert await queries.access_level(conn, "server", server["id"]) == "admin"
+        assert await queries.access_level(conn, "project", project["id"]) == "host"
+        hers = await queries.list_projects(conn)
+        assert [p["id"] for p in hers] == [project["id"]]
+
+
 # --- sharing a project ---------------------------------------------------------
 
 
