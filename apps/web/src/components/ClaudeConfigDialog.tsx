@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ClaudeConfigFields, type ClaudeConfigValue } from './ClaudeConfig'
 import { McpConnectDialog, type McpConnectTarget } from './McpConnectDialog'
-import { api, type ClaudeConfig, type McpOAuthConnectionInfo } from '../lib/api'
+import { api, type ClaudeConfig, type McpHealth, type McpOAuthConnectionInfo } from '../lib/api'
 
 const EMPTY: ClaudeConfigValue = {
   claude_settings_json: null,
@@ -116,6 +116,20 @@ export function ClaudeConfigDialog({
       }
     : undefined
 
+  /**
+   * Same "save what's about to be checked" reasoning as onConnectMcp above.
+   * Errors are left to propagate — McpEditor's own runCheck already turns a
+   * rejection into a banner, so catching here would just show it twice.
+   */
+  const onCheckMcp = mcpConnect
+    ? async (): Promise<McpHealth[]> => {
+        await save(value)
+        return mcpConnect.scope === 'session'
+          ? api.checkMcpHealth(mcpConnect.projectId, mcpConnect.session)
+          : api.checkMcpHealthForProject(mcpConnect.projectId)
+      }
+    : undefined
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="card modal modal--wide" onClick={(e) => e.stopPropagation()}>
@@ -133,6 +147,7 @@ export function ClaudeConfigDialog({
             onChange={setValue}
             claudeMdHint="Added to CLAUDE.md for this scope, alongside anything set above it"
             onConnectMcp={onConnectMcp}
+            onCheckMcp={onCheckMcp}
             mcpConnections={connections}
           />
         )}

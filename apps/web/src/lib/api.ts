@@ -336,6 +336,12 @@ export interface McpOAuthConnectionInfo {
   updated_at: string
 }
 
+export interface McpHealth {
+  name: string
+  ok: boolean
+  detail: string
+}
+
 export interface HarnessLogin {
   session_id: string
   state: 'starting' | 'awaiting_code' | 'verifying' | 'complete' | 'error'
@@ -684,6 +690,21 @@ export const api = {
     request<void>(`/api/profile/mcp-oauth/${encodeURIComponent(serverName)}`, {
       method: 'DELETE',
     }),
+  /**
+   * A real per-server connectivity check — `claude mcp list` run inside a
+   * live container, not an inference from config or a stored credential.
+   * Claude Code only; needs a running session to check inside, so these
+   * mirror the mcp-oauth start endpoints' three scopes exactly.
+   */
+  checkMcpHealth: (projectId: string, session: string) =>
+    request<McpHealth[]>(
+      `/api/projects/${projectId}/sessions/${encodeURIComponent(session)}/mcp/check`,
+      { method: 'POST' },
+    ),
+  checkMcpHealthForProject: (projectId: string) =>
+    request<McpHealth[]>(`/api/projects/${projectId}/mcp/check`, { method: 'POST' }),
+  checkMcpHealthForOrg: () =>
+    request<McpHealth[]>('/api/profile/mcp/check', { method: 'POST' }),
 
   // --- global profile -------------------------------------------------------
   profile: () => request<WorkspaceProfile>('/api/profile'),
