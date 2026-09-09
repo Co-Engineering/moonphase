@@ -110,6 +110,17 @@ apps/api/.venv/bin/python scripts/gen_vapid.py >> .env
 Disabling the monitor also disables activity dots and budget alerts, since all three are
 computed by the same sweep.
 
+## Resources
+
+| Variable                                  | Default | Notes |
+| ------------------------------------------ | ------- | ----- |
+| `MOONPHASE_ORPHAN_VOLUME_RETENTION_DAYS`   | `7`     | Days before a volume left behind by a deleted project is actually removed |
+
+Deleting a project keeps its volumes by default — an accidental delete should not also
+delete the work. The same background monitor that computes activity also finds volumes
+with no project left, and removes them once they have sat unclaimed for this long. Set it
+lower to reclaim disk faster, or higher if you want longer to notice and undo a delete.
+
 ## GitHub
 
 | Variable                      | Default | Notes |

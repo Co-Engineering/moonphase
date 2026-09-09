@@ -113,6 +113,31 @@ export interface Server {
   share_count: number
 }
 
+export interface ServerProjectResourceUsage {
+  project_id: string
+  name: string
+  workspace_bytes: number
+  home_bytes: number
+  cpu_percent: number | null
+  mem_bytes: number | null
+}
+
+export interface ServerPendingCleanup {
+  volume_name: string
+  project_name: string | null
+  reason: 'project_deleted' | 'cleanup_failed' | 'discovered'
+  delete_after: string
+}
+
+export interface ServerResources {
+  /** Null until the background monitor has swept this server at least once. */
+  disk_total_bytes: number | null
+  disk_used_bytes: number | null
+  sampled_at: string | null
+  by_project: ServerProjectResourceUsage[]
+  pending_cleanup: ServerPendingCleanup[]
+}
+
 export interface ServerBootstrap {
   server: Server
   /**
@@ -507,6 +532,8 @@ export const api = {
       method: 'POST',
     }),
   testServer: (id: string) => request<Server>(`/api/servers/${id}/test`, { method: 'POST' }),
+  serverResources: (id: string) =>
+    request<ServerResources>(`/api/servers/${id}/resources`),
   /** The display name only — see the endpoint for why nothing else. */
   renameServer: (id: string, name: string) =>
     request<Server>(`/api/servers/${id}`, {

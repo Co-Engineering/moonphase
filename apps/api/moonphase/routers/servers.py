@@ -46,6 +46,54 @@ async def get_server(
     return _to_out(row)
 
 
+@router.get("/{server_id}/resources")
+async def get_server_resources(
+    server_id: UUID, principal: Principal = Depends(current_principal)
+) -> dict[str, Any]:
+    """Latest disk/CPU/memory reading, and any volume waiting out its grace period.
+
+    Collected by the background monitor on its own schedule, not synchronously
+    here — a live `docker system df` against a remote server is not something
+    an API request should block on. `sampled_at` says how fresh it is; null
+    before the monitor's first sweep of a newly added server.
+
+    `pending_cleanup` is empty for anyone but an admin of the server, same as
+    the underlying orphaned_volumes row — it is cleanup bookkeeping, not
+    something a collaborator needs to see.
+    """
+    async with user_session(principal.claims) as conn:
+        server = await queries.get_server(conn, server_id)
+        if server is None:
+            raise HTTPException(status_code=404, detail="Server not found.")
+        snapshot = await queries.get_resource_snapshot(conn, server_id)
+        pending_rows = await queries.list_orphaned_volumes(conn, server_id)
+
+    pending_cleanup = [
+        {
+            "volume_name": row["volume_name"],
+            "project_name": row["project_name"],
+            "reason": row["reason"],
+            "delete_after": row["delete_after"],
+        }
+        for row in pending_rows
+    ]
+    if snapshot is None:
+        return {
+            "disk_total_bytes": None,
+            "disk_used_bytes": None,
+            "sampled_at": None,
+            "by_project": [],
+            "pending_cleanup": pending_cleanup,
+        }
+    return {
+        "disk_total_bytes": snapshot["disk_total_bytes"],
+        "disk_used_bytes": snapshot["disk_used_bytes"],
+        "sampled_at": snapshot["sampled_at"],
+        "by_project": snapshot["by_project"],
+        "pending_cleanup": pending_cleanup,
+    }
+
+
 @router.post("", response_model=ServerBootstrapOut, status_code=status.HTTP_201_CREATED)
 async def create_server(
     payload: ServerCreate, principal: Principal = Depends(current_principal)

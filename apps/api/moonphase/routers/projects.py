@@ -6,6 +6,7 @@ import asyncio
 import logging
 import shlex
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -361,8 +362,8 @@ async def _provision_container(
     image = environment.image
 
     await say("Creating the container.")
-    await docker_remote.volume_create(conn_ssh, workspace_volume)
-    await docker_remote.volume_create(conn_ssh, home_volume)
+    await docker_remote.volume_create(conn_ssh, workspace_volume, project=container)
+    await docker_remote.volume_create(conn_ssh, home_volume, project=container)
 
     existing = await docker_remote.inspect(conn_ssh, container)
     if existing is not None:
@@ -1303,6 +1304,31 @@ async def snapshot(
     return {"text": text_out}
 
 
+async def _track_kept_volumes(
+    project: dict[str, Any], volumes: list[str], *, reason: str
+) -> None:
+    """Start the grace period for volumes a delete did not remove.
+
+    A service-role write: the project row is about to disappear (or, on the
+    cleanup_failed path, the server that would prove access is the one that
+    is unreachable), so this cannot be scoped through the deleting user's own
+    RLS-checked connection the way the rest of the request is.
+    """
+    delete_after = datetime.now(UTC) + timedelta(
+        days=get_settings().moonphase_orphan_volume_retention_days
+    )
+    async with service_session() as conn:
+        for volume in volumes:
+            await queries.track_orphaned_volume(
+                conn,
+                server_id=project["server_id"],
+                volume_name=volume,
+                project_name=project.get("name"),
+                reason=reason,
+                delete_after=delete_after,
+            )
+
+
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project(
     project_id: UUID,
@@ -1329,6 +1355,7 @@ async def delete_project(
             "on, can delete it."
         )
 
+    volumes = [v for v in (project.get("workspace_volume"), project.get("home_volume")) if v]
     try:
         ctx = await runtime.load_project_context(
             principal.claims, project_id, require=CAN_DELETE
@@ -1337,12 +1364,19 @@ async def delete_project(
         if project.get("container_name"):
             await docker_remote.remove(conn_ssh, project["container_name"])
         if delete_volumes:
-            for volume in (project.get("workspace_volume"), project.get("home_volume")):
-                if volume:
-                    await docker_remote.volume_remove(conn_ssh, volume)
+            for volume in volumes:
+                await docker_remote.volume_remove(conn_ssh, volume)
+        elif volumes:
+            await _track_kept_volumes(project, volumes, reason="project_deleted")
     except (SSHError, NotFound) as exc:
-        # An unreachable server must not trap a stale row in the UI.
+        # An unreachable server must not trap a stale row in the UI. What it
+        # could not remove is not left untracked, though: cleanup_failed gets
+        # the same grace-period sweep as a deliberately kept volume, rather
+        # than leaking silently forever because this one delete happened to
+        # land while the server was unreachable.
         log.warning("cleanup for project %s failed: %s", project_id, exc)
+        if volumes:
+            await _track_kept_volumes(project, volumes, reason="cleanup_failed")
 
     await preview.registry.close_project(str(project_id))
 

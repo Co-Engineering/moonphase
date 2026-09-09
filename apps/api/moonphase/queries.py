@@ -1986,3 +1986,114 @@ async def set_auth_secrets_privileged(
         text(f"update private.auth_secrets set {', '.join(sets)}, updated_at = now()"),
         params,
     )
+
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+
+
+async def upsert_resource_snapshot(
+    conn: AsyncConnection,
+    *,
+    server_id: UUID,
+    disk_total_bytes: int,
+    disk_used_bytes: int,
+    by_project: list[dict[str, Any]],
+) -> None:
+    """Replace the one row this server has. Latest reading only, no history."""
+    await conn.execute(
+        text(
+            """
+            insert into server_resource_snapshots
+              (server_id, disk_total_bytes, disk_used_bytes, by_project, sampled_at)
+            values (:server_id, :total, :used, cast(:by_project as jsonb), now())
+            on conflict (server_id) do update set
+              disk_total_bytes = excluded.disk_total_bytes,
+              disk_used_bytes  = excluded.disk_used_bytes,
+              by_project       = excluded.by_project,
+              sampled_at       = excluded.sampled_at
+            """
+        ),
+        {
+            "server_id": server_id,
+            "total": disk_total_bytes,
+            "used": disk_used_bytes,
+            "by_project": json.dumps(by_project),
+        },
+    )
+
+
+async def get_resource_snapshot(conn: AsyncConnection, server_id: UUID) -> dict[str, Any] | None:
+    result = await conn.execute(
+        text(
+            """
+            select server_id, disk_total_bytes, disk_used_bytes, by_project, sampled_at
+            from server_resource_snapshots
+            where server_id = :server_id
+            """
+        ),
+        {"server_id": server_id},
+    )
+    row = result.first()
+    return _row_to_dict(row) if row else None
+
+
+async def track_orphaned_volume(
+    conn: AsyncConnection,
+    *,
+    server_id: UUID,
+    volume_name: str,
+    project_name: str | None,
+    reason: str,
+    delete_after: Any,
+) -> None:
+    """Start (or leave alone) the grace period for a volume with no project.
+
+    `on conflict do nothing`: a volume already being tracked keeps its
+    original `delete_after` rather than having the clock reset every time the
+    discovery sweep sees it again.
+    """
+    await conn.execute(
+        text(
+            """
+            insert into orphaned_volumes
+              (server_id, volume_name, project_name, reason, delete_after)
+            values (:server_id, :volume_name, :project_name, :reason, :delete_after)
+            on conflict (server_id, volume_name) do nothing
+            """
+        ),
+        {
+            "server_id": server_id,
+            "volume_name": volume_name,
+            "project_name": project_name,
+            "reason": reason,
+            "delete_after": delete_after,
+        },
+    )
+
+
+async def list_orphaned_volumes(conn: AsyncConnection, server_id: UUID) -> list[dict[str, Any]]:
+    result = await conn.execute(
+        text(
+            "select id, server_id, volume_name, project_name, reason, "
+            "discovered_at, delete_after from orphaned_volumes where server_id = :server_id"
+        ),
+        {"server_id": server_id},
+    )
+    return [_row_to_dict(r) for r in result]
+
+
+async def list_orphaned_volumes_due(conn: AsyncConnection, now: Any) -> list[dict[str, Any]]:
+    result = await conn.execute(
+        text(
+            "select id, server_id, volume_name, project_name, reason, "
+            "discovered_at, delete_after from orphaned_volumes where delete_after <= :now"
+        ),
+        {"now": now},
+    )
+    return [_row_to_dict(r) for r in result]
+
+
+async def delete_orphaned_volume_row(conn: AsyncConnection, row_id: UUID) -> None:
+    await conn.execute(text("delete from orphaned_volumes where id = :id"), {"id": row_id})

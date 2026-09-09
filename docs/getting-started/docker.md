@@ -229,6 +229,7 @@ to read them from:
 | `MOONPHASE_BIND` | `127.0.0.1` | Interface the proxy publishes on |
 | `MOONPHASE_PORT` | `8471` | Port it publishes on |
 | `MOONPHASE_MONITOR_INTERVAL` | `20` | Seconds between activity checks; `0` disables notifications |
+| `MOONPHASE_ORPHAN_VOLUME_RETENTION_DAYS` | `7` | Days before a deleted project's volumes are actually removed |
 | `MOONPHASE_VERSION` | `edge` | Image tag to run |
 
 The secrets beside them — `MOONPHASE_SECRET_KEY`, the database password, the JWT

@@ -69,6 +69,12 @@ class Settings(BaseSettings):
     # Contact address browsers can use if a push is misbehaving.
     moonphase_vapid_subject: str = "mailto:admin@example.com"
 
+    # --- resources -----------------------------------------------------------
+    # How long a volume left behind by a deleted project is kept before the
+    # monitor removes it for good. The grace period, not the safety net
+    # itself — deleting a project still keeps its volumes by default.
+    moonphase_orphan_volume_retention_days: int = 7
+
     # --- github -------------------------------------------------------------
     # OAuth app client id enabling the device flow. Without it, GitHub can
     # still be connected by pasting a personal access token. Device flow needs
