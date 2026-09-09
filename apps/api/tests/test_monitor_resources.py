@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from moonphase import docker_remote
-from moonphase.monitor import SessionMonitor, _PROJECT_VOLUME_RE
+from moonphase.monitor import _PROJECT_VOLUME_RE, SessionMonitor
 
 
 class _NullSession:
