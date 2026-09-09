@@ -251,8 +251,11 @@ pre {
   gap: 8px;
   /* Left padding leaves room for a sibling .tree-toggle to sit in, whether
      or not this particular row has one — so every row at the same depth
-     keeps its dot in the same column. */
-  padding: 6px 8px 6px 22px;
+     keeps its dot in the same column. Right padding does the same for the
+     row's own .row-menu, which overlaps this same edge by design (see its
+     own comment) — without it, a trailing .shared-tag (the one thing in a
+     row that doesn't ellipsize) collides with the menu button behind it. */
+  padding: 6px 38px 6px 22px;
   border-radius: 6px;
   color: var(--text-dim);
   text-decoration: none;
