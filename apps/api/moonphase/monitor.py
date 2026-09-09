@@ -15,9 +15,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import text
 
@@ -54,6 +56,23 @@ USAGE_INTERVAL_SECONDS = 120.0
 # from them.
 RESUME_RETRY_INTERVAL_SECONDS = 600.0
 
+# Disk does not move in twenty seconds. Once every five minutes per server is
+# plenty to catch a fill-up coming, and it is a real round trip — docker
+# system df and docker stats — against every managed server, not a cheap DB
+# read like the activity sweep.
+RESOURCE_INTERVAL_SECONDS = 300.0
+
+# This is cleanup, not monitoring — nothing about a leaked volume needs to be
+# noticed within minutes. Once an hour per server is enough to keep the disk
+# from filling back up between resource-usage readings.
+VOLUME_SWEEP_INTERVAL_SECONDS = 3600.0
+
+# A volume Moonphase created for a project, matching the naming _container_name
+# in routers/projects.py has always used: mp-<slug>-<8 hex chars>-workspace/-home.
+# Matched by name rather than by the moonphase=1 label so volumes created by
+# every earlier release — before that label existed — are still recognised.
+_PROJECT_VOLUME_RE = re.compile(r"^mp-.+-[0-9a-f]{8}-(workspace|home)$")
+
 
 class SessionMonitor:
     def __init__(self) -> None:
@@ -73,6 +92,10 @@ class SessionMonitor:
         # When we last tried to bring a container's sessions back, so a
         # container that cannot resume is not retried every sweep.
         self._resume_attempted: dict[str, float] = {}
+        # When each server's disk/CPU/memory was last read, and when it was
+        # last swept for orphaned volumes — both keyed by server id.
+        self._resources_checked: dict[str, float] = {}
+        self._volumes_checked: dict[str, float] = {}
 
     def start(self) -> None:
         settings = get_settings()
@@ -106,6 +129,14 @@ class SessionMonitor:
                 await self.check_budgets()
             except Exception as exc:  # noqa: BLE001
                 log.warning("budget check failed: %s", exc)
+            try:
+                await self.sweep_resources()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("resource sweep failed: %s", exc)
+            try:
+                await self.sweep_volumes()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("volume sweep failed: %s", exc)
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._stop.wait(), timeout=interval)
 
@@ -462,6 +493,181 @@ class SessionMonitor:
                 url="/",
                 tag=f"moonphase-budget-{label}",
             )
+
+    async def sweep_resources(self) -> int:
+        """Disk/CPU/memory per server, and how it splits across projects.
+
+        Every managed server, not just ones with a running project — a
+        server can be filling up with kept-on-delete volumes while nothing
+        on it is currently running at all.
+        """
+        now = time.monotonic()
+        async with service_session() as conn:
+            servers = await queries.list_servers(conn)
+            projects = await queries.list_projects(conn)
+
+        by_server: dict[str, list[dict[str, Any]]] = {}
+        for project in projects:
+            by_server.setdefault(str(project["server_id"]), []).append(project)
+
+        checked = 0
+        for server in servers:
+            server_id = str(server["id"])
+            if server.get("status") != "online":
+                continue
+            if now - self._resources_checked.get(server_id, 0.0) < RESOURCE_INTERVAL_SECONDS:
+                continue
+            self._resources_checked[server_id] = now
+            try:
+                await self._read_server_resources(server, by_server.get(server_id, []))
+                checked += 1
+            except SSHError as exc:
+                log.debug("resource sweep: could not reach %s: %s", server["name"], exc)
+        return checked
+
+    async def _read_server_resources(
+        self, server: dict[str, Any], projects: list[dict[str, Any]]
+    ) -> None:
+        conn_ssh = await ssh.pool.get(await self._target_for({"server_id": server["id"]}))
+        disk = await docker_remote.disk_usage(conn_ssh)
+        if disk is None:
+            return
+        volumes_by_name = {v.name: v for v in await docker_remote.volume_usage(conn_ssh)}
+        containers = [p["container_name"] for p in projects if p.get("container_name")]
+        stats = await docker_remote.container_stats(conn_ssh, containers)
+
+        by_project: list[dict[str, Any]] = []
+        for project in projects:
+            workspace = volumes_by_name.get(project.get("workspace_volume") or "")
+            home = volumes_by_name.get(project.get("home_volume") or "")
+            stat = stats.get(project.get("container_name") or "")
+            by_project.append(
+                {
+                    "project_id": str(project["id"]),
+                    "name": project["name"],
+                    "workspace_bytes": workspace.size_bytes if workspace else 0,
+                    "home_bytes": home.size_bytes if home else 0,
+                    "cpu_percent": stat.cpu_percent if stat else None,
+                    "mem_bytes": stat.mem_bytes if stat else None,
+                }
+            )
+        by_project.sort(key=lambda p: p["workspace_bytes"] + p["home_bytes"], reverse=True)
+
+        async with service_session() as conn:
+            await queries.upsert_resource_snapshot(
+                conn,
+                server_id=server["id"],
+                disk_total_bytes=disk.total_bytes,
+                disk_used_bytes=disk.used_bytes,
+                by_project=by_project,
+            )
+
+    async def sweep_volumes(self) -> int:
+        """Find volumes no project claims, and remove ones past their grace period.
+
+        Two independent halves. Discovery is per-server and throttled the
+        same way sweep_resources is, since it needs an SSH round trip.
+        Reaping is a plain read of what is already due — no SSH needed to
+        find the work, only to carry it out — so it is not throttled at all;
+        it simply does nothing when nothing is due.
+        """
+        now = time.monotonic()
+        async with service_session() as conn:
+            servers = await queries.list_servers(conn)
+            projects = await queries.list_projects(conn)
+
+        live_by_server: dict[str, set[str]] = {}
+        for project in projects:
+            names = live_by_server.setdefault(str(project["server_id"]), set())
+            for volume in (project.get("workspace_volume"), project.get("home_volume")):
+                if volume:
+                    names.add(volume)
+
+        swept = 0
+        for server in servers:
+            server_id = str(server["id"])
+            if server.get("status") != "online":
+                continue
+            if now - self._volumes_checked.get(server_id, 0.0) < VOLUME_SWEEP_INTERVAL_SECONDS:
+                continue
+            self._volumes_checked[server_id] = now
+            try:
+                await self._discover_orphans(server, live_by_server.get(server_id, set()))
+            except SSHError as exc:
+                log.debug("volume sweep: could not reach %s: %s", server["name"], exc)
+
+        swept += await self._reap_due_volumes()
+        return swept
+
+    async def _discover_orphans(
+        self, server: dict[str, Any], live_volume_names: set[str]
+    ) -> None:
+        conn_ssh = await ssh.pool.get(await self._target_for({"server_id": server["id"]}))
+        volumes = await docker_remote.volume_usage(conn_ssh)
+        retention = timedelta(days=get_settings().moonphase_orphan_volume_retention_days)
+
+        async with service_session() as conn:
+            existing = await queries.list_orphaned_volumes(conn, server["id"])
+            tracked_names = {row["volume_name"] for row in existing}
+            for volume in volumes:
+                if not _PROJECT_VOLUME_RE.match(volume.name):
+                    continue  # not one of ours to begin with
+                if volume.name in live_volume_names or volume.name in tracked_names:
+                    continue
+                # Ours, claimed by no live project, and not already on
+                # record — a project delete from before this feature
+                # existed, or a container-creation crash that never made it
+                # as far as the projects row. Either way it gets the same
+                # grace period as a deliberately kept one, not an instant
+                # delete on the sweep's first look at it.
+                await queries.track_orphaned_volume(
+                    conn,
+                    server_id=server["id"],
+                    volume_name=volume.name,
+                    project_name=volume.project_label,
+                    reason="discovered",
+                    delete_after=datetime.now(UTC) + retention,
+                )
+
+    async def _reap_due_volumes(self) -> int:
+        async with service_session() as conn:
+            due = await queries.list_orphaned_volumes_due(conn, datetime.now(UTC))
+        if not due:
+            return 0
+
+        by_server: dict[str, list[dict[str, Any]]] = {}
+        for row in due:
+            by_server.setdefault(str(row["server_id"]), []).append(row)
+
+        removed = 0
+        for server_id_str, rows in by_server.items():
+            try:
+                conn_ssh = await ssh.pool.get(
+                    await self._target_for({"server_id": UUID(server_id_str)})
+                )
+            except SSHError as exc:
+                log.debug("volume reap: could not reach server %s: %s", server_id_str, exc)
+                continue
+            for row in rows:
+                removed_ok = await docker_remote.volume_remove(conn_ssh, row["volume_name"])
+                if not removed_ok:
+                    # Still in use, most likely — a container that was
+                    # supposed to be gone but is not. Leave it tracked; the
+                    # next sweep tries again rather than losing track of it.
+                    log.warning(
+                        "could not remove orphaned volume %s; will retry", row["volume_name"]
+                    )
+                    continue
+                async with service_session() as conn:
+                    await queries.delete_orphaned_volume_row(conn, row["id"])
+                removed += 1
+                log.info(
+                    "removed orphaned volume %s (%s, kept since %s)",
+                    row["volume_name"],
+                    row["reason"],
+                    row["discovered_at"],
+                )
+        return removed
 
     async def _reconcile_project(
         self, row: dict[str, Any], *, status: str, detail: str | None

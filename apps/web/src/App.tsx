@@ -10,6 +10,7 @@ import {
   type ActivityState,
   type Project,
   type Server,
+  type ServerResources,
   type Session,
   setupState,
 } from './lib/api'
@@ -17,6 +18,7 @@ import { useResource } from './lib/useResource'
 import { useCollapsed, useCollapsedFlag } from './lib/collapsed'
 import { useSessionOrder } from './lib/sessionOrder'
 import { playAlertSound } from './lib/sound'
+import { formatBytes } from './lib/bytes'
 import { readSoundAlertPreference } from './lib/soundAlertPreference'
 import { justStartedWaiting } from './lib/sessionActivity'
 import { Logo } from './components/Logo'
@@ -993,7 +995,8 @@ function ProjectRow({
               danger: true,
               detail:
                 'Stops the container and removes the project. The volumes, and ' +
-                'so the work in them, are kept.',
+                'so the work in them, are kept for a grace period before being ' +
+                'removed automatically.',
               disabledReason: canControl(project.access) ? undefined : 'view only',
               onSelect: () => onRemove?.(project),
             },
@@ -1243,8 +1246,9 @@ export function ProjectView({
             <h2>Reclaim</h2>
             <p className="hint">
               Removing it stops the container and frees its resources on your machine. The
-              volumes are kept, so the work itself survives. To stop new projects appearing,
-              revoke the server share instead.
+              volumes are kept for a grace period, so the work itself survives an accidental
+              delete — see the server's Resources card for anything still waiting on its
+              grace period. To stop new projects appearing, revoke the server share instead.
             </p>
             <button
               className="danger"
@@ -1690,6 +1694,13 @@ function ServerView({
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const resources = useResource<ServerResources>(
+    () => api.serverResources(server.id),
+    [server.id],
+    // Collected by the background monitor every few minutes; polling faster
+    // than that would just re-fetch the same reading.
+    { pollMs: 60000 },
+  )
 
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true)
@@ -1789,6 +1800,18 @@ function ServerView({
           </dl>
         </div>
 
+        <div className="card">
+          <h2>Resources</h2>
+          {resources.data?.sampled_at ? (
+            <ServerResourcesPanel data={resources.data} />
+          ) : (
+            <p className="hint">
+              Not sampled yet — the background monitor reads this within a few minutes
+              of a server coming online.
+            </p>
+          )}
+        </div>
+
         {!owned && (
           <div className="card">
             <h2>Shared with you</h2>
@@ -1833,6 +1856,90 @@ function ServerView({
           </div>
         )}
       </div>
+    </>
+  )
+}
+
+function shareOf(value: number, top: number): number {
+  if (top <= 0) return 0
+  return Math.max(2, Math.round((value / top) * 100))
+}
+
+function ServerResourcesPanel({ data }: { data: ServerResources }) {
+  const total = data.disk_total_bytes ?? 0
+  const used = data.disk_used_bytes ?? 0
+  const diskPercent = total > 0 ? Math.round((used / total) * 100) : 0
+  const critical = diskPercent >= 90
+
+  const topProjectBytes = Math.max(
+    1,
+    ...data.by_project.map((p) => p.workspace_bytes + p.home_bytes),
+  )
+
+  return (
+    <>
+      <div className="usage-bars">
+        <div className="usage-bar">
+          <span className="usage-bar-name">Disk</span>
+          <span className="usage-bar-track">
+            <span
+              className={`usage-bar-fill${critical ? ' usage-bar-fill-warn' : ''}`}
+              style={{ width: `${Math.min(100, Math.max(2, diskPercent))}%` }}
+            />
+          </span>
+          <span className="usage-bar-value">
+            {formatBytes(used)} / {formatBytes(total)}
+          </span>
+        </div>
+      </div>
+      <p className="hint">
+        Sampled {new Date(data.sampled_at as string).toLocaleString()}
+        {critical && ' — this server is close to full.'}
+      </p>
+
+      {data.by_project.length > 0 && (
+        <>
+          <h3>By project</h3>
+          <div className="usage-bars">
+            {data.by_project.map((project) => {
+              const bytes = project.workspace_bytes + project.home_bytes
+              return (
+                <div key={project.project_id} className="usage-bar">
+                  <span className="usage-bar-name">{project.name}</span>
+                  <span className="usage-bar-track">
+                    <span
+                      className="usage-bar-fill"
+                      style={{ width: `${shareOf(bytes, topProjectBytes)}%` }}
+                    />
+                  </span>
+                  <span className="usage-bar-value">{formatBytes(bytes)}</span>
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
+
+      {data.pending_cleanup.length > 0 && (
+        <>
+          <h3>Pending cleanup</h3>
+          <p className="hint">
+            Volumes left behind by a deleted project. Removed automatically once their
+            grace period runs out.
+          </p>
+          <ul className="resource-pending-list">
+            {data.pending_cleanup.map((row) => (
+              <li key={row.volume_name}>
+                <span>{row.project_name ?? row.volume_name}</span>
+                <span className="hint">
+                  {' '}
+                  — deletes {new Date(row.delete_after).toLocaleDateString()}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </>
   )
 }

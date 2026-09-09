@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shlex
 from dataclasses import dataclass
 
@@ -113,13 +114,29 @@ async def install(conn: asyncssh.SSHClientConnection, ssh_user: str) -> DockerIn
     )
 
 
-async def volume_create(conn: asyncssh.SSHClientConnection, name: str) -> None:
-    result = await ssh.run(conn, f"docker volume create {shlex.quote(name)}", timeout=30)
+async def volume_create(
+    conn: asyncssh.SSHClientConnection, name: str, *, project: str | None = None
+) -> None:
+    # Labelled the same way run_container labels its container, so a volume
+    # is self-identifying on the host for anyone poking around with the
+    # Docker CLI directly. The orphan sweep in monitor.py cannot rely on the
+    # label alone, though — it also has to recognise volumes created before
+    # this label existed — so it matches by name instead.
+    args = ["docker", "volume", "create", "--label", "moonphase=1"]
+    if project:
+        args += ["--label", f"moonphase.project={project}"]
+    args.append(name)
+    command = " ".join(shlex.quote(a) for a in args)
+    result = await ssh.run(conn, command, timeout=30)
     result.check(f"Creating volume {name}")
 
 
-async def volume_remove(conn: asyncssh.SSHClientConnection, name: str) -> None:
-    await ssh.run(conn, f"docker volume rm -f {shlex.quote(name)}", timeout=30)
+async def volume_remove(conn: asyncssh.SSHClientConnection, name: str) -> bool:
+    """Remove a volume. Returns whether it actually went — still in use, say,
+    or already gone — so a caller tracking it (the orphan sweep) knows
+    whether to stop tracking it or leave it for the next pass."""
+    result = await ssh.run(conn, f"docker volume rm -f {shlex.quote(name)}", timeout=30)
+    return result.ok
 
 
 async def image_present(conn: asyncssh.SSHClientConnection, image: str) -> bool:
@@ -333,5 +350,157 @@ async def list_moonphase_containers(
                 state=row.get("state", ""),
                 status=row.get("status", ""),
             )
+        )
+    return out
+
+
+@dataclass
+class DiskUsage:
+    total_bytes: int
+    used_bytes: int
+
+
+@dataclass
+class VolumeUsage:
+    name: str
+    project_label: str | None
+    size_bytes: int
+
+
+@dataclass
+class ContainerStat:
+    name: str
+    cpu_percent: float
+    mem_bytes: int
+
+
+def _parse_docker_bytes(text_value: str) -> int:
+    """Parse a `go-units.HumanSize`-style string ("60.41MB", "833.7kB") to bytes.
+
+    Different Docker commands pick different unit families for the same kind
+    of number — `system df` uses decimal (kB/MB/GB, 1000-based) while `stats`
+    uses binary (KiB/MiB/GiB, 1024-based) — so both are handled here rather
+    than assuming one.
+    """
+    text_value = text_value.strip()
+    match = re.match(r"^([\d.]+)\s*([A-Za-z]*)$", text_value)
+    if not match:
+        return 0
+    number, unit = match.groups()
+    scale = {
+        "B": 1,
+        "": 1,
+        "kB": 1_000,
+        "MB": 1_000_000,
+        "GB": 1_000_000_000,
+        "TB": 1_000_000_000_000,
+        "KiB": 1024,
+        "MiB": 1024**2,
+        "GiB": 1024**3,
+        "TiB": 1024**4,
+    }.get(unit)
+    if scale is None:
+        return 0
+    return int(float(number) * scale)
+
+
+async def disk_usage(conn: asyncssh.SSHClientConnection) -> DiskUsage | None:
+    """Bytes total/used on the filesystem Docker actually stores data on.
+
+    Not `df /` — a managed server can mount its Docker data directory
+    elsewhere, and that mount is the one that fills up when volumes grow.
+    """
+    root = await ssh.run(conn, "docker info --format '{{.DockerRootDir}}'", timeout=20)
+    path = root.stdout.strip() if root.ok and root.stdout.strip() else "/var/lib/docker"
+    result = await ssh.run(
+        conn,
+        f"df -B1 --output=size,used {shlex.quote(path)} | tail -n 1",
+        timeout=20,
+    )
+    if not result.ok:
+        return None
+    parts = result.stdout.split()
+    if len(parts) != 2:
+        return None
+    try:
+        return DiskUsage(total_bytes=int(parts[0]), used_bytes=int(parts[1]))
+    except ValueError:
+        return None
+
+
+async def volume_usage(conn: asyncssh.SSHClientConnection) -> list[VolumeUsage]:
+    """Size of every volume on the host, from Docker's own accounting.
+
+    Unfiltered — a server can have volumes Moonphase did not create (its own
+    compose stack, if it happens to share a box with a managed project), so
+    the caller decides which of these are its own, typically by name rather
+    than by label: only a volume created after the `moonphase=1` label was
+    added actually carries it, and this needs to work for volumes made by
+    every earlier release too.
+
+    `docker system df -v` rather than `du` inside a throwaway container: it is
+    what Docker already tracks, needs no extra container spun up per volume,
+    and answers in well under a second even with a couple dozen volumes.
+    """
+    result = await ssh.run(
+        conn, "docker system df -v --format '{{json .Volumes}}'", timeout=30
+    )
+    if not result.ok or not result.stdout.strip():
+        return []
+    try:
+        rows = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return []
+    out: list[VolumeUsage] = []
+    for row in rows:
+        labels = row.get("Labels", "") or ""
+        project_label = None
+        for label in labels.split(","):
+            if label.startswith("moonphase.project="):
+                project_label = label.split("=", 1)[1]
+        out.append(
+            VolumeUsage(
+                name=row.get("Name", ""),
+                project_label=project_label,
+                size_bytes=_parse_docker_bytes(row.get("Size", "0")),
+            )
+        )
+    return out
+
+
+async def container_stats(
+    conn: asyncssh.SSHClientConnection, names: list[str]
+) -> dict[str, ContainerStat]:
+    """Live CPU/memory for the given containers. Empty `names` is a no-op.
+
+    `docker stats` has no `--filter`, unlike `ps` — the caller narrows to
+    Moonphase's own containers by name, usually via list_moonphase_containers.
+    """
+    if not names:
+        return {}
+    quoted = " ".join(shlex.quote(n) for n in names)
+    result = await ssh.run(
+        conn, f"docker stats --no-stream --format '{{{{json .}}}}' {quoted}", timeout=30
+    )
+    if not result.ok:
+        return {}
+    out: dict[str, ContainerStat] = {}
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        name = row.get("Name", "")
+        mem_usage = str(row.get("MemUsage", "0B")).split("/")[0]
+        cpu_perc = str(row.get("CPUPerc", "0%")).rstrip("%")
+        try:
+            cpu = float(cpu_perc)
+        except ValueError:
+            cpu = 0.0
+        out[name] = ContainerStat(
+            name=name, cpu_percent=cpu, mem_bytes=_parse_docker_bytes(mem_usage)
         )
     return out
