@@ -2770,9 +2770,28 @@ button.link {
   border: 1px solid var(--border);
   border-radius: 8px;
 }
-.mcp-server-head { display: grid; grid-template-columns: 1fr 150px auto; gap: 8px; }
-.mcp-name { font-weight: 500; }
+/* flex rather than a fixed-column grid: the trailing group holds a variable
+   number of items (status, Connect, Remove) depending on transport, and a
+   grid with more items than declared columns wraps the overflow onto a
+   second row stretched to the first column's width instead of staying put. */
+.mcp-server-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.mcp-name { flex: 1; min-width: 120px; font-weight: 500; }
+.mcp-server-head select { width: 150px; }
+.mcp-server-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .mcp-add { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.mcp-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.mcp-status-connected .dot {
+  background: var(--green);
+  box-shadow: 0 0 6px rgba(158, 206, 106, 0.5);
+}
 
 .pair-editor { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .pair-label { font-size: 12px; color: var(--text-dim); }
