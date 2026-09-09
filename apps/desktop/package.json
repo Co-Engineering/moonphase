@@ -1,6 +1,6 @@
 {
   "name": "@moonphase/desktop",
-  "version": "0.10.10",
+  "version": "0.10.11",
   "private": true,
   "description": "Moonphase desktop app",
   "main": "dist/main.js",
