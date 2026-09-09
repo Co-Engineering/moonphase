@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import type { McpOAuthConnectionInfo } from '../lib/api'
+import type { McpHealth, McpOAuthConnectionInfo } from '../lib/api'
 
 /**
  * Claude Code configuration, without writing JSON.
@@ -490,6 +490,7 @@ export function McpEditor({
   value,
   onChange,
   onConnect,
+  onCheck,
   connections,
 }: SettingsProps & {
   /**
@@ -500,6 +501,14 @@ export function McpEditor({
    */
   onConnect?: (serverName: string) => void
   /**
+   * Ask a running session to actually try reaching every configured
+   * server (`claude mcp list`) and report what happened — the only way to
+   * tell "connected" apart from "config exists and nobody has checked".
+   * Same scope-resolution as onConnect. Rejects if there is nothing running
+   * to check with, or the harness cannot check at all.
+   */
+  onCheck?: () => Promise<McpHealth[]>
+  /**
    * OAuth connections already on file for this user, org-wide — the same
    * list Settings → Accounts shows, matched here by server name so a row
    * can say whether the name it declares is actually connected. Undefined
@@ -508,12 +517,28 @@ export function McpEditor({
   connections?: McpOAuthConnectionInfo[]
 }) {
   const [raw, setRaw] = useState(false)
+  const [health, setHealth] = useState<McpHealth[] | null>(null)
+  const [checking, setChecking] = useState(false)
+  const [checkError, setCheckError] = useState<string | null>(null)
   const doc = useMemo(() => parseDoc(value), [value])
   const servers = useMemo(() => serversFrom(doc), [doc])
 
   const update = (next: McpServer[]) => onChange(serializeDoc(serversInto(doc, next)))
   const set = (index: number, patch: Partial<McpServer>) =>
     update(servers.map((server, i) => (i === index ? { ...server, ...patch } : server)))
+
+  const runCheck = async () => {
+    if (!onCheck) return
+    setChecking(true)
+    setCheckError(null)
+    try {
+      setHealth(await onCheck())
+    } catch (err) {
+      setCheckError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setChecking(false)
+    }
+  }
 
   if (raw) {
     return (
@@ -538,6 +563,20 @@ export function McpEditor({
         </button>
       </div>
 
+      {onCheck && servers.length > 0 && (
+        <div className="config-head">
+          <span className="hint">
+            {health
+              ? `Checked ${health.filter((h) => h.ok).length} of ${health.length} reachable.`
+              : "Config existing, or even a saved sign-in, doesn't mean a server actually answers."}
+          </span>
+          <button className="ghost small" disabled={checking} onClick={() => void runCheck()}>
+            {checking ? 'Checking…' : 'Check connections'}
+          </button>
+        </div>
+      )}
+      {checkError && <div className="banner error">{checkError}</div>}
+
       {servers.length === 0 && (
         <p className="muted small">
           No MCP servers configured. They give Claude tools beyond the ones it ships
@@ -547,126 +586,163 @@ export function McpEditor({
       )}
 
       {servers.map((server, index) => {
+        const trimmedName = server.name.trim()
         const connected =
           server.transport !== 'stdio' &&
-          !!server.name.trim() &&
-          connections?.some((c) => c.server_name === server.name.trim())
+          !!trimmedName &&
+          connections?.some((c) => c.server_name === trimmedName)
+        const checked = health?.find((h) => h.name === trimmedName)
+        // A server just added has nothing worth collapsing yet — one that
+        // was already configured (loaded from the saved doc) starts folded,
+        // so a long list of working servers reads as a list, not a wall of
+        // forms. Uncontrolled on purpose: past the first render this is the
+        // browser's own toggle state, not React's.
+        const incomplete =
+          server.transport === 'stdio' ? !server.command.trim() : !server.url.trim()
+
+        let statusClass = 'mcp-status'
+        let statusLabel: string
+        let statusTitle: string
+        if (checked) {
+          statusClass += checked.ok ? ' mcp-status-connected' : ' mcp-status-error'
+          statusLabel = checked.ok ? 'Connected' : 'Failed'
+          statusTitle = checked.detail
+        } else if (server.transport === 'stdio') {
+          statusLabel = 'Local process'
+          statusTitle = "Claude Code starts this itself — check to see if it actually runs"
+        } else {
+          statusClass += connected ? ' mcp-status-connected' : ''
+          statusLabel = connected ? 'OAuth saved' : 'No OAuth saved'
+          statusTitle = connected
+            ? 'Authenticated via OAuth — check to see if it still works'
+            : 'No stored OAuth connection for this name yet'
+        }
+
         return (
-        <div className="mcp-server" key={index}>
-          <div className="mcp-server-head">
-            <input
-              className="mcp-name"
-              value={server.name}
-              onChange={(event) => set(index, { name: event.target.value })}
-              placeholder="name"
-            />
-            <select
-              value={server.transport}
-              onChange={(event) =>
-                set(index, { transport: event.target.value as McpServer['transport'] })
-              }
+        <details
+          className="mcp-server"
+          key={index}
+          // Uncontrolled: only the initial state should come from `incomplete`
+          // — past first mount this is the browser's own toggle, not React's,
+          // so the ref sets it once and never touches it again. (`defaultOpen`
+          // is real DOM behaviour React supports, but missing from the
+          // installed @types/react version, hence doing it by hand.)
+          ref={(el) => {
+            if (el && el.dataset.mcpInit === undefined) {
+              el.open = incomplete
+              el.dataset.mcpInit = '1'
+            }
+          }}
+        >
+          <summary className="mcp-server-summary">
+            <span className={statusClass} title={statusTitle}>
+              <span className="dot" />
+              <span className="mcp-summary-status-text">{statusLabel}</span>
+            </span>
+            <span className="mcp-summary-name">{trimmedName || 'unnamed server'}</span>
+            <button
+              className="ghost small"
+              onClick={(event) => {
+                event.stopPropagation()
+                update(servers.filter((_, i) => i !== index))
+              }}
+              aria-label="Remove server"
             >
-              <option value="stdio">Local process</option>
-              <option value="http">HTTP</option>
-              <option value="sse">SSE</option>
-            </select>
-            <div className="mcp-server-actions">
-              {server.transport === 'stdio' ? (
-                <span
-                  className="mcp-status"
-                  title="Claude Code starts this itself — Moonphase has no way to confirm it's running"
-                >
-                  <span className="dot" />
-                  Local process
-                </span>
-              ) : (
-                server.name.trim() && (
-                  <span
-                    className={`mcp-status${connected ? ' mcp-status-connected' : ''}`}
-                    title={
-                      connected
-                        ? 'Authenticated via OAuth, available to every session in this org'
-                        : 'No stored OAuth connection for this name yet'
-                    }
-                  >
-                    <span className="dot" />
-                    {connected ? 'Connected' : 'Not connected'}
-                  </span>
-                )
-              )}
-              {onConnect && server.transport !== 'stdio' && server.name.trim() && (
+              ✕
+            </button>
+          </summary>
+
+          <div className="mcp-server-body">
+            <div className="mcp-server-head">
+              <input
+                className="mcp-name"
+                value={server.name}
+                onChange={(event) => set(index, { name: event.target.value })}
+                placeholder="name"
+              />
+              <select
+                value={server.transport}
+                onChange={(event) =>
+                  set(index, { transport: event.target.value as McpServer['transport'] })
+                }
+              >
+                <option value="stdio">Local process</option>
+                <option value="http">HTTP</option>
+                <option value="sse">SSE</option>
+              </select>
+              {onConnect && server.transport !== 'stdio' && trimmedName && (
                 <button
                   className="ghost small"
-                  onClick={() => onConnect(server.name.trim())}
+                  onClick={() => onConnect(trimmedName)}
                   title="Relay this server's OAuth through this session"
                 >
                   {connected ? 'Reconnect' : 'Connect'}
                 </button>
               )}
-              <button
-                className="ghost small"
-                onClick={() => update(servers.filter((_, i) => i !== index))}
-                aria-label="Remove server"
-              >
-                ✕
-              </button>
             </div>
-          </div>
 
-          {server.transport === 'stdio' ? (
-            <>
-              <label>
-                <span>Command</span>
-                <input
-                  value={server.command}
-                  onChange={(event) => set(index, { command: event.target.value })}
-                  placeholder="npx"
+            {server.transport === 'stdio' ? (
+              <>
+                <label>
+                  <span>Command</span>
+                  <input
+                    value={server.command}
+                    onChange={(event) => set(index, { command: event.target.value })}
+                    placeholder="npx"
+                  />
+                </label>
+                <label>
+                  <span>Arguments</span>
+                  <input
+                    value={server.args}
+                    onChange={(event) => set(index, { args: event.target.value })}
+                    placeholder="-y @modelcontextprotocol/server-filesystem /path"
+                  />
+                </label>
+                <PairEditor
+                  label="Environment"
+                  hint="Values are written into the container as-is. Anything secret belongs in Environment variables, not here."
+                  pairs={server.env}
+                  onChange={(env) => set(index, { env })}
                 />
-              </label>
-              <label>
-                <span>Arguments</span>
-                <input
-                  value={server.args}
-                  onChange={(event) => set(index, { args: event.target.value })}
-                  placeholder="-y @modelcontextprotocol/server-filesystem /path"
+              </>
+            ) : (
+              <>
+                <label>
+                  <span>URL</span>
+                  <input
+                    value={server.url}
+                    onChange={(event) => set(index, { url: event.target.value })}
+                    placeholder="https://example.com/mcp"
+                  />
+                </label>
+                <PairEditor
+                  label="Headers"
+                  pairs={server.headers}
+                  onChange={(headers) => set(index, { headers })}
                 />
-              </label>
-              <PairEditor
-                label="Environment"
-                hint="Values are written into the container as-is. Anything secret belongs in Environment variables, not here."
-                pairs={server.env}
-                onChange={(env) => set(index, { env })}
-              />
-            </>
-          ) : (
-            <>
-              <label>
-                <span>URL</span>
-                <input
-                  value={server.url}
-                  onChange={(event) => set(index, { url: event.target.value })}
-                  placeholder="https://example.com/mcp"
-                />
-              </label>
-              <PairEditor
-                label="Headers"
-                pairs={server.headers}
-                onChange={(headers) => set(index, { headers })}
-              />
-            </>
-          )}
-        </div>
+              </>
+            )}
+          </div>
+        </details>
         )
       })}
 
       <div className="mcp-add">
         <button
           className="ghost small"
-          onClick={() =>
+          onClick={() => {
+            // serversInto drops any entry whose name is blank — an empty
+            // name here would round-trip through onChange and vanish before
+            // ever rendering, which is exactly what made this button look
+            // like it did nothing. A unique placeholder survives that
+            // round-trip; the name field is still the first thing to edit.
+            let name = 'server'
+            for (let n = 1; servers.some((s) => s.name === name); n++) name = `server-${n}`
             update([
               ...servers,
               {
-                name: '',
+                name,
                 transport: 'stdio',
                 command: '',
                 args: '',
@@ -675,7 +751,7 @@ export function McpEditor({
                 headers: {},
               },
             ])
-          }
+          }}
         >
           + Add server
         </button>
@@ -816,6 +892,7 @@ export function ClaudeConfigFields({
   onChange,
   claudeMdHint,
   onConnectMcp,
+  onCheckMcp,
   mcpConnections,
   showEnvVars = true,
 }: {
@@ -823,6 +900,8 @@ export function ClaudeConfigFields({
   onChange: (next: ClaudeConfigValue) => void
   claudeMdHint: string
   onConnectMcp?: (serverName: string) => void
+  /** See `McpEditor`'s `onCheck` prop — threaded through unchanged. */
+  onCheckMcp?: () => Promise<McpHealth[]>
   /** See `McpEditor`'s `connections` prop — threaded through unchanged. */
   mcpConnections?: McpOAuthConnectionInfo[]
   /**
@@ -870,6 +949,7 @@ export function ClaudeConfigFields({
           value={value.mcp_json}
           onChange={(next) => onChange({ ...value, mcp_json: next })}
           onConnect={onConnectMcp}
+          onCheck={onCheckMcp}
           connections={mcpConnections}
         />
       )}

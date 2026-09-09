@@ -686,6 +686,12 @@ class McpOAuthConnectionOut(BaseModel):
     updated_at: datetime
 
 
+class McpHealthOut(BaseModel):
+    name: str
+    ok: bool
+    detail: str
+
+
 # --- github -----------------------------------------------------------------
 
 

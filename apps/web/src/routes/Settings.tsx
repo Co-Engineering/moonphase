@@ -705,6 +705,14 @@ function HarnessSettingsTab({
     }
   }
 
+  // Same "save what's about to be checked" reasoning as onConnectMcp — and
+  // same choice to leave errors uncaught: McpEditor's own runCheck already
+  // turns a rejection into a banner of its own.
+  const onCheckMcp = async () => {
+    await api.saveProfile(currentProfile())
+    return api.checkMcpHealthForOrg()
+  }
+
   return (
     <>
       {connectError && <div className="banner error">{connectError}</div>}
@@ -713,6 +721,7 @@ function HarnessSettingsTab({
         onChange={setConfig}
         claudeMdHint="Written to ~/.claude/CLAUDE.md, so it applies to every project"
         onConnectMcp={(name) => void onConnectMcp(name)}
+        onCheckMcp={onCheckMcp}
         mcpConnections={connections}
         showEnvVars={false}
       />

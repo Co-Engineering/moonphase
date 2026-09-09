@@ -20,11 +20,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from .. import mcp_login, queries, runtime, sessions, ssh
+from .. import docker_remote, mcp_health, mcp_login, queries, runtime, sessions, ssh
 from ..auth import Principal, current_principal
 from ..db import service_session, user_session
+from ..harness.base import HarnessKind
 from ..runtime import CAN_CONTROL, NotFound
 from ..schemas import (
+    McpHealthOut,
     McpOAuthConnectionOut,
     McpOAuthOut,
     McpOAuthPasteIn,
@@ -170,6 +172,94 @@ async def _start(
     return _out(mcp_session)
 
 
+async def _check(
+    project_id: UUID,
+    session_name: str,
+    principal: Principal,
+) -> list[McpHealthOut]:
+    """Live per-server status, via `claude mcp list` inside the session's
+    own container — the only answer to "is this connected" that is actually
+    checked rather than inferred from config or a stored credential."""
+    try:
+        ctx = await runtime.load_project_context(
+            principal.claims, project_id, require=CAN_CONTROL
+        )
+        space, row = await runtime.load_session_space(
+            principal.claims, project_id, session_name
+        )
+    except NotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if not row.get("is_mine"):
+        raise HTTPException(
+            status_code=403,
+            detail="This is someone else's session; only they can check its "
+            "MCP servers.",
+        )
+
+    if ctx.harness != HarnessKind.CLAUDE_CODE:
+        raise HTTPException(
+            status_code=409,
+            detail="Checking MCP connections is only available for Claude Code.",
+        )
+
+    profile = await runtime.load_session_profile(
+        principal.claims, ctx.project, ctx.harness, session_name
+    )
+
+    try:
+        conn_ssh = await ssh.pool.get(ctx.target)
+        # Idempotent — the same reason `_start` refreshes it before relaying
+        # OAuth: a server added moments ago and never picked up by a restart
+        # would otherwise be checked against a stale ~/.claude.json instead
+        # of the config that was actually just saved.
+        await sessions.ensure_session(
+            conn_ssh,
+            ctx.container,
+            harness_kind=ctx.harness,
+            workspace_profile=profile,
+            session=session_name,
+            space=space,
+        )
+        result = await docker_remote.exec_capture(
+            conn_ssh, ctx.container, ["claude", "mcp", "list"], timeout=45.0
+        )
+    except SSHError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return [
+        McpHealthOut(name=h.name, ok=h.ok, detail=h.detail)
+        for h in mcp_health.parse(result.stdout)
+    ]
+
+
+@router.post(
+    "/sessions/{session_name}/mcp/check", response_model=list[McpHealthOut]
+)
+async def check_mcp_health(
+    project_id: UUID,
+    session_name: str,
+    principal: Principal = Depends(current_principal),
+) -> list[McpHealthOut]:
+    """Check every configured MCP server's live connectivity, inside this
+    session's own container."""
+    return await _check(project_id, session_name, principal)
+
+
+@router.post("/mcp/check", response_model=list[McpHealthOut])
+async def check_mcp_health_for_project(
+    project_id: UUID,
+    principal: Principal = Depends(current_principal),
+) -> list[McpHealthOut]:
+    """Same as above, for a check offered from the project's own Configure
+    dialog — where there is no one session in hand. Checks through any one
+    of the caller's own running sessions in this project."""
+    async with user_session(principal.claims) as db:
+        rows = await queries.get_sessions(db, project_id)
+    row = _own_running_session(rows, where=" in this project")
+    return await _check(project_id, str(row["tmux_session"]), principal)
+
+
 @router.post(
     "/sessions/{session_name}/mcp-oauth/start", response_model=McpOAuthOut
 )
@@ -291,6 +381,21 @@ async def start_mcp_oauth_for_org(
     return await _start(
         UUID(str(row["project_id"])), str(row["tmux_session"]), payload.server_name,
         principal,
+    )
+
+
+@profile_router.post("/mcp/check", response_model=list[McpHealthOut])
+async def check_mcp_health_for_org(
+    principal: Principal = Depends(current_principal),
+) -> list[McpHealthOut]:
+    """Same as check_mcp_health, for a check offered from Settings — no
+    project in hand at all. Checks through any one of the caller's own
+    running sessions anywhere."""
+    async with user_session(principal.claims) as db:
+        rows = await queries.list_all_sessions(db)
+    row = _own_running_session(rows, where="")
+    return await _check(
+        UUID(str(row["project_id"])), str(row["tmux_session"]), principal
     )
 
 

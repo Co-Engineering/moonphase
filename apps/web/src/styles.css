@@ -2765,35 +2765,59 @@ button.link {
 .decision-deny { color: var(--bad, #d1706c); }
 .decision-ask { color: var(--warn, #d19a4c); }
 
+/* A collapsed <details> per server rather than every form always open — a
+   dozen configured servers used to mean a dozen full command/args/env (or
+   url/headers) forms stacked on screen at once. Collapsed shows only what
+   distinguishes one row from the next (status, name); a server still being
+   filled in (see the ref in ClaudeConfig.tsx) starts open instead. */
 .mcp-server {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
 }
+.mcp-server-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+.mcp-summary-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.mcp-summary-status-text { font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+.mcp-server-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 12px 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
 /* flex rather than a fixed-column grid: the trailing group holds a variable
-   number of items (status, Connect, Remove) depending on transport, and a
-   grid with more items than declared columns wraps the overflow onto a
-   second row stretched to the first column's width instead of staying put. */
+   number of items (Connect appears only for some transports) and a grid with
+   more items than declared columns wraps the overflow onto a second row
+   stretched to the first column's width instead of staying put. */
 .mcp-server-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .mcp-name { flex: 1; min-width: 120px; font-weight: 500; }
 .mcp-server-head select { width: 150px; }
-.mcp-server-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .mcp-add { display: flex; gap: 6px; flex-wrap: wrap; }
 
 .mcp-status {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 11px;
   color: var(--text-dim);
-  white-space: nowrap;
 }
 .mcp-status-connected .dot {
   background: var(--green);
   box-shadow: 0 0 6px rgba(158, 206, 106, 0.5);
+}
+.mcp-status-error .dot {
+  background: var(--red);
 }
 
 .pair-editor { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }

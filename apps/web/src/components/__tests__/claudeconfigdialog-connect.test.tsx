@@ -25,7 +25,12 @@ async function renderAndClickConnect(save: (input: ClaudeConfig) => Promise<unkn
     />,
   )
   fireEvent.click(await screen.findByRole('tab', { name: /mcp servers/i }))
-  fireEvent.click(await screen.findByRole('button', { name: /connect/i }))
+  // A configured server (this fixture already has a URL) starts collapsed —
+  // expand it before its Connect button is reachable, same as a real click.
+  fireEvent.click(await screen.findByText('sentry'))
+  // Exact, not /connect/i: the toolbar's own "Check connections" button
+  // matches that pattern too.
+  fireEvent.click(await screen.findByRole('button', { name: 'Connect' }))
 }
 
 /**
