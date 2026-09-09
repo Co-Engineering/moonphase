@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ClaudeConfigFields, type ClaudeConfigValue } from './ClaudeConfig'
 import { McpConnectDialog, type McpConnectTarget } from './McpConnectDialog'
-import type { ClaudeConfig } from '../lib/api'
+import { api, type ClaudeConfig, type McpOAuthConnectionInfo } from '../lib/api'
 
 const EMPTY: ClaudeConfigValue = {
   claude_settings_json: null,
@@ -47,6 +47,12 @@ export function ClaudeConfigDialog({
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [connecting, setConnecting] = useState<string | null>(null)
+  const [connections, setConnections] = useState<McpOAuthConnectionInfo[]>([])
+
+  const loadConnections = () =>
+    void api.mcpOAuthConnections().then(setConnections).catch(() => setConnections([]))
+
+  useEffect(loadConnections, [])
 
   useEffect(() => {
     let cancelled = false
@@ -127,6 +133,7 @@ export function ClaudeConfigDialog({
             onChange={setValue}
             claudeMdHint="Added to CLAUDE.md for this scope, alongside anything set above it"
             onConnectMcp={onConnectMcp}
+            mcpConnections={connections}
           />
         )}
 
@@ -146,7 +153,10 @@ export function ClaudeConfigDialog({
           target={mcpConnect}
           serverName={connecting}
           onClose={() => setConnecting(null)}
-          onConnected={() => setConnecting(null)}
+          onConnected={() => {
+            setConnecting(null)
+            loadConnections()
+          }}
         />
       )}
     </div>

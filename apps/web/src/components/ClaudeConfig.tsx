@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import type { McpOAuthConnectionInfo } from '../lib/api'
 
 /**
  * Claude Code configuration, without writing JSON.
@@ -489,6 +490,7 @@ export function McpEditor({
   value,
   onChange,
   onConnect,
+  connections,
 }: SettingsProps & {
   /**
    * Relay this server's OAuth through a running session. At session scope
@@ -497,6 +499,13 @@ export function McpEditor({
    * running sessions in the right place to carry it.
    */
   onConnect?: (serverName: string) => void
+  /**
+   * OAuth connections already on file for this user, org-wide — the same
+   * list Settings → Accounts shows, matched here by server name so a row
+   * can say whether the name it declares is actually connected. Undefined
+   * while still loading; a row shows nothing rather than guessing.
+   */
+  connections?: McpOAuthConnectionInfo[]
 }) {
   const [raw, setRaw] = useState(false)
   const doc = useMemo(() => parseDoc(value), [value])
@@ -537,7 +546,12 @@ export function McpEditor({
         </p>
       )}
 
-      {servers.map((server, index) => (
+      {servers.map((server, index) => {
+        const connected =
+          server.transport !== 'stdio' &&
+          !!server.name.trim() &&
+          connections?.some((c) => c.server_name === server.name.trim())
+        return (
         <div className="mcp-server" key={index}>
           <div className="mcp-server-head">
             <input
@@ -556,22 +570,47 @@ export function McpEditor({
               <option value="http">HTTP</option>
               <option value="sse">SSE</option>
             </select>
-            {onConnect && server.transport !== 'stdio' && server.name.trim() && (
+            <div className="mcp-server-actions">
+              {server.transport === 'stdio' ? (
+                <span
+                  className="mcp-status"
+                  title="Claude Code starts this itself — Moonphase has no way to confirm it's running"
+                >
+                  <span className="dot" />
+                  Local process
+                </span>
+              ) : (
+                server.name.trim() && (
+                  <span
+                    className={`mcp-status${connected ? ' mcp-status-connected' : ''}`}
+                    title={
+                      connected
+                        ? 'Authenticated via OAuth, available to every session in this org'
+                        : 'No stored OAuth connection for this name yet'
+                    }
+                  >
+                    <span className="dot" />
+                    {connected ? 'Connected' : 'Not connected'}
+                  </span>
+                )
+              )}
+              {onConnect && server.transport !== 'stdio' && server.name.trim() && (
+                <button
+                  className="ghost small"
+                  onClick={() => onConnect(server.name.trim())}
+                  title="Relay this server's OAuth through this session"
+                >
+                  {connected ? 'Reconnect' : 'Connect'}
+                </button>
+              )}
               <button
                 className="ghost small"
-                onClick={() => onConnect(server.name.trim())}
-                title="Relay this server's OAuth through this session"
+                onClick={() => update(servers.filter((_, i) => i !== index))}
+                aria-label="Remove server"
               >
-                Connect
+                ✕
               </button>
-            )}
-            <button
-              className="ghost small"
-              onClick={() => update(servers.filter((_, i) => i !== index))}
-              aria-label="Remove server"
-            >
-              ✕
-            </button>
+            </div>
           </div>
 
           {server.transport === 'stdio' ? (
@@ -617,7 +656,8 @@ export function McpEditor({
             </>
           )}
         </div>
-      ))}
+        )
+      })}
 
       <div className="mcp-add">
         <button
@@ -776,12 +816,15 @@ export function ClaudeConfigFields({
   onChange,
   claudeMdHint,
   onConnectMcp,
+  mcpConnections,
   showEnvVars = true,
 }: {
   value: ClaudeConfigValue
   onChange: (next: ClaudeConfigValue) => void
   claudeMdHint: string
   onConnectMcp?: (serverName: string) => void
+  /** See `McpEditor`'s `connections` prop — threaded through unchanged. */
+  mcpConnections?: McpOAuthConnectionInfo[]
   /**
    * The org scope already has a dedicated environment-variables editor
    * (Settings → Workspace) predating this tab; showing a second one here
@@ -827,6 +870,7 @@ export function ClaudeConfigFields({
           value={value.mcp_json}
           onChange={(next) => onChange({ ...value, mcp_json: next })}
           onConnect={onConnectMcp}
+          connections={mcpConnections}
         />
       )}
       {section === 'md' && (

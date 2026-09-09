@@ -671,6 +671,11 @@ function HarnessSettingsTab({
   })
   const [connecting, setConnecting] = useState<string | null>(null)
   const [connectError, setConnectError] = useState<string | null>(null)
+  const [connections, setConnections] = useState<McpOAuthConnectionInfo[]>([])
+
+  const loadConnections = () =>
+    void api.mcpOAuthConnections().then(setConnections).catch(() => setConnections([]))
+  useEffect(loadConnections, [])
 
   const currentProfile = () => ({
     claude_settings_json: config.claude_settings_json,
@@ -708,6 +713,7 @@ function HarnessSettingsTab({
         onChange={setConfig}
         claudeMdHint="Written to ~/.claude/CLAUDE.md, so it applies to every project"
         onConnectMcp={(name) => void onConnectMcp(name)}
+        mcpConnections={connections}
         showEnvVars={false}
       />
 
@@ -717,7 +723,7 @@ function HarnessSettingsTab({
         </button>
       </div>
 
-      <ConnectedMcpServers />
+      <ConnectedMcpServers connections={connections} reload={loadConnections} />
 
       {connecting && (
         // No project or session in hand here at all — relays through any one
@@ -726,7 +732,10 @@ function HarnessSettingsTab({
           target={{ scope: 'org' }}
           serverName={connecting}
           onClose={() => setConnecting(null)}
-          onConnected={() => setConnecting(null)}
+          onConnected={() => {
+            setConnecting(null)
+            loadConnections()
+          }}
         />
       )}
     </>
@@ -741,22 +750,22 @@ function HarnessSettingsTab({
  * lives here instead of leaving no way to revoke one without starting a
  * session just to do it.
  */
-function ConnectedMcpServers() {
-  const [connections, setConnections] = useState<McpOAuthConnectionInfo[] | null>(null)
+function ConnectedMcpServers({
+  connections,
+  reload,
+}: {
+  connections: McpOAuthConnectionInfo[]
+  reload: () => void
+}) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-
-  const load = () => void api.mcpOAuthConnections().then(setConnections).catch(() => setConnections([]))
-  useEffect(load, [])
-
-  if (!connections || connections.length === 0) return null
 
   const disconnect = async (name: string) => {
     setBusy(true)
     setError(null)
     try {
       await api.disconnectMcpOAuth(name)
-      load()
+      reload()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -769,14 +778,20 @@ function ConnectedMcpServers() {
       <h3>Connected MCP servers</h3>
       <p className="hint">Connected via OAuth, available to every session in this org.</p>
       {error && <div className="banner error">{error}</div>}
-      {connections.map((c) => (
-        <div className="row-between" key={c.id}>
-          <span>{c.server_name}</span>
-          <button className="danger" disabled={busy} onClick={() => void disconnect(c.server_name)}>
-            Disconnect
-          </button>
-        </div>
-      ))}
+      {connections.length === 0 ? (
+        <p className="muted small">
+          None yet — use Connect next to an HTTP or SSE server above to add one.
+        </p>
+      ) : (
+        connections.map((c) => (
+          <div className="row-between" key={c.id}>
+            <span>{c.server_name}</span>
+            <button className="danger" disabled={busy} onClick={() => void disconnect(c.server_name)}>
+              Disconnect
+            </button>
+          </div>
+        ))
+      )}
     </div>
   )
 }
