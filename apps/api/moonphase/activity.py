@@ -152,6 +152,21 @@ async def probe(
 # The marker is optional because only the highlighted line carries it.
 _OPTION = re.compile(r"^\s*[❯>»]?\s*(\d{1,2})[.)]\s+(\S.*?)\s*$")
 
+# Where a second panel beside the options — a file tree, a diff preview —
+# starts, if this line has one. A terminal is one flat character grid: a wide
+# pane renders that panel to the right of the options column on the very same
+# rows, so a naive "rest of the line is the label" reads both as one string.
+# A real label is prose, which is never box-drawing and is not naturally
+# double-spaced (any that manages it gets collapsed to one anyway, a few
+# lines down) — so whichever comes first is the boundary.
+_SIDE_PANEL = re.compile(r"\s{2,}|[─-╿]")
+
+
+def _drop_side_panel(text: str) -> str:
+    # Strip first: a continuation line's own indentation is a leading gap of
+    # exactly this shape, and is not the boundary being looked for here.
+    return _SIDE_PANEL.split(text.strip(), maxsplit=1)[0]
+
 
 @dataclass
 class Prompt:
@@ -189,7 +204,7 @@ def parse_prompt(pane: str, signals: ActivitySignals) -> Prompt | None:
                 # two questions into one set of buttons.
                 break
             seen.add(key)
-            label_text = " ".join(label.split())
+            label_text = " ".join(_drop_side_panel(label).split())
             if continuation:
                 # Continuation lines were collected bottom-up; restore reading order.
                 continuation.reverse()
@@ -214,7 +229,7 @@ def parse_prompt(pane: str, signals: ActivitySignals) -> Prompt | None:
             # while real chrome (question, separators) sits flush/base indent.
             indent = len(line) - len(line.lstrip())
             if label_indent is not None and indent >= label_indent:
-                continuation.append(" ".join(line.split()))
+                continuation.append(" ".join(_drop_side_panel(line).split()))
             else:
                 break
 
@@ -228,7 +243,7 @@ def parse_prompt(pane: str, signals: ActivitySignals) -> Prompt | None:
     question = ""
     fallback = ""
     for index in range(first_option_index - 1, max(-1, first_option_index - 16), -1):
-        text = " ".join(lines[index].split())
+        text = " ".join(_drop_side_panel(lines[index]).split())
         if not text or _OPTION.match(lines[index]):
             continue
         # Box drawing and separators carry no meaning.

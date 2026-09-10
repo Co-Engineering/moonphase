@@ -438,6 +438,32 @@ def test_a_separator_before_chat_about_this_does_not_swallow_the_real_options() 
     assert prompt.options[5]["label"] == "Chat about this"
 
 
+def test_a_side_panel_does_not_leak_into_the_option_beside_it() -> None:
+    """AskUserQuestion can render a file tree or diff preview beside the
+    options list. A terminal is one flat character grid, so on any row where
+    both are present, "the rest of the line is the label" reads across into
+    the panel — reported as an option reading "TS core + Python │
+    Proposal," where the tree beside it happened to say "Proposal," on that
+    row.
+    """
+    pane = (
+        "What's the backend stack?\n\n"
+        "❯ 1. TypeScript monorepo                 ┌ chief/\n"
+        "  2. Python backend, TS mobile            ├ packages/\n"
+        "  3. Go backend, TS mobile                │  └ shared/\n"
+        "  4. TS core + Python proposer             │    types:\n"
+        "                                          │    Proposal,\n"
+    )
+    prompt = parse_prompt(pane, CLAUDE.activity_signals())
+    assert prompt is not None
+    assert [o["label"] for o in prompt.options] == [
+        "TypeScript monorepo",
+        "Python backend, TS mobile",
+        "Go backend, TS mobile",
+        "TS core + Python proposer",
+    ]
+
+
 def test_no_prompt_when_the_agent_is_working() -> None:
     assert parse_prompt("⏺ Read(x.py)\n  240 lines\n", CLAUDE.activity_signals()) is None
 
