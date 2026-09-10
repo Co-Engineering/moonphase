@@ -67,10 +67,19 @@ describe('sign-in methods when the domain is missing', () => {
         )
       },
       // Real timers, and every retry does real work (a click, a render) —
-      // the default 1000ms budget is comfortable on a laptop but has flaked
-      // on CI's shared runners, failing a test whose logic was never wrong,
-      // just rushed.
-      { timeout: 5000 },
+      // 1000ms flaked on CI's shared runners once already, and the 5000ms it
+      // was bumped to since has now flaked there too. Doubled again rather
+      // than guessed at a third number: this is CI contention, not a wrong
+      // one, and the room to burn is on a test that runs in well under a
+      // second everywhere else.
+      //
+      // That earlier bump only raised this number, though — Vitest's own
+      // per-test default is also 5000ms, and it was that ceiling being hit
+      // first, not this one, that "Test timed out in 5000ms: pass a timeout
+      // value as the last argument" (Vitest's own wording, not waitFor's)
+      // was actually reporting. Raising only the inner one here again
+      // would have repeated the same non-fix.
+      { timeout: 10000 },
     )
-  })
+  }, 10000)
 })
