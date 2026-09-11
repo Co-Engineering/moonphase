@@ -49,6 +49,15 @@ function createWindow(): void {
     backgroundColor: '#0b0c12',
     title: 'Moonphase',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    // Left unset, this is macOS's own default — which is also whatever a
+    // given macOS/Electron version happens to consider default, not
+    // something the renderer can reserve matching space for without
+    // guessing at it. Pinning it here is what makes the sidebar's own
+    // .mac-inset spacing (apps/web/src/styles.css) something that actually
+    // lines up rather than a number tuned against one machine's defaults.
+    ...(process.platform === 'darwin'
+      ? { trafficLightPosition: { x: 20, y: 20 } }
+      : {}),
     webPreferences: {
       // The renderer is a plain web app talking to the API over HTTP and
       // WebSocket. It has no need for Node, and granting it any would widen

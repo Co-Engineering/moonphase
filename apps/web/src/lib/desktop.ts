@@ -38,6 +38,7 @@ export interface SessionWindowRequest {
 
 interface DesktopBridge {
   desktop: true
+  platform: NodeJS.Platform
   openPreview: (request: PreviewRequest) => Promise<{ ok: boolean; error?: string }>
   openSessionWindow: (
     request: SessionWindowRequest,
@@ -52,6 +53,15 @@ declare global {
 }
 
 export const isDesktop = (): boolean => Boolean(window.moonphase?.desktop)
+
+/**
+ * Only macOS hides the window's native title bar (see main.ts) and lets its
+ * own traffic-light buttons float over the page — Windows and Linux keep a
+ * normal frame, and a plain browser tab has no such overlay at all. Callers
+ * use this to reserve room in that corner instead of letting content render
+ * underneath those buttons.
+ */
+export const isMacDesktop = (): boolean => window.moonphase?.platform === 'darwin'
 
 /**
  * Tell the shell which server this window is actually talking to.

@@ -33,6 +33,14 @@ export interface SessionWindowRequest {
 contextBridge.exposeInMainWorld('moonphase', {
   /** True when running inside the desktop shell, so the web build can adapt. */
   desktop: true,
+  /**
+   * `darwin` is the one value that matters here: it is the only platform
+   * where the window has no native title bar (main.ts's `hiddenInset`) and
+   * so the only one where macOS draws its own traffic-light buttons
+   * floating over whatever the page renders in that corner, unless the page
+   * reserves room for them.
+   */
+  platform: process.platform,
   openPreview: (request: PreviewRequest): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('preview:open', request),
   openSessionWindow: (
