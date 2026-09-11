@@ -48,7 +48,7 @@ import { Feed } from './components/Feed'
 import { Share } from './components/Share'
 import { Attention, waiting } from './components/Attention'
 import { SessionWindow } from './routes/SessionWindow'
-import { announceApiHost, openSessionWindow, sessionWindowUrl } from './lib/desktop'
+import { announceApiHost, isMacDesktop, openSessionWindow, sessionWindowUrl } from './lib/desktop'
 import { HostDialog } from './components/HostDialog'
 import { RowMenu } from './components/RowMenu'
 import { RenameDialog } from './components/RenameDialog'
@@ -392,7 +392,7 @@ function Shell({ email }: { email: string }) {
     <div
       className={`app${showSidebar ? ' show-sidebar' : ''}${
         sidebarCollapsed ? ' sidebar-collapsed' : ''
-      }`}
+      }${isMacDesktop() ? ' mac-inset' : ''}`}
     >
       <aside className="sidebar">
         <div className="brand">

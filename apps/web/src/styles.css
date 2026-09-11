@@ -183,6 +183,17 @@ pre {
   border-bottom: 1px solid var(--border);
 }
 
+/* macOS hides the window's own title bar (titleBarStyle: 'hiddenInset',
+   apps/desktop/src/main.ts) and floats its traffic-light buttons over
+   whatever the page renders in that corner instead — which, at the top of
+   the sidebar, used to be this row's own icon and wordmark. main.ts pins
+   those buttons to x:20/y:20 specifically so this number is against a
+   position this app controls, not a per-OS-version default: the cluster is
+   about 54px wide from that origin, and this clears it with room to spare. */
+.mac-inset .brand {
+  padding-left: 84px;
+}
+
 .brand .glyph {
   color: var(--accent);
   font-size: 16px;
