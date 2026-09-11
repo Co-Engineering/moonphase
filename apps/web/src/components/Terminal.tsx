@@ -246,6 +246,104 @@ async function imageBlobToPngBase64(blob: Blob): Promise<string> {
   return dataUrl.slice(dataUrl.indexOf(',') + 1)
 }
 
+/** One row of the live buffer, in xterm's own vocabulary: `wrapped` is true
+ *  when the terminal itself broke this row off the one above because the
+ *  content ran past the last column — not when a program simply chose to
+ *  print a newline there. */
+export interface TerminalRow {
+  text: string
+  wrapped: boolean
+}
+
+/**
+ * Joins rows xterm marked as soft-wrapped onto the one above, with no
+ * inserted space — that is exactly how the content was split — so a URL (or
+ * anything else) that only wrapped because it ran past the terminal's width
+ * reads back as the one unbroken line a person sees on screen. This is the
+ * exact join `@xterm/addon-web-links` cannot make: it renders a clickable
+ * span per buffer row, so a link split across rows never becomes one match
+ * for it (see issue #124) — here there is no per-row span to render, so the
+ * rows can simply be joined before anything looks for a link at all.
+ */
+export function joinTerminalRows(rows: TerminalRow[]): string[] {
+  const lines: string[] = []
+  for (const row of rows) {
+    if (row.wrapped && lines.length > 0) {
+      lines[lines.length - 1] += row.text
+    } else {
+      lines.push(row.text)
+    }
+  }
+  return lines
+}
+
+const URL_PATTERN = /\bhttps?:\/\/[^\s<>"'`]+/gi
+const TRAILING_PUNCTUATION = /[.,;:!?)\]}>'"]+$/
+const CONTINUATION_CHARS = /^[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+/
+const MAX_CONTINUATION_LINES = 4
+
+/** Strips characters a sentence ends a URL with, not ones the URL itself
+ *  would ever end with — good enough that Copy needs no cleanup for the
+ *  overwhelming majority of links, not a full parser. */
+export function trimTrailingPunctuation(url: string): string {
+  return url.replace(TRAILING_PUNCTUATION, '')
+}
+
+/**
+ * Finds links in the terminal's own current viewport (already joined across
+ * xterm's soft wraps by `joinTerminalRows`). What that join cannot catch is
+ * Claude Code's own TUI: it lays out and wraps its interface to the terminal
+ * width itself and prints a real newline at the break, so xterm never marks
+ * that row as wrapped and the join above leaves it split in two. A match
+ * that runs all the way to the end of its line is treated as possibly one of
+ * these breaks and extended onto the next line if that line looks like more
+ * of a URL rather than something new — lenient, and occasionally wrong in
+ * exactly the way that was already flagged going in: the alternative is
+ * silently handing back a truncated link with no sign anything was cut.
+ */
+export function detectLinks(lines: string[]): string[] {
+  const seen = new Set<string>()
+  const links: string[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const pattern = new RegExp(URL_PATTERN)
+    let match: RegExpExecArray | null
+    while ((match = pattern.exec(line))) {
+      let url = match[0]
+      let touchesEdge = match.index + url.length === line.length
+      let lineIndex = i
+      let hops = 0
+      while (touchesEdge && hops < MAX_CONTINUATION_LINES) {
+        const next = lines[lineIndex + 1]
+        if (!next || /^\s/.test(next)) break
+        const extension = CONTINUATION_CHARS.exec(next)
+        if (!extension) break
+        url += extension[0]
+        lineIndex += 1
+        hops += 1
+        touchesEdge = extension[0].length === next.length
+      }
+      const cleaned = trimTrailingPunctuation(url)
+      if (cleaned.length > 'https://'.length && !seen.has(cleaned)) {
+        seen.add(cleaned)
+        links.push(cleaned)
+      }
+    }
+  }
+  return links
+}
+
+/** Truncates the middle of a long URL rather than the end — the part worth
+ *  recognising a link by is usually the host and the last path segment, and
+ *  a long token or query string in between is the least useful part to keep
+ *  on screen. */
+export function shortenLinkForDisplay(url: string, maxLength = 64): string {
+  if (url.length <= maxLength) return url
+  const head = Math.ceil((maxLength - 1) / 2)
+  const tail = Math.floor((maxLength - 1) / 2)
+  return `${url.slice(0, head)}…${url.slice(url.length - tail)}`
+}
+
 interface Props {
   projectId: string
   /** Which tmux session to attach to. Changing it reattaches. */
@@ -307,6 +405,14 @@ export function ProjectTerminal({
   const [uploadState, setUploadState] = useState<
     { kind: 'uploading' | 'done' | 'error'; label: string } | null
   >(null)
+  // Links currently visible in the terminal's on-screen buffer — rescanned
+  // as output streams in, so this reflects what's actually on screen rather
+  // than everything ever printed (scrollback:0 means the same is true of
+  // the terminal itself).
+  const [links, setLinks] = useState<string[]>([])
+  const [linksOpen, setLinksOpen] = useState(false)
+  const linksContainerRef = useRef<HTMLDivElement | null>(null)
+  const [copiedLink, setCopiedLink] = useState<string | null>(null)
 
   // Read through a ref inside the xterm callback: the terminal is rebuilt only
   // when the project or session changes, so a plain closure over the prop
@@ -324,6 +430,22 @@ export function ProjectTerminal({
   // the whole terminal on a project/session change): only the pending-timer
   // needs cleaning up on unmount, not on every reattach.
   useEffect(() => () => window.clearTimeout(uploadTimerRef.current), [])
+
+  useEffect(() => {
+    if (!linksOpen) return
+    const dismiss = (event: MouseEvent) => {
+      if (!linksContainerRef.current?.contains(event.target as Node)) setLinksOpen(false)
+    }
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setLinksOpen(false)
+    }
+    document.addEventListener('mousedown', dismiss, true)
+    document.addEventListener('keydown', escape)
+    return () => {
+      document.removeEventListener('mousedown', dismiss, true)
+      document.removeEventListener('keydown', escape)
+    }
+  }, [linksOpen])
 
   /**
    * Uploads each file into the session's working directory, then pastes the
@@ -371,6 +493,8 @@ export function ProjectTerminal({
     // runs, but the DOM node it pointed to is still the one to unhook from.
     const host = hostRef.current
     disposedRef.current = false
+    setLinks([])
+    setLinksOpen(false)
 
     const term = new Terminal({
       fontFamily:
@@ -662,6 +786,26 @@ export function ProjectTerminal({
       }
     })
 
+    // Rescanned on a short debounce rather than on every write: output during
+    // an active reply arrives in a burst of small writes, and re-walking the
+    // whole visible buffer after each one would do the same work dozens of
+    // times a second for no different a result.
+    let linkScanTimer: number | undefined
+    const scanLinks = () => {
+      if (disposedRef.current) return
+      const buffer = term.buffer.active
+      const rows: TerminalRow[] = []
+      for (let y = 0; y < buffer.length; y++) {
+        const row = buffer.getLine(y)
+        if (row) rows.push({ text: row.translateToString(true), wrapped: row.isWrapped })
+      }
+      setLinks(detectLinks(joinTerminalRows(rows)))
+    }
+    const onWriteParsed = term.onWriteParsed(() => {
+      window.clearTimeout(linkScanTimer)
+      linkScanTimer = window.setTimeout(scanLinks, 200)
+    })
+
     /**
      * The harness's own image paste shells out to the OS clipboard, which
      * this container does not have — see xclip-shim.sh for the other half of
@@ -865,8 +1009,10 @@ export function ProjectTerminal({
       window.removeEventListener('mouseup', flushPendingClipboard, { capture: true })
       window.removeEventListener('keydown', flushPendingClipboard, { capture: true })
       window.clearTimeout(pendingClipboardTimeoutRef.current)
+      window.clearTimeout(linkScanTimer)
       onData.dispose()
       onResize.dispose()
+      onWriteParsed.dispose()
       clipboardHandler.dispose()
       socketRef.current?.close()
 
@@ -919,6 +1065,54 @@ export function ProjectTerminal({
         >
           +
         </button>
+        {links.length > 0 && (
+          <div className="terminal-links" ref={linksContainerRef}>
+            <button
+              type="button"
+              className="terminal-links-button"
+              title={`${links.length} link${links.length === 1 ? '' : 's'} in view`}
+              aria-label={`${links.length} link${links.length === 1 ? '' : 's'} in view`}
+              aria-expanded={linksOpen}
+              onClick={() => setLinksOpen((was) => !was)}
+            >
+              🔗 {links.length}
+            </button>
+            {linksOpen && (
+              <div className="terminal-links-panel" role="menu">
+                {links.map((url) => (
+                  <div className="terminal-links-item" key={url}>
+                    <a
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="terminal-links-url"
+                      title={url}
+                    >
+                      {shortenLinkForDisplay(url)}
+                    </a>
+                    <button
+                      type="button"
+                      className="terminal-links-copy"
+                      onClick={() => {
+                        void copyText(url).then((copied) => {
+                          if (copied) {
+                            setCopiedLink(url)
+                            window.setTimeout(
+                              () => setCopiedLink((was) => (was === url ? null : was)),
+                              1500,
+                            )
+                          }
+                        })
+                      }}
+                    >
+                      {copiedLink === url ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         <div
           className={`terminal-status terminal-status--${status}${
             inputDropped ? ' input-dropped' : ''
