@@ -1694,6 +1694,8 @@ function ServerView({
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [confirmingReboot, setConfirmingReboot] = useState(false)
+  const [rebootNote, setRebootNote] = useState<string | null>(null)
   const resources = useResource<ServerResources>(
     () => api.serverResources(server.id),
     [server.id],
@@ -1838,6 +1840,39 @@ function ServerView({
         {owned && (
           <div className="card">
             <h2>Danger zone</h2>
+            <p className="hint">
+              A last resort for a server stuck the way a host-side Sysbox/procfs fault
+              leaves it — <code>docker exec</code> failing into containers that still
+              look up, with nothing short of a reboot seen to clear it. Every project on
+              the server goes down and comes back on its own once it is back up.
+              Requires passwordless sudo on the server, the same as installing Docker.
+            </p>
+            {confirmingReboot ? (
+              <span className="row-menu-confirm">
+                <button
+                  className="danger"
+                  disabled={busy}
+                  onClick={() => {
+                    setConfirmingReboot(false)
+                    setRebootNote(null)
+                    void act(async () => {
+                      const result = await api.rebootServer(server.id)
+                      setRebootNote(result.detail)
+                    })
+                  }}
+                >
+                  Reboot server
+                </button>
+                <button disabled={busy} onClick={() => setConfirmingReboot(false)}>
+                  Cancel
+                </button>
+              </span>
+            ) : (
+              <button className="danger" disabled={busy} onClick={() => setConfirmingReboot(true)}>
+                Reboot server
+              </button>
+            )}
+            {rebootNote && <p className="hint">{rebootNote}</p>}
             <p className="hint">
               Removing the server deletes its projects from Moonphase and revokes the key
               above. Container volumes on the machine are left alone.

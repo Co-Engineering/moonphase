@@ -142,6 +142,7 @@ for someone to decide the project should carry one.
   the API but not exposed in the UI, so one runaway build can starve a box.
 - **`git clone` failures leave the container running** with an empty workspace.
   Recoverable by hand; should be a retry action.
-- **The Docker install path needs passwordless sudo** and is the only place
-  Moonphase wants elevated rights. Servers with Docker preinstalled never hit
-  it.
+- **The Docker install path, and rebooting a server from Settings, need
+  passwordless sudo** — the only two places Moonphase wants elevated rights.
+  Servers with Docker preinstalled never hit the first; the second is a
+  last-resort action nobody has to use.
