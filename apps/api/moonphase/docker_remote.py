@@ -80,8 +80,9 @@ async def probe(conn: asyncssh.SSHClientConnection) -> DockerInfo:
 async def install(conn: asyncssh.SSHClientConnection, ssh_user: str) -> DockerInfo:
     """Install Docker via the official convenience script, then grant group access.
 
-    Requires passwordless sudo. This is the one place Moonphase needs elevated
-    rights on a managed server; everything afterwards runs as the plain user.
+    Requires passwordless sudo — one of the two places Moonphase needs
+    elevated rights on a managed server (`reboot`, below, is the other);
+    everything else runs as the plain user.
     """
     sudo_check = await ssh.run(conn, "sudo -n true", timeout=15)
     if not sudo_check.ok:
@@ -255,6 +256,37 @@ async def stop(conn: asyncssh.SSHClientConnection, name: str) -> None:
 
 async def remove(conn: asyncssh.SSHClientConnection, name: str) -> None:
     await ssh.run(conn, f"docker rm -f {shlex.quote(name)}", timeout=60)
+
+
+async def reboot(conn: asyncssh.SSHClientConnection) -> None:
+    """Reboot the machine this connection is on.
+
+    A last resort: some host-side faults leave every container's runtime in a
+    bad state — Sysbox's procfs emulation getting out of sync with the
+    kernel after a host update is the one actually seen in practice, surfacing
+    as `docker exec` failing into containers that otherwise look fine — and
+    nothing short of a reboot has been seen to clear it. Every project on the
+    server goes down; each container's `--restart unless-stopped` (see
+    `run_container`) and the monitor's own post-reboot session auto-resume
+    bring it back with no further action needed here.
+
+    Requires passwordless sudo, the same as installing Docker or Sysbox.
+    `systemctl reboot` normally returns as soon as the reboot is scheduled,
+    well before the machine actually goes down — but if this connection dies
+    before that command returns, that is the reboot taking effect, not a
+    failure to report back.
+    """
+    sudo_check = await ssh.run(conn, "sudo -n true", timeout=15)
+    if not sudo_check.ok:
+        raise SSHError(
+            "This server does not have passwordless sudo, so Moonphase cannot "
+            "reboot it. The same access Docker installation needs would let it — "
+            "or reboot the machine yourself."
+        )
+    try:
+        await ssh.run(conn, "sudo -n systemctl reboot", timeout=15)
+    except SSHError:
+        pass
 
 
 async def exec_capture(

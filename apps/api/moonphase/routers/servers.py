@@ -399,6 +399,43 @@ async def test_server(
     return _to_out(row)
 
 
+@router.post("/{server_id}/reboot")
+async def reboot_server(
+    server_id: UUID, principal: Principal = Depends(current_principal)
+) -> dict[str, Any]:
+    """Reboot the machine itself — a last resort, not a maintenance tool.
+
+    For a server stuck the way a host-side Sysbox/procfs mismatch leaves it,
+    where every `docker exec` fails but nothing short of a reboot has been
+    seen to clear it. Bouncing one misbehaving project costs only that
+    project — see `stop`/`start` on it instead.
+
+    Nothing here waits for the machine to come back: every project on it
+    goes down and returns on its own, the same way an external reboot
+    already does today (`docker_remote.reboot`'s restart-policy and
+    auto-resume machinery does not know or care who asked for the reboot).
+    """
+    await _require_admin(principal, server_id)
+    try:
+        target = await load_server_target(principal.claims, server_id)
+    except NotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    try:
+        conn_ssh = await ssh.pool.get(target)
+        await docker_remote.reboot(conn_ssh)
+    except SSHError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        # Whatever this connection was, it is no good after a reboot — and
+        # `reboot` above may well have returned cleanly before the machine
+        # actually went down, so there is no exception here to trigger a drop
+        # otherwise.
+        await ssh.pool.drop(str(server_id))
+
+    return {"detail": "Reboot sent. Projects on this server will come back on their own."}
+
+
 @router.delete("/{server_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_server(
     server_id: UUID,

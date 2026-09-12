@@ -538,6 +538,8 @@ export const api = {
       method: 'POST',
     }),
   testServer: (id: string) => request<Server>(`/api/servers/${id}/test`, { method: 'POST' }),
+  rebootServer: (id: string) =>
+    request<{ detail: string }>(`/api/servers/${id}/reboot`, { method: 'POST' }),
   serverResources: (id: string) =>
     request<ServerResources>(`/api/servers/${id}/resources`),
   /** The display name only — see the endpoint for why nothing else. */

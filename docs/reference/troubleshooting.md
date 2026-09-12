@@ -56,3 +56,14 @@ app, so ports are forwarded and renumbered. See
 
 **"No such session" when saving a save point.** Save points only work in sessions you
 own, because they commit as the session's git identity.
+
+**A session loops "connection lost — reattaching" and never comes back, with `OCI
+runtime exec failed` / `unsafe procfs detected` in the terminal.** A container's
+Sysbox-managed `/proc` emulation has gone out of sync with the host, usually after a
+kernel or `sysbox-fs` update on an already-running container — `docker exec` into it
+fails from then on, even though the container itself still looks up. Stopping and
+starting that one project's container is often enough (**Stop**, then **Start**, in its
+toolbar) since that re-runs the container runtime's setup fresh. If it keeps happening
+across projects on the same server, **Reboot server** in that server's settings is the
+last resort — it needs passwordless sudo, same as installing Docker, and every project
+on the server comes back on its own afterwards.
