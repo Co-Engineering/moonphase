@@ -78,6 +78,66 @@ def test_tool_summaries_pick_the_useful_field() -> None:
         assert events[0].text == expected, name
 
 
+def _todo_write_record(todos: object) -> dict:
+    return record(
+        message={
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "t", "name": "TodoWrite", "input": {"todos": todos}}
+            ],
+        }
+    )
+
+
+def test_todo_write_captures_the_checklist() -> None:
+    events = CLAUDE.parse_transcript_record(
+        _todo_write_record(
+            [
+                {"content": "Fix the bug", "status": "completed"},
+                {"content": "Add tests", "status": "in_progress"},
+                {"content": "Update docs", "status": "pending"},
+            ]
+        )
+    )
+    assert events[0].todos is not None
+    assert [t.content for t in events[0].todos] == ["Fix the bug", "Add tests", "Update docs"]
+    assert [t.status for t in events[0].todos] == ["completed", "in_progress", "pending"]
+    # Blank today (input is a list, not a string, so the generic fallback
+    # summary read as nothing) — this is the whole point of the feature.
+    assert events[0].text == "1/3 done"
+
+
+def test_todo_write_with_unrecognised_shape_is_ignored() -> None:
+    for bad_todos in [None, "not a list", [], [1, 2, 3], [{"status": "pending"}]]:
+        events = CLAUDE.parse_transcript_record(_todo_write_record(bad_todos))
+        assert events[0].todos is None
+        assert events[0].tool == "TodoWrite"
+
+
+def test_todo_write_tolerates_an_unknown_status() -> None:
+    events = CLAUDE.parse_transcript_record(
+        _todo_write_record([{"content": "Ship it", "status": "blocked"}])
+    )
+    assert events[0].todos is not None
+    # Still shown, not dropped — just not claimed to be further along than
+    # a status this parser has never seen actually means.
+    assert events[0].todos[0].content == "Ship it"
+    assert events[0].todos[0].status == "pending"
+
+
+def test_todo_write_summary_is_a_progress_count() -> None:
+    events = CLAUDE.parse_transcript_record(
+        _todo_write_record(
+            [
+                {"content": "a", "status": "completed"},
+                {"content": "b", "status": "completed"},
+                {"content": "c", "status": "pending"},
+            ]
+        )
+    )
+    assert events[0].text == "2/3 done"
+
+
 def test_an_unknown_tool_still_summarises_readably() -> None:
     events = CLAUDE.parse_transcript_record(
         record(

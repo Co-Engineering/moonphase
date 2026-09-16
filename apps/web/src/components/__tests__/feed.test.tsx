@@ -25,6 +25,7 @@ function event(over: Partial<FeedEvent> = {}): FeedEvent {
     truncated: false,
     image_media_type: null,
     image_data: null,
+    todos: null,
     ...over,
   }
 }

@@ -332,6 +332,16 @@ class SessionCreateIn(BaseModel):
     )
 
 
+class DiffLineOut(BaseModel):
+    sign: str
+    text: str
+
+
+class TodoItemOut(BaseModel):
+    content: str
+    status: str
+
+
 class TranscriptEventOut(BaseModel):
     id: str
     kind: str
@@ -340,6 +350,18 @@ class TranscriptEventOut(BaseModel):
     tool: str | None = None
     ok: bool | None = None
     sidechain: bool = False
+    # Everything below used to be silently dropped on the REST polling
+    # fallback (the live WebSocket path sends the full dataclass and was
+    # never affected) — this model validates every field `TranscriptEvent`
+    # actually carries now, so polling stops losing diffs, screenshots and
+    # todo checklists it always claimed to have.
+    diff: list[DiffLineOut] | None = None
+    added: int = 0
+    removed: int = 0
+    truncated: bool = False
+    image_media_type: str | None = None
+    image_data: str | None = None
+    todos: list[TodoItemOut] | None = None
 
 
 class PromptOptionOut(BaseModel):
