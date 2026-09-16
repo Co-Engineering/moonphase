@@ -1687,7 +1687,10 @@ button.linkish:hover:not(:disabled) {
   .topbar {
     height: auto;
     flex-wrap: wrap;
-    padding: 8px 10px;
+    /* Clears the status bar / notch on iOS — nothing else in the topbar's
+       own height reserves room for it, so without this the title and the
+       sidebar toggle render straight underneath it. */
+    padding: max(8px, env(safe-area-inset-top)) 10px 8px;
     gap: 6px;
   }
 
@@ -2641,7 +2644,10 @@ button.linkish:hover:not(:disabled) {
 }
 .usage-strip:hover { border-color: var(--border-strong); }
 .usage-strip strong { color: var(--text); font-variant-numeric: tabular-nums; }
-.usage-strip-more { margin-left: auto; color: var(--accent); white-space: nowrap; }
+/* Fixed-width and never-shrinking: short, and the one thing on this row that
+   must stay fully readable — it is the only affordance saying the strip is
+   tappable at all. */
+.usage-strip-more { margin-left: auto; color: var(--accent); white-space: nowrap; flex-shrink: 0; }
 .strip-bar {
   width: 72px;
   height: 6px;
@@ -2653,7 +2659,17 @@ button.linkish:hover:not(:disabled) {
 .strip-bar > span { display: block; height: 100%; background: var(--accent); }
 .strip-bar.warm > span { background: var(--amber); }
 .strip-bar.hot > span { background: var(--red); }
-.strip-text { white-space: nowrap; }
+/* The one child allowed to give up space on a narrow screen — `min-width: 0`
+   is required alongside `overflow`/`text-overflow` here, not decoration:
+   without it a flex item's default min-width is its own unwrapped content
+   width, which is what was pushing "Usage →" off the edge of the screen
+   entirely on a narrow phone rather than just truncating this instead. */
+.strip-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
 
 /* Limit windows ---------------------------------------------------------- */
 
