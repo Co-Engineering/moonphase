@@ -52,6 +52,13 @@ class DiffLine:
 
 
 @dataclass
+class TodoItem:
+    content: str
+    # pending | in_progress | completed
+    status: str
+
+
+@dataclass
 class TranscriptEvent:
     """One thing that happened, normalised across harnesses."""
 
@@ -75,6 +82,9 @@ class TranscriptEvent:
     # server, most often — as base64, ready for an <img data:> src.
     image_media_type: str | None = None
     image_data: str | None = None
+    # A TodoWrite call's own checklist, so the feed can pin the current plan
+    # instead of showing this as a blank tool call.
+    todos: list[TodoItem] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

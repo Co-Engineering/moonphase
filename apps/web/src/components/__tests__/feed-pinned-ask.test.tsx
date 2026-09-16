@@ -48,7 +48,7 @@ function ev(id: string, kind: FeedEvent['kind'], text: string): FeedEvent {
   return {
     id, kind, text, at: null, tool: null, ok: null, sidechain: false,
     diff: null, added: 0, removed: 0, truncated: false,
-    image_media_type: null, image_data: null,
+    image_media_type: null, image_data: null, todos: null,
   }
 }
 

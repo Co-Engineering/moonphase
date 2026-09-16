@@ -6,6 +6,7 @@ import {
   type DiffLine,
   type FeedEvent,
   type Prompt,
+  type TodoItem,
 } from '../lib/api'
 import { Markdown } from './Markdown'
 
@@ -70,24 +71,114 @@ function merge(current: FeedEvent[], incoming: FeedEvent[]): FeedEvent[] {
 // same burst of tool calls that always lands together while the agent works.
 const TIME_GAP_MS = 60_000
 
-type FeedListRow = { kind: 'event'; event: FeedEvent } | { kind: 'divider'; key: string; label: string }
+type FeedListRow =
+  | { kind: 'event'; event: FeedEvent; thread?: FeedEvent[] }
+  | { kind: 'divider'; key: string; label: string }
+  | { kind: 'tool-group'; key: string; events: FeedEvent[] }
 
 /** A stamp inserted wherever more than `TIME_GAP_MS` passed since the last
  *  timestamped row — including one before the very first — so scrolling
  *  through history shows where the time actually went, without repeating a
- *  clock on every line. */
-function insertTimeDividers(events: FeedEvent[]): FeedListRow[] {
-  const rows: FeedListRow[] = []
+ *  clock on every line. Takes rows rather than raw events so it can run
+ *  after `attachSidechainThreads` and leave a thread-carrying row untouched
+ *  rather than losing the thread it's carrying. */
+function insertTimeDividers(rows: FeedListRow[]): FeedListRow[] {
+  const out: FeedListRow[] = []
   let last: number | null = null
-  for (const event of events) {
-    const at = event.at ? Date.parse(event.at) : NaN
+  for (const row of rows) {
+    if (row.kind !== 'event') {
+      out.push(row)
+      continue
+    }
+    const at = row.event.at ? Date.parse(row.event.at) : NaN
     if (!Number.isNaN(at) && (last === null || at - last > TIME_GAP_MS)) {
-      rows.push({ kind: 'divider', key: `t-${event.id}`, label: formatEventTime(at) })
+      out.push({ kind: 'divider', key: `t-${row.event.id}`, label: formatEventTime(at) })
     }
     if (!Number.isNaN(at)) last = at
+    out.push(row)
+  }
+  return out
+}
+
+/** A run of at least this many plain tool calls in a row collapses into one
+ *  "N tool calls" line — a judgment call about what reads as a burst worth
+ *  folding away, not a technical constraint. */
+const TOOL_BURST_MIN_SIZE = 3
+
+/**
+ * Pairs a `Task` tool call with the sidechain (sub-agent) events that follow
+ * it, so the feed can show them as one collapsible thread instead of a run
+ * of individually dimmed rows interleaved with the main conversation.
+ *
+ * There is no real parent id linking a sidechain run to the Task call that
+ * spawned it (Claude Code's transcript records a flat `isSidechain` flag and
+ * nothing else) — this is a heuristic: the most recent unclaimed `Task` call
+ * claims the very next run of sidechain events. It fails safe rather than
+ * guessing wrong: a sidechain run with no preceding Task call (cut off by
+ * `MAX_EVENTS`, say), or two `Task` calls with nothing resolved between them
+ * (which Task would the next run even belong to?), both fall through to
+ * today's flat, individually dimmed rows rather than attaching to the wrong
+ * thread.
+ */
+function attachSidechainThreads(events: FeedEvent[]): FeedListRow[] {
+  const rows: FeedListRow[] = []
+  let pendingTask: number | 'ambiguous' | null = null
+  let i = 0
+  while (i < events.length) {
+    const event = events[i]
+    if (event.sidechain) {
+      const run: FeedEvent[] = []
+      while (i < events.length && events[i].sidechain) {
+        run.push(events[i])
+        i++
+      }
+      if (typeof pendingTask === 'number') {
+        const claimed = rows[pendingTask]
+        if (claimed.kind === 'event') claimed.thread = run
+      } else {
+        for (const sidechainEvent of run) rows.push({ kind: 'event', event: sidechainEvent })
+      }
+      pendingTask = null
+      continue
+    }
     rows.push({ kind: 'event', event })
+    if (event.kind === 'tool' && event.tool === 'Task') {
+      pendingTask = pendingTask === null ? rows.length - 1 : 'ambiguous'
+    }
+    i++
   }
   return rows
+}
+
+/**
+ * Folds a run of `TOOL_BURST_MIN_SIZE`+ plain tool calls into one collapsed
+ * row. A call carrying a diff is never folded in — an Edit or Write worth
+ * approving on its own merits must stay visible, not buried in a summary
+ * someone has to expand to notice. A row already carrying a sidechain
+ * thread is left alone too: it renders as its own `SubagentThread`, not a
+ * plain tool line, so it shouldn't be swallowed into a burst summary either.
+ */
+function groupToolBursts(rows: FeedListRow[]): FeedListRow[] {
+  const out: FeedListRow[] = []
+  let run: FeedEvent[] = []
+  const flush = () => {
+    if (run.length >= TOOL_BURST_MIN_SIZE) {
+      out.push({ kind: 'tool-group', key: `g-${run[0].id}`, events: run })
+    } else {
+      for (const event of run) out.push({ kind: 'event', event })
+    }
+    run = []
+  }
+  for (const row of rows) {
+    if (row.kind === 'event' && !row.thread && row.event.kind === 'tool' && !row.event.diff?.length) {
+      run.push(row.event)
+      continue
+    }
+    flush()
+    out.push(row)
+  }
+  flush()
+  return out
 }
 
 function formatEventTime(at: number): string {
@@ -391,10 +482,28 @@ export function Feed({
     ? [...events].reverse().find((e) => e.kind === 'tool' && e.diff?.length)
     : undefined
 
-  // A stamp before a real gap, not on every row: a burst of tool calls a
-  // second apart says nothing a clock would help with, but catching up on a
-  // session you stepped away from does need to know where the gap was.
-  const rows = useMemo(() => insertTimeDividers(events), [events])
+  // Sidechain runs are paired with the Task call that spawned them, then a
+  // stamp is inserted before a real time gap, then a run of plain tool
+  // calls folds into one line — each pass builds on the last, so order
+  // matters: pairing needs the raw event list, dividers need to skip over
+  // a thread rather than splitting it, and grouping must not fold a row
+  // that a divider or a thread already claimed.
+  const rows = useMemo(
+    () => groupToolBursts(insertTimeDividers(attachSidechainThreads(events))),
+    [events],
+  )
+
+  // The most recent TodoWrite call's own checklist — a sub-agent's is
+  // excluded on purpose, since its scratch list is not "the plan" for the
+  // session as a whole.
+  const latestTodos = useMemo(
+    () =>
+      [...events]
+        .reverse()
+        .find((e) => e.kind === 'tool' && e.tool === 'TodoWrite' && !e.sidechain && e.todos?.length)
+        ?.todos ?? null,
+    [events],
+  )
 
   // What you last asked for, pinned above the scroll so it survives being
   // buried under everything the agent did in response — the terminal has no
@@ -411,16 +520,21 @@ export function Feed({
   return (
     <div className="feed">
       <div className="feed-scroll" ref={scrollerRef} onScroll={onScroll}>
-        {lastUserMessage && (
-          <button
-            type="button"
-            className="feed-pinned-ask"
-            title="Jump to this message"
-            onClick={() => scrollToEvent(lastUserMessage.id)}
-          >
-            <span className="feed-pinned-label">Last asked</span>
-            <span className="feed-pinned-text">{lastUserMessage.text}</span>
-          </button>
+        {(latestTodos || lastUserMessage) && (
+          <div className="feed-pinned">
+            {latestTodos && <TodoChecklist todos={latestTodos} />}
+            {lastUserMessage && (
+              <button
+                type="button"
+                className="feed-pinned-ask"
+                title="Jump to this message"
+                onClick={() => scrollToEvent(lastUserMessage.id)}
+              >
+                <span className="feed-pinned-label">Last asked</span>
+                <span className="feed-pinned-text">{lastUserMessage.text}</span>
+              </button>
+            )}
+          </div>
         )}
         {!running ? (
           <div className="empty">
@@ -439,6 +553,12 @@ export function Feed({
             row.kind === 'divider' ? (
               <div className="feed-time-divider" key={row.key}>
                 {row.label}
+              </div>
+            ) : row.kind === 'tool-group' ? (
+              <ToolGroup key={row.key} events={row.events} />
+            ) : row.thread ? (
+              <div key={row.event.id} id={`feed-event-${row.event.id}`}>
+                <SubagentThread taskEvent={row.event} thread={row.thread} />
               </div>
             ) : (
               <div key={row.event.id} id={`feed-event-${row.event.id}`}>
@@ -771,8 +891,170 @@ function Screenshot({
   )
 }
 
-export function FeedRow({ event }: { event: FeedEvent }) {
-  const dim = event.sidechain ? ' sidechain' : ''
+const TODO_STATUS_GLYPH: Record<TodoItem['status'], string> = {
+  completed: '✓',
+  in_progress: '◐',
+  pending: '○',
+}
+
+/**
+ * The current plan, pinned above the scroll — collapsed to a progress count
+ * and whatever's active, same disclosure pattern as `Diff`/`Thinking`. A
+ * sub-agent's own TodoWrite calls never reach this component (see
+ * `latestTodos` in `Feed`), so what's shown here is always the main
+ * conversation's plan, not one narrower slice of it.
+ */
+function TodoChecklist({ todos }: { todos: TodoItem[] }) {
+  const [open, setOpen] = useState(false)
+  const done = todos.filter((t) => t.status === 'completed').length
+  const current = todos.find((t) => t.status === 'in_progress') ?? todos.find((t) => t.status === 'pending')
+
+  return (
+    <div className="feed-todos">
+      <button
+        type="button"
+        className={`feed-todos-head${open ? ' open' : ''}`}
+        onClick={() => setOpen((v) => !v)}
+        title={open ? 'Hide the plan' : 'Show the plan'}
+      >
+        <span className="disclose" aria-hidden="true" />
+        <span className="feed-todos-progress">
+          {done}/{todos.length}
+        </span>
+        {!open && current && <span className="feed-todos-current">{current.content}</span>}
+      </button>
+      {open && (
+        <div className="feed-todos-list">
+          {todos.map((todo, index) => (
+            <div
+              key={index}
+              className={`feed-todo-item${
+                todo.status === 'completed' ? ' done' : todo.status === 'in_progress' ? ' active' : ''
+              }`}
+            >
+              <span className="feed-todo-status" aria-hidden="true">
+                {TODO_STATUS_GLYPH[todo.status]}
+              </span>
+              {todo.content}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * A run of `TOOL_BURST_MIN_SIZE`+ plain tool calls, collapsed to one line —
+ * expanding it renders each original event through the ordinary `FeedRow`,
+ * so nothing about how a single call looks is duplicated here.
+ */
+function ToolGroup({ events }: { events: FeedEvent[] }) {
+  const [open, setOpen] = useState(false)
+  const counts = new Map<string, number>()
+  for (const event of events) {
+    const name = event.tool ?? 'tool'
+    counts.set(name, (counts.get(name) ?? 0) + 1)
+  }
+  const summary = [...counts.entries()]
+    .map(([name, count]) => (count > 1 ? `${name} ×${count}` : name))
+    .join(', ')
+
+  return (
+    <div className="feed-tool-group">
+      <button
+        type="button"
+        className={`feed-tool-group-head${open ? ' open' : ''}`}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="disclose" aria-hidden="true" />
+        <span className="feed-tool-icon">⏺</span>
+        <span className="feed-tool-name">{events.length} tool calls</span>
+        <span className="feed-tool-arg">{summary}</span>
+      </button>
+      {open && (
+        <div className="feed-tool-group-body">
+          {events.map((event) => (
+            <FeedRow key={event.id} event={event} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * A `Task` call and the sub-agent run it spawned, collapsed by default —
+ * exactly the kind of thing that should stay out of the way until asked
+ * for, same as today's dimmed-not-hidden treatment of sidechain traffic.
+ * The thread's own events get the same time-divider and tool-burst
+ * treatment the top level gets, recursively, so a busy sub-agent reads as
+ * easily as the main conversation does.
+ */
+function SubagentThread({ taskEvent, thread }: { taskEvent: FeedEvent; thread: FeedEvent[] }) {
+  const [open, setOpen] = useState(false)
+  const threadRows = useMemo(
+    () => groupToolBursts(insertTimeDividers(thread.map((event) => ({ kind: 'event' as const, event })))),
+    [thread],
+  )
+
+  return (
+    <div className="feed-subagent">
+      <button
+        type="button"
+        className={`feed-subagent-head${open ? ' open' : ''}`}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="disclose" aria-hidden="true" />
+        <ToolLine tool={taskEvent.tool} text={taskEvent.text} />
+        <span className="feed-subagent-count">
+          {thread.length} step{thread.length === 1 ? '' : 's'}
+        </span>
+      </button>
+      {open && (
+        <div className="feed-subagent-body">
+          {threadRows.map((row) =>
+            row.kind === 'divider' ? (
+              <div className="feed-time-divider" key={row.key}>
+                {row.label}
+              </div>
+            ) : row.kind === 'tool-group' ? (
+              <ToolGroup key={row.key} events={row.events} />
+            ) : (
+              <FeedRow key={row.event.id} event={row.event} suppressSidechainDim />
+            ),
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** The icon+name+arg content of one tool-call row, shared by `FeedRow`'s own
+ *  plain tool rows, a collapsed `SubagentThread`'s header (the Task call
+ *  that spawned it), and — via the same classes — `ToolGroup`'s summary. */
+function ToolLine({ tool, text }: { tool: string | null; text: string }) {
+  return (
+    <>
+      <span className="feed-tool-icon">{TOOL_ICON[tool ?? ''] ?? '⏺'}</span>
+      <span className="feed-tool-name">{tool}</span>
+      {text && <span className="feed-tool-arg">{text}</span>}
+    </>
+  )
+}
+
+export function FeedRow({
+  event,
+  suppressSidechainDim = false,
+}: {
+  event: FeedEvent
+  /** True only from inside a `SubagentThread` — its own wrapper already
+   *  says "this is sub-agent content," so dimming every row inside it too
+   *  is redundant. A row shown flat (no thread could be attached to it)
+   *  keeps the dim, since it's the only signal it has. */
+  suppressSidechainDim?: boolean
+}) {
+  const dim = event.sidechain && !suppressSidechainDim ? ' sidechain' : ''
 
   if (event.kind === 'tool') {
     if (event.diff?.length) {
@@ -790,9 +1072,7 @@ export function FeedRow({ event }: { event: FeedEvent }) {
     }
     return (
       <div className={`feed-row feed-tool${dim}`}>
-        <span className="feed-tool-icon">{TOOL_ICON[event.tool ?? ''] ?? '⏺'}</span>
-        <span className="feed-tool-name">{event.tool}</span>
-        {event.text && <span className="feed-tool-arg">{event.text}</span>}
+        <ToolLine tool={event.tool} text={event.text} />
       </div>
     )
   }

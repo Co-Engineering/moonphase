@@ -1161,19 +1161,29 @@ button.linkish:hover:not(:disabled) {
 
 /* Pinned to the top of .feed-scroll — extended over its padding by the
    negative margin, so it sits flush against the real edge instead of
-   leaving a gap the container's own top padding would otherwise show. */
-.feed-pinned-ask {
+   leaving a gap the container's own top padding would otherwise show.
+   Holds the current plan above "last asked" when both exist: the plan is
+   the more durable of the two, surviving a turn where "last asked" doesn't. */
+.feed-pinned {
   position: sticky;
   top: 0;
   z-index: 5;
-  display: block;
   width: calc(100% + 32px);
   margin: -14px -16px 12px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.feed-pinned-ask {
+  display: block;
+  width: 100%;
   padding: 8px 16px;
   text-align: left;
-  background: var(--bg-panel);
+  background: none;
   border: none;
-  border-bottom: 1px solid var(--border);
+  /* Only visible when a todo checklist sits above it — otherwise flush
+     against .feed-pinned's own top edge, same as before this existed. */
+  border-top: 1px solid var(--border);
   cursor: pointer;
 }
 
@@ -1199,12 +1209,120 @@ button.linkish:hover:not(:disabled) {
   text-overflow: ellipsis;
 }
 
+.feed-todos-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 8px 16px;
+  font-size: 13px;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.feed-todos-head:hover {
+  background: var(--bg-elev);
+}
+
+.feed-todos-progress {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+
+.feed-todos-current {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+}
+
+.feed-todos-list {
+  border-top: 1px solid var(--border);
+  padding: 6px 16px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.feed-todo-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.feed-todo-item.active {
+  color: var(--text);
+}
+
+.feed-todo-item.done {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+.feed-todo-status {
+  flex-shrink: 0;
+  width: 12px;
+  text-align: center;
+  color: var(--text-faint);
+}
+
+.feed-todo-item.active .feed-todo-status {
+  color: var(--accent);
+}
+
+.feed-todo-item.done .feed-todo-status {
+  color: var(--green);
+}
+
 /* Subagent traffic still matters, but should not compete with the main
    conversation for attention. */
 .feed-row.sidechain {
   opacity: 0.6;
   border-left: 2px solid var(--border-strong);
   padding-left: 10px;
+}
+
+/* A Task call paired with the sub-agent run it spawned — same left border
+   as the flat .sidechain treatment above, so a thread reads as a
+   continuation of it rather than a different visual language. Collapsed
+   by default: the same "matters, but shouldn't compete for attention"
+   reasoning as the flat case, just with somewhere to put it when expanded. */
+.feed-subagent {
+  margin-bottom: 5px;
+}
+
+.feed-subagent-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.feed-subagent-count {
+  color: var(--text-faint);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.feed-subagent-body {
+  border-left: 2px solid var(--border-strong);
+  padding-left: 10px;
+  margin-top: 6px;
 }
 
 .feed-who {
@@ -1455,6 +1573,37 @@ button.linkish:hover:not(:disabled) {
 .feed-result .feed-tool-arg {
   color: var(--red);
   white-space: normal;
+}
+
+/* A run of plain tool calls folded into one line — same dense mono rhythm
+   as a single .feed-tool row, since collapsed this is meant to read as one
+   more line among them, not a different kind of thing. */
+.feed-tool-group {
+  margin-bottom: 5px;
+}
+
+.feed-tool-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.feed-tool-group-body {
+  padding-left: 14px;
+  border-left: 1px solid var(--border);
+  margin-top: 4px;
+}
+
+.feed-tool-group-body .feed-row {
+  margin-bottom: 5px;
 }
 
 /* A screenshot the agent took — shown small so it doesn't dominate the feed,
@@ -1723,6 +1872,16 @@ button.linkish:hover:not(:disabled) {
 
   .feed-scroll {
     padding: 12px;
+  }
+
+  /* .feed-pinned's full-bleed negative margin has to match whatever
+     .feed-scroll's own padding actually is at this width, or it either
+     falls short of the real edge or — the bug this fixes — overruns it by
+     the difference and forces a horizontal scrollbar for the whole feed,
+     found while widening this element to also hold the todo checklist. */
+  .feed-pinned {
+    width: calc(100% + 24px);
+    margin: -12px -12px 12px;
   }
 
   /* The compose bar must be the last thing on screen — it is the one control

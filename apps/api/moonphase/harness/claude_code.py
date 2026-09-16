@@ -65,6 +65,46 @@ def _summarise_tool(name: str, tool_input: Any) -> str:
     return text[:160]
 
 
+_TODO_STATUSES = {"pending", "in_progress", "completed"}
+
+
+def _extract_todos(tool_input: Any) -> list[Any] | None:
+    """A TodoWrite call's checklist, or None if there isn't a usable one.
+
+    `_summarise_tool` falls back to "the first string value in the input
+    dict" for a tool it has no field mapping for — but TodoWrite's own input
+    is `{"todos": [...]}`, a list, so that fallback always read as blank.
+    Malformed items are skipped rather than rejecting the whole call: a
+    transcript is written concurrently with this being read, and a person
+    would rather see the todos that do parse than none at all.
+    """
+    from ..transcript import TodoItem
+
+    if not isinstance(tool_input, dict):
+        return None
+    raw = tool_input.get("todos")
+    if not isinstance(raw, list) or not raw:
+        return None
+
+    todos = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        status = item.get("status")
+        if status not in _TODO_STATUSES:
+            status = "pending"
+        todos.append(TodoItem(content=content.strip(), status=status))
+    return todos or None
+
+
+def _todo_summary(todos: list[Any]) -> str:
+    done = sum(1 for t in todos if t.status == "completed")
+    return f"{done}/{len(todos)} done"
+
+
 def _result_excerpt(content: Any) -> str:
     """A tool result reduced to something that fits on a phone."""
     if isinstance(content, str):
@@ -566,15 +606,19 @@ class ClaudeCode(Harness):
                     )
             elif block_type == "tool_use":
                 name = str(block.get("name", "tool"))
+                tool_input = block.get("input")
+                todos = _extract_todos(tool_input) if name == "TodoWrite" else None
+                text = _todo_summary(todos) if todos else _summarise_tool(name, tool_input)
                 event = TranscriptEvent(
                     id=block_id,
                     kind="tool",
                     tool=name,
-                    text=_summarise_tool(name, block.get("input")),
+                    text=text,
                     at=at,
                     sidechain=sidechain,
+                    todos=todos,
                 )
-                _attach_diff(event, name, block.get("input"))
+                _attach_diff(event, name, tool_input)
                 events.append(event)
             elif block_type == "tool_result":
                 is_error = bool(block.get("is_error"))

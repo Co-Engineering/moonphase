@@ -59,6 +59,7 @@ function msg(id: string, at: string | null, text = 'hi'): FeedEvent {
     truncated: false,
     image_media_type: null,
     image_data: null,
+    todos: null,
   }
 }
 

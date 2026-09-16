@@ -456,6 +456,13 @@ export interface FeedEvent {
   /** A screenshot the tool returned — a browser MCP server, most often. */
   image_media_type: string | null
   image_data: string | null
+  /** A TodoWrite call's own checklist, so the feed can pin the current plan. */
+  todos: TodoItem[] | null
+}
+
+export interface TodoItem {
+  content: string
+  status: 'pending' | 'in_progress' | 'completed'
 }
 
 export interface Prompt {
