@@ -321,6 +321,42 @@ pre {
   position: static;
 }
 
+/* Never allowed to wrap: an unstyled block full of inline-block buttons
+   wraps them internally, two or three deep, the moment the topbar runs
+   short of room — overflowing its own fixed height and landing on top of
+   the tabs and the title above it. flex-shrink: 0 keeps its natural width
+   instead, so it's the title (which actually has room to give, via the
+   ellipsis above) that yields first — and below the width in the media
+   query further down, this is hidden in favour of the menu above,
+   sidestepping the question of what happens when there truly isn't room
+   for both the tabs and these four buttons at any title length. */
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* Share/Window/Restart harness/Stop, plus the three view tabs, plus a
+   title and its metadata, all beside each other on one row genuinely need
+   this much width — a title long enough to matter still ellipsizes below
+   it, but there is no title length at which four buttons and three tabs
+   both fit in less. Measured empirically (a real project name, environment
+   and branch tag) rather than guessed: everything fits at 1100px and
+   above; below it, the menu replaces the row of buttons instead of letting
+   them threaten to wrap again. Deliberately its own query rather than
+   folded into the phone-width one further down, which is tuned for an
+   actual phone screen, not a merely narrow window. */
+@media (max-width: 1100px) {
+  .topbar-actions {
+    display: none;
+  }
+
+  .topbar-actions-menu {
+    display: block;
+  }
+}
+
 .topbar {
   height: 48px;
   border-bottom: 1px solid var(--border);
@@ -336,12 +372,23 @@ pre {
   font-size: 14px;
   font-weight: 600;
   margin: 0;
+  /* Shrinks before anything after it does, rather than forcing the topbar
+     to overflow or something further along it to wrap — a long project
+     name is the one thing here with no natural length limit. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .topbar .sub {
   color: var(--text-faint);
   font-size: 12px;
   font-family: var(--mono);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /*
@@ -1122,6 +1169,11 @@ button.linkish:hover:not(:disabled) {
   border: 1px solid var(--border-strong);
   border-radius: 6px;
   overflow: hidden;
+  /* The overflow above is for the border-radius, not for hiding content —
+     without this, a squeezed topbar clips "Changes" mid-word rather than
+     the title (which actually has an ellipsis to give way with) shrinking
+     first. */
+  flex-shrink: 0;
 }
 
 .view-toggle button {
@@ -1856,18 +1908,6 @@ button.linkish:hover:not(:disabled) {
   .topbar button {
     font-size: 12px;
     padding: 5px 9px;
-  }
-
-  /* Share/Window/Restart harness/Stop, as a row of buttons, wrapped into a
-     second and third row of chrome above content someone likely opened this
-     to answer right now. One menu instead keeps the topbar to a single row
-     beside the view tabs. */
-  .topbar-actions {
-    display: none;
-  }
-
-  .topbar-actions-menu {
-    display: block;
   }
 
   .feed-scroll {
