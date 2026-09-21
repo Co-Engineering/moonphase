@@ -105,7 +105,18 @@ export function sessionWindowUrl(projectId: string, session: string): string {
     project: projectId,
     session,
   })
-  return `${window.location.origin}${window.location.pathname}?${params}`
+  // `window.location` is the packaged app's own bundle, not the server —
+  // in the installed desktop app this page is loaded via `loadFile()`
+  // (see main.ts), a `file://` URL with nothing to do with the Moonphase
+  // instance the user typed in. Opening a session window with that origin
+  // built a `file://…` URL every time, which the main process's own
+  // scheme check then (correctly) refused to open at all. `currentHost()`
+  // already resolves to that instance's real address for exactly this
+  // reason, and falls back to `window.location.origin` itself in the one
+  // case that origin is actually right — a plain browser tab the API is
+  // serving. The path is always root: this app has no server-rendered
+  // routes, only the `?window=session` query string below.
+  return `${currentHost()}/?${params}`
 }
 
 export async function openPreviewWindow(
