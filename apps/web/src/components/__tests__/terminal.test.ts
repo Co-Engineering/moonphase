@@ -6,6 +6,7 @@ import {
   decodeOsc52ClipboardPayload,
   handleShiftEnterKeydown,
   isCopySelectionCombo,
+  isFailedPlainDragAttempt,
   isPlainPasteCombo,
   readClipboardImage,
   isShiftEnter,
@@ -195,6 +196,37 @@ describe('isCopySelectionCombo', () => {
 
   it('is false for Ctrl+anything-else', () => {
     expect(isCopySelectionCombo(copyCombo({ key: 'v' }))).toBe(false)
+  })
+})
+
+/**
+ * The moment worth teaching Shift+drag is exactly the one where a plain
+ * drag was just tried and nothing happened — not every time the terminal
+ * opens, whether or not anyone ever reaches for the mouse.
+ */
+describe('isFailedPlainDragAttempt', () => {
+  it('is true for a real drag with no Shift and nothing selected', () => {
+    expect(
+      isFailedPlainDragAttempt({ x: 10, y: 10, shiftKey: false }, { x: 60, y: 10 }, false),
+    ).toBe(true)
+  })
+
+  it('is false when Shift was held — that drag is expected to work', () => {
+    expect(
+      isFailedPlainDragAttempt({ x: 10, y: 10, shiftKey: true }, { x: 60, y: 10 }, false),
+    ).toBe(false)
+  })
+
+  it('is false when a selection actually resulted — nothing to explain', () => {
+    expect(
+      isFailedPlainDragAttempt({ x: 10, y: 10, shiftKey: false }, { x: 60, y: 10 }, true),
+    ).toBe(false)
+  })
+
+  it('is false for a plain click — hand tremor is not a drag attempt', () => {
+    expect(
+      isFailedPlainDragAttempt({ x: 10, y: 10, shiftKey: false }, { x: 11, y: 10 }, false),
+    ).toBe(false)
   })
 })
 

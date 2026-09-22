@@ -2307,6 +2307,47 @@ button.linkish:hover:not(:disabled) {
   pointer-events: none;
 }
 
+/* Shown right when a plain drag across the terminal did not select
+   anything — see isFailedPlainDragAttempt — not a permanent fixture, so it
+   sits low and out of the way rather than competing with the toolbar or
+   the read-only badge above it. */
+.terminal-copy-hint {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 32px);
+  font-size: 12px;
+  color: var(--text-dim);
+  background: rgba(15, 16, 23, 0.95);
+  border: 1px solid var(--border-strong);
+  border-radius: 20px;
+  padding: 6px 6px 6px 12px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 35%);
+}
+
+.terminal-copy-hint button {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-faint);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.terminal-copy-hint button:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.14);
+}
+
 .terminal-wrap.read-only .terminal-host {
   /* Enough to read comfortably, enough to feel unlike your own session. */
   opacity: 0.88;

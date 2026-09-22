@@ -97,6 +97,28 @@ export function isCopySelectionCombo(
   )
 }
 
+/** Real hand tremor during an ordinary click is a pixel or two; this is the
+ *  smallest movement worth calling a deliberate drag rather than a click. */
+const DRAG_ATTEMPT_THRESHOLD_PX = 4
+
+/**
+ * Someone dragged across the terminal without Shift held — the gesture
+ * every other app trains you to expect for select-and-copy — and it did
+ * nothing, because tmux's own mouse mode owns a plain drag (see
+ * isCopySelectionCombo's comment for why Shift+drag exists at all). Nothing
+ * in the UI ever taught that requirement; this is what decides whether to,
+ * right when it would actually help — not a banner shown on every open
+ * regardless of whether anyone ever reaches for the mouse.
+ */
+export function isFailedPlainDragAttempt(
+  start: { x: number; y: number; shiftKey: boolean },
+  end: { x: number; y: number },
+  hasSelection: boolean,
+): boolean {
+  if (start.shiftKey || hasSelection) return false
+  return Math.hypot(end.x - start.x, end.y - start.y) >= DRAG_ATTEMPT_THRESHOLD_PX
+}
+
 /**
  * Wraps a filename for safe insertion into a shell command line: single
  * quotes, with any embedded single quote escaped the POSIX way (close the
@@ -413,6 +435,13 @@ export function ProjectTerminal({
   const [linksOpen, setLinksOpen] = useState(false)
   const linksContainerRef = useRef<HTMLDivElement | null>(null)
   const [copiedLink, setCopiedLink] = useState<string | null>(null)
+  // Shown right when someone drags across the terminal without Shift held
+  // and nothing gets selected — not on every open, only when it would
+  // actually explain something. Reset per mount rather than remembered
+  // forever: missing it once (glanced away, dismissed too fast) should not
+  // mean never being taught again on a later attempt.
+  const [showCopyHint, setShowCopyHint] = useState(false)
+  const copyHintTimerRef = useRef<number | undefined>(undefined)
 
   // Read through a ref inside the xterm callback: the terminal is rebuilt only
   // when the project or session changes, so a plain closure over the prop
@@ -495,6 +524,7 @@ export function ProjectTerminal({
     disposedRef.current = false
     setLinks([])
     setLinksOpen(false)
+    setShowCopyHint(false)
 
     const term = new Terminal({
       fontFamily:
@@ -592,6 +622,28 @@ export function ProjectTerminal({
     window.addEventListener('keydown', flushPendingClipboard, { capture: true })
 
     term.open(host)
+
+    // Teaches Shift+drag right when a plain drag would otherwise silently do
+    // nothing — tmux's mouse mode owns a plain one, so nothing else on this
+    // page ever sees it happen. Only the start position and its shiftKey
+    // matter; xterm's own hasSelection() at mouseup says whether the drag
+    // actually produced a selection, which a plain drag here never does.
+    let dragStart: { x: number; y: number; shiftKey: boolean } | null = null
+    const onHostMouseDown = (event: MouseEvent) => {
+      dragStart = { x: event.clientX, y: event.clientY, shiftKey: event.shiftKey }
+    }
+    const onHostMouseUp = (event: MouseEvent) => {
+      const start = dragStart
+      dragStart = null
+      if (!start) return
+      if (isFailedPlainDragAttempt(start, { x: event.clientX, y: event.clientY }, term.hasSelection())) {
+        setShowCopyHint(true)
+        window.clearTimeout(copyHintTimerRef.current)
+        copyHintTimerRef.current = window.setTimeout(() => setShowCopyHint(false), 6000)
+      }
+    }
+    host.addEventListener('mousedown', onHostMouseDown)
+    host.addEventListener('mouseup', onHostMouseUp)
 
     /**
      * FitAddon reads the renderer's `dimensions`, which do not exist until the
@@ -1005,11 +1057,14 @@ export function ProjectTerminal({
       host.removeEventListener('paste', onPaste, { capture: true })
       host.removeEventListener('dragover', onDragOver)
       host.removeEventListener('drop', onDrop)
+      host.removeEventListener('mousedown', onHostMouseDown)
+      host.removeEventListener('mouseup', onHostMouseUp)
       window.removeEventListener('mousedown', flushPendingClipboard, { capture: true })
       window.removeEventListener('mouseup', flushPendingClipboard, { capture: true })
       window.removeEventListener('keydown', flushPendingClipboard, { capture: true })
       window.clearTimeout(pendingClipboardTimeoutRef.current)
       window.clearTimeout(linkScanTimer)
+      window.clearTimeout(copyHintTimerRef.current)
       onData.dispose()
       onResize.dispose()
       onWriteParsed.dispose()
@@ -1136,6 +1191,21 @@ export function ProjectTerminal({
                     : 'error'}
         </div>
       </div>
+      {showCopyHint && (
+        <div className="terminal-copy-hint">
+          <span>Hold Shift while dragging to select text, then Ctrl+C to copy.</span>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => {
+              window.clearTimeout(copyHintTimerRef.current)
+              setShowCopyHint(false)
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
       <div ref={hostRef} className="terminal-host" />
     </div>
   )
