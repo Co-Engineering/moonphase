@@ -62,7 +62,18 @@ log = logging.getLogger(__name__)
 # A fresh build, right now, with the same recipe, produces correct ownership —
 # confirmed directly against a real Sysbox-enabled project's host. Nothing
 # about the image needed to change; only its age did.
-RECIPE_VERSION = "8"
+#
+# v9 is the same story again, one layer up: `npm install -g
+# @anthropic-ai/claude-code@latest` below resolves "latest" exactly once, the
+# first time a given recipe is built on a given server, and every project on
+# that recipe reuses the resulting tag forever (ensure_image only builds when
+# the tag is missing). A server whose first build predates a new Claude model
+# has no way to see it — not an auth problem, and relogging cannot fix it,
+# because the binary itself is the thing that is old. Bumping the version
+# forces one rebuild that picks up whatever "latest" resolves to today; it
+# does not prevent this from recurring the next time Anthropic ships a model
+# a server's cached image predates.
+RECIPE_VERSION = "9"
 
 NODE_VERSION = "22.20.0"
 
