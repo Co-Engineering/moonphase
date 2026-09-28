@@ -476,6 +476,31 @@ async def kill_session(
     )
 
 
+async def remove_session_home(
+    conn: asyncssh.SSHClientConnection, container: str, session: str
+) -> None:
+    """Delete everything a session wrote to its home, not just its checkout.
+
+    `HOME` is set to this directory for everything the session ever ran (see
+    `space_for`), so package-manager caches, uploaded images, harness auth and
+    config all land here — none of it inside the worktree `remove_worktree`
+    already cleans up. Left alone, closing a session frees only the checkout
+    and every cache a session's toolchain ever downloaded stays on disk
+    forever, which is how a project with many short-lived sessions quietly
+    fills the volume.
+    """
+    home = shlex.quote(space_for(session).home)
+    result = await docker_remote.exec_capture(
+        conn, container, ["rm", "-rf", home], timeout=60
+    )
+    if not result.ok:
+        log.warning(
+            "could not remove session home for %s: %s",
+            session,
+            (result.stderr or result.stdout).strip()[:200],
+        )
+
+
 async def send_keys(
     conn: asyncssh.SSHClientConnection,
     container: str,

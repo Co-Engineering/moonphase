@@ -988,8 +988,10 @@ async def delete_session(
     """Kill a session and forget it.
 
     Yours to remove, or the project owner's to reclaim. The worktree goes with
-    it; the branch does not, because it may hold the only copy of work and a
-    "close this session" button should not be able to destroy that.
+    it, and so does everything else the session wrote to its home — caches,
+    uploads, harness auth. Only the branch survives, because it may hold the
+    only copy of work and a "close this session" button should not be able to
+    destroy that.
     """
     session_name = sessions.sanitise_name(name)
 
@@ -1013,6 +1015,7 @@ async def delete_session(
         conn_ssh = await ssh.pool.get(ctx.target)
         await sessions.kill_session(conn_ssh, ctx.container, session_name)
         await workspaces.remove_worktree(conn_ssh, ctx.container, session_name)
+        await sessions.remove_session_home(conn_ssh, ctx.container, session_name)
     except (SSHError, NotFound) as exc:
         # The row must still go: an unreachable server should not leave a
         # session the user cannot remove.
