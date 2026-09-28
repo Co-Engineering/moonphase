@@ -261,6 +261,28 @@ async def test_two_sessions_share_nothing_they_should_not(fake_server: str) -> N
         assert "bob" in still, "removing one session took the other down"
         print("  closing one keeps its branch, and leaves the other running")
 
+        # --- and closing frees the whole home, not just the checkout -----------
+        await sessions.remove_session_home(conn, container, "alice")
+
+        home_gone = await docker_remote.exec_capture(
+            conn, container,
+            ["sh", "-c", f"test -d {spaces['alice'].home} && echo present || echo gone"],
+            timeout=30,
+        )
+        assert home_gone.stdout.strip() == "gone", (
+            "caches, uploads and harness auth outlived the session that made them"
+        )
+        bob_claude_md = f"{spaces['bob'].home}/.claude/CLAUDE.md"
+        bob_home = await docker_remote.exec_capture(
+            conn, container,
+            ["sh", "-c", f"test -f {bob_claude_md} && echo present || echo gone"],
+            timeout=30,
+        )
+        assert bob_home.stdout.strip() == "present", (
+            "clearing alice's home took bob's down with it"
+        )
+        print("  and frees everything alice's session wrote to its home, leaving bob's alone")
+
     finally:
         try:
             cleanup = SSHTarget(
