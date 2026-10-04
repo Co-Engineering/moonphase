@@ -1139,3 +1139,29 @@ class RenameIn(BaseModel):
     """
 
     name: str
+
+
+class LeftoverSessionOut(BaseModel):
+    name: str
+    bytes: int
+    modified_at: datetime
+
+
+class LeftoversOut(BaseModel):
+    sessions: list[LeftoverSessionOut]
+    total_bytes: int
+
+
+class LeftoversCleanIn(BaseModel):
+    """The directories the person was shown and agreed to delete.
+
+    Re-checked on the server: only names that are still left over at the
+    moment of deleting are removed, so a session started in between is safe.
+    """
+
+    names: list[str] = Field(max_length=1000)
+
+
+class LeftoversCleanOut(BaseModel):
+    removed: list[str]
+    freed_bytes: int

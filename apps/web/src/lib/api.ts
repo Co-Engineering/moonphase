@@ -129,6 +129,17 @@ export interface ServerPendingCleanup {
   delete_after: string
 }
 
+export interface LeftoverSession {
+  name: string
+  bytes: number
+  modified_at: string
+}
+
+export interface Leftovers {
+  sessions: LeftoverSession[]
+  total_bytes: number
+}
+
 export interface ServerResources {
   /** Null until the background monitor has swept this server at least once. */
   disk_total_bytes: number | null
@@ -606,6 +617,14 @@ export const api = {
     }),
   /** Branches worth offering as a new session's starting point. */
   branches: (projectId: string) => request<string[]>(`/api/projects/${projectId}/branches`),
+  /** Directories of sessions that no longer exist. Scans the disk, so slow. */
+  leftovers: (projectId: string) =>
+    request<Leftovers>(`/api/projects/${projectId}/leftovers`),
+  cleanLeftovers: (projectId: string, names: string[]) =>
+    request<{ removed: string[]; freed_bytes: number }>(
+      `/api/projects/${projectId}/leftovers/clean`,
+      { method: 'POST', body: JSON.stringify({ names }) },
+    ),
   deleteSession: (projectId: string, name: string) =>
     request<void>(`/api/projects/${projectId}/sessions/${encodeURIComponent(name)}`, {
       method: 'DELETE',

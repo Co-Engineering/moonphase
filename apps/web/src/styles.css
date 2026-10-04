@@ -3618,3 +3618,10 @@ label.check.disabled .method-note { color: var(--text-faint); }
   content: '· ';
   color: var(--border-strong);
 }
+
+.usage-bar-action { font-size: 12px; white-space: nowrap; width: 56px; text-align: right; flex-shrink: 0; }
+.leftover-cleanup { margin: 4px 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; }
+.leftover-list { list-style: none; margin: 0 0 10px; padding: 0; font-size: 13px; max-height: 240px; overflow-y: auto; }
+.leftover-list li { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 2px 0; }
+.leftover-list li .hint { margin: 0; white-space: nowrap; }
+.leftover-list li span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }

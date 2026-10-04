@@ -883,6 +883,23 @@ async def count_sessions(conn: AsyncConnection, project_id: UUID) -> int:
     return int(result.scalar_one())
 
 
+async def session_claims_privileged(
+    conn: AsyncConnection, project_id: UUID
+) -> tuple[set[str], set[str]]:
+    """Every session's (home_dir, tmux name) in a project, whoever owns it.
+
+    For deciding what on disk is still in use, so it must see rows the caller
+    could not — a directory is never left over just because its owner is
+    someone else.
+    """
+    result = await conn.execute(
+        text("select home_dir, tmux_session from project_sessions where project_id = :pid"),
+        {"pid": project_id},
+    )
+    rows = result.all()
+    return {str(r[0]) for r in rows if r[0]}, {str(r[1]) for r in rows}
+
+
 async def touch_attached(
     conn: AsyncConnection, project_id: UUID, tmux_session: str
 ) -> None:
