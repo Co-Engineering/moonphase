@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shlex
+import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -17,6 +18,7 @@ from .. import (
     docker_remote,
     environments,
     imagebuild,
+    leftovers,
     preview,
     queries,
     runtime,
@@ -33,6 +35,7 @@ from ..config import get_settings
 from ..db import service_session, user_session
 from ..harness import SessionSpace
 from ..runtime import (
+    CAN_ADMINISTER,
     CAN_CONTROL,
     CAN_DELETE,
     CAN_OBSERVE,
@@ -40,6 +43,10 @@ from ..runtime import (
     NotFound,
 )
 from ..schemas import (
+    LeftoversCleanIn,
+    LeftoversCleanOut,
+    LeftoverSessionOut,
+    LeftoversOut,
     ProjectCreate,
     ProjectOut,
     RenameIn,
@@ -1025,6 +1032,97 @@ async def delete_session(
         removed = await queries.delete_session_row(conn, project_id, session_name)
     if not removed:
         raise HTTPException(status_code=404, detail="No such session.")
+
+
+async def _leftovers(
+    principal: Principal, project_id: UUID
+) -> tuple[Any, str, list[leftovers.SessionDirectory]]:
+    """The project's left-over session directories, found fresh.
+
+    Starts a stopped container but never recreates it: a recreate can mean
+    building an image, and the reason someone is here is usually a full disk.
+    """
+    try:
+        ctx = await runtime.load_project_context(
+            principal.claims, project_id, require=CAN_ADMINISTER
+        )
+    except NotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    try:
+        conn_ssh = await ssh.pool.get(ctx.target)
+        container = await docker_remote.inspect(conn_ssh, ctx.container)
+        if container is None:
+            raise HTTPException(status_code=409, detail="The project container is gone.")
+        if container.state != "running":
+            await docker_remote.start(conn_ssh, ctx.container)
+        directories = await leftovers.list_directories(conn_ssh, ctx.container)
+        live = await leftovers.live_tmux_sessions(conn_ssh, ctx.container)
+    except SSHError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    async with service_session() as conn:
+        homes, names = await queries.session_claims_privileged(conn, project_id)
+
+    found = leftovers.orphaned(
+        directories,
+        claimed_homes=homes,
+        claimed_names=names,
+        live_tmux=live,
+        now=time.time(),
+    )
+    return conn_ssh, ctx.container, found
+
+
+def _leftovers_out(found: list[leftovers.SessionDirectory]) -> LeftoversOut:
+    return LeftoversOut(
+        sessions=[
+            LeftoverSessionOut(
+                name=d.name,
+                bytes=d.bytes,
+                modified_at=datetime.fromtimestamp(d.modified_at, tz=UTC),
+            )
+            for d in found
+        ],
+        total_bytes=sum(d.bytes for d in found),
+    )
+
+
+@router.get("/{project_id}/leftovers", response_model=LeftoversOut)
+async def get_leftovers(
+    project_id: UUID, principal: Principal = Depends(current_principal)
+) -> LeftoversOut:
+    """Directories of sessions that no longer exist, with what deleting them frees."""
+    _, _, found = await _leftovers(principal, project_id)
+    return _leftovers_out(found)
+
+
+@router.post("/{project_id}/leftovers/clean", response_model=LeftoversCleanOut)
+async def clean_leftovers(
+    project_id: UUID,
+    payload: LeftoversCleanIn,
+    principal: Principal = Depends(current_principal),
+) -> LeftoversCleanOut:
+    """Delete the left-over directories the caller confirmed.
+
+    Only names that are still left over right now are touched — the list is
+    found again rather than trusted, so a session started since the caller
+    looked is never removed.
+    """
+    conn_ssh, container, found = await _leftovers(principal, project_id)
+    wanted = set(payload.names)
+    doomed = [d for d in found if d.name in wanted]
+    try:
+        await leftovers.remove(conn_ssh, container, [d.name for d in doomed])
+    except SSHError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    log.info(
+        "removed %d leftover session directories from %s", len(doomed), container
+    )
+    return LeftoversCleanOut(
+        removed=[d.name for d in doomed],
+        freed_bytes=sum(d.bytes for d in doomed),
+    )
 
 
 @router.patch("/{project_id}/sessions/{name}/rename", response_model=SessionOut)

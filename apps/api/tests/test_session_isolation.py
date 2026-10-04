@@ -18,7 +18,7 @@ import uuid
 
 import pytest
 
-from moonphase import docker_remote, provision, sessions, ssh, workspaces
+from moonphase import docker_remote, leftovers, provision, sessions, ssh, workspaces
 from moonphase import profile as profile_mod
 from moonphase.harness import HarnessAuthMode, HarnessCredential, SessionSpace
 from moonphase.harness import get as get_harness
@@ -282,6 +282,26 @@ async def test_two_sessions_share_nothing_they_should_not(fake_server: str) -> N
             "clearing alice's home took bob's down with it"
         )
         print("  and frees everything alice's session wrote to its home, leaving bob's alone")
+
+        # --- a directory stranded before closing cleaned up homes ---------------
+        await docker_remote.exec_capture(
+            conn, container,
+            ["sh", "-c",
+             "mkdir -p /home/dev/sessions/stale/.cache && "
+             "head -c 4096 /dev/zero > /home/dev/sessions/stale/.cache/blob"],
+            user="root", timeout=30,
+        )
+        listed = {d.name: d for d in await leftovers.list_directories(conn, container)}
+        assert "stale" in listed and listed["stale"].bytes >= 4096, listed
+        assert "bob" in listed
+        live = await leftovers.live_tmux_sessions(conn, container)
+        assert "bob" in live and "stale" not in live
+
+        await leftovers.remove(conn, container, ["stale"])
+        after = {d.name for d in await leftovers.list_directories(conn, container)}
+        assert "stale" not in after, "a root-owned leftover could not be removed"
+        assert "bob" in after
+        print("  and a stranded directory is found, sized, and removed")
 
     finally:
         try:

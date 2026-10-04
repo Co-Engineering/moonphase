@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Session as AuthSession } from '@supabase/supabase-js'
 import { client, configure } from './lib/supabase'
 import {
@@ -19,6 +19,7 @@ import { useCollapsed, useCollapsedFlag } from './lib/collapsed'
 import { useSessionOrder } from './lib/sessionOrder'
 import { playAlertSound } from './lib/sound'
 import { formatBytes } from './lib/bytes'
+import { LeftoverCleanup } from './components/LeftoverCleanup'
 import { readSoundAlertPreference } from './lib/soundAlertPreference'
 import { justStartedWaiting } from './lib/sessionActivity'
 import { Logo } from './components/Logo'
@@ -720,6 +721,11 @@ function Shell({ email }: { email: string }) {
         ) : activeServer ? (
           <ServerView
             server={activeServer}
+            adminProjectIds={
+              new Set(
+                (projects.data ?? []).filter((p) => p.access === 'admin').map((p) => p.id),
+              )
+            }
             onChanged={reloadAll}
             onNewProject={() => setShowNewProject(true)}
             onToggleSidebar={toggleSidebar}
@@ -1681,12 +1687,14 @@ function ActivityChip({ project }: { project: Project }) {
 
 function ServerView({
   server,
+  adminProjectIds,
   onChanged,
   onNewProject,
   onToggleSidebar,
   onShare,
 }: {
   server: Server
+  adminProjectIds: Set<string>
   onChanged: () => void
   onNewProject: () => void
   onToggleSidebar: () => void
@@ -1805,7 +1813,7 @@ function ServerView({
         <div className="card">
           <h2>Resources</h2>
           {resources.data?.sampled_at ? (
-            <ServerResourcesPanel data={resources.data} />
+            <ServerResourcesPanel data={resources.data} adminProjectIds={adminProjectIds} />
           ) : (
             <p className="hint">
               Not sampled yet — the background monitor reads this within a few minutes
@@ -1900,7 +1908,14 @@ function shareOf(value: number, top: number): number {
   return Math.max(2, Math.round((value / top) * 100))
 }
 
-function ServerResourcesPanel({ data }: { data: ServerResources }) {
+function ServerResourcesPanel({
+  data,
+  adminProjectIds,
+}: {
+  data: ServerResources
+  adminProjectIds: Set<string>
+}) {
+  const [cleaning, setCleaning] = useState<string | null>(null)
   const total = data.disk_total_bytes ?? 0
   const used = data.disk_used_bytes ?? 0
   const diskPercent = total > 0 ? Math.round((used / total) * 100) : 0
@@ -1939,16 +1954,37 @@ function ServerResourcesPanel({ data }: { data: ServerResources }) {
             {data.by_project.map((project) => {
               const bytes = project.workspace_bytes + project.home_bytes
               return (
-                <div key={project.project_id} className="usage-bar">
-                  <span className="usage-bar-name">{project.name}</span>
-                  <span className="usage-bar-track">
-                    <span
-                      className="usage-bar-fill"
-                      style={{ width: `${shareOf(bytes, topProjectBytes)}%` }}
+                <Fragment key={project.project_id}>
+                  <div className="usage-bar">
+                    <span className="usage-bar-name">{project.name}</span>
+                    <span className="usage-bar-track">
+                      <span
+                        className="usage-bar-fill"
+                        style={{ width: `${shareOf(bytes, topProjectBytes)}%` }}
+                      />
+                    </span>
+                    <span className="usage-bar-value">{formatBytes(bytes)}</span>
+                    {adminProjectIds.has(project.project_id) && (
+                      <button
+                        className="link usage-bar-action"
+                        onClick={() =>
+                          setCleaning(cleaning === project.project_id ? null : project.project_id)
+                        }
+                      >
+                        Clean up
+                      </button>
+                    )}
+                    {!adminProjectIds.has(project.project_id) && adminProjectIds.size > 0 && (
+                      <span className="usage-bar-action" />
+                    )}
+                  </div>
+                  {cleaning === project.project_id && (
+                    <LeftoverCleanup
+                      projectId={project.project_id}
+                      onClose={() => setCleaning(null)}
                     />
-                  </span>
-                  <span className="usage-bar-value">{formatBytes(bytes)}</span>
-                </div>
+                  )}
+                </Fragment>
               )
             })}
           </div>
