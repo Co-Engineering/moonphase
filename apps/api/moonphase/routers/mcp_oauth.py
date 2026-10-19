@@ -20,7 +20,17 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from .. import docker_remote, mcp_health, mcp_login, queries, runtime, sessions, ssh
+from .. import (
+    docker_remote,
+    harness_updates,
+    mcp_health,
+    mcp_login,
+    queries,
+    runtime,
+    sessions,
+    ssh,
+)
+from .. import harness as harness_registry
 from ..auth import Principal, current_principal
 from ..db import service_session, user_session
 from ..harness.base import HarnessKind
@@ -221,8 +231,12 @@ async def _check(
             session=session_name,
             space=space,
         )
+        # As a session runs it: the same binary, with its updater off.
+        command = harness_updates.managed_command(
+            harness_registry.get(ctx.harness), ["claude", "mcp", "list"]
+        )
         result = await docker_remote.exec_capture(
-            conn_ssh, ctx.container, ["claude", "mcp", "list"], timeout=45.0
+            conn_ssh, ctx.container, command, timeout=45.0
         )
     except SSHError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

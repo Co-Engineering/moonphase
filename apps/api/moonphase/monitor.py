@@ -77,9 +77,9 @@ RESOURCE_INTERVAL_SECONDS = 300.0
 # from filling back up between resource-usage readings.
 VOLUME_SWEEP_INTERVAL_SECONDS = 3600.0
 
-# How often each running container is asked to update its harnesses. Cheap
-# (one exec that usually exits at once); the container's own stamp enforces
-# MOONPHASE_HARNESS_UPDATE_HOURS.
+# The longest each running container goes between being asked to update its
+# harnesses. Cheap (one exec that usually exits at once); the container's own
+# stamp enforces MOONPHASE_HARNESS_UPDATE_HOURS.
 HARNESS_ASK_SECONDS = 3600
 
 # A volume Moonphase created for a project, matching the naming _container_name
@@ -700,15 +700,15 @@ class SessionMonitor:
         update; the container does the work, and skips it by itself if it
         already ran within the interval.
 
-        Asked more often than the interval, because a session starting in a
-        container also runs the update and resets its clock: asking only once
-        per interval could land just inside that window and wait almost a
-        whole extra interval for the next try.
+        Asked at least four times per interval, because a session starting in
+        a container also runs the update and resets its clock at any moment:
+        the next ask that finds the interval passed is then at most a quarter
+        of one late, where asking once per interval could be a whole one late.
         """
         hours = get_settings().moonphase_harness_update_hours
         if hours <= 0:
             return 0
-        ask_every = min(hours * 3600, HARNESS_ASK_SECONDS)
+        ask_every = min(HARNESS_ASK_SECONDS, hours * 3600 / 4)
         now = time.monotonic()
         async with service_session() as conn:
             servers = await queries.list_servers(conn)
@@ -742,26 +742,24 @@ class SessionMonitor:
                     continue
                 conn_ssh = await ssh.pool.get(target)
             except SSHError as exc:
+                # Only failing to connect says the server is unreachable.
                 self._back_off(server_id, str(server["name"]), exc)
                 continue
             for container in containers:
+                # Before asking, so one that fails waits for the next ask
+                # rather than being retried on every pass.
+                self._harnesses_checked[container] = now
                 try:
                     started = await harness_updates.trigger(conn_ssh, container)
-                except ssh.CommandFailed as exc:
-                    # The server answered, about this container only (paused,
-                    # gone since the query); the rest are still worth asking.
-                    log.debug("harness sweep: %s on %s: %s", container, server["name"], exc)
-                    continue
                 except SSHError as exc:
-                    # The connection itself: each remaining container would
-                    # only wait out the same timeout.
-                    self._back_off(server_id, str(server["name"]), exc)
+                    # A timeout, a full channel limit, docker refusing: about
+                    # this container or this moment, not the server, so no
+                    # back-off. Its other containers wait for the next pass
+                    # rather than queue behind the same trouble.
+                    log.info("harness sweep: %s on %s: %s", container, server["name"], exc)
                     break
                 self._failures.pop(server_id, None)
                 self._retry_after.pop(server_id, None)
-                # Only once asked, so a container that could not be is asked
-                # again on the next pass rather than an interval later.
-                self._harnesses_checked[container] = now
                 if started:
                     triggered += 1
         return triggered

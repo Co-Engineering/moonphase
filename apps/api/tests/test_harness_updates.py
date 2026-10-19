@@ -9,14 +9,18 @@ about a shell script, not about the Python that wrote it.
 
 from __future__ import annotations
 
+import asyncio
 import fcntl
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
@@ -95,13 +99,12 @@ class Box:
         self.home = base / "home"
         self.proc = base / "proc"
         self.bin = base / "bin"
-        # Stand-ins for /usr/local/bin and /etc/profile.d, which a test run
-        # must never write to, even as root.
-        self.links = base / "usr-local-bin"
+        # A stand-in for /etc/profile.d, which a test run must never write
+        # to, even as root.
         self.profile = base / "profile.d" / "moonphase-harness.sh"
         self.npm_log = base / "npm.log"
         self.script = base / "moonphase-harness-update"
-        for d in (self.home, self.proc, self.bin, self.links):
+        for d in (self.home, self.proc, self.bin):
             d.mkdir(parents=True, exist_ok=True)
         self.script.write_text(harness_updates.update_script())
         npm = self.bin / "npm"
@@ -123,7 +126,6 @@ class Box:
             "MOONPHASE_LEGACY_PREFIX": str(self.legacy),
             "MOONPHASE_DEV_HOME": str(self.home),
             "MOONPHASE_PROC": str(self.proc),
-            "MOONPHASE_BIN_LINK_DIR": str(self.links),
             "MOONPHASE_PROFILE_FILE": str(self.profile),
             "MOONPHASE_UPDATE_PATH": f"{self.bin}:/usr/bin:/bin",
             "STUB_LOG": str(self.npm_log),
@@ -261,6 +263,70 @@ def test_a_binary_that_does_not_run_leaves_current_untouched(box: Box) -> None:
     assert "does not run" in box.status()["packages"]["@anthropic-ai/claude-code"]["result"]
 
 
+def _break_current(box: Box) -> Path:
+    """Leave `current` pointing at a version whose binary no longer runs."""
+    binary = box.root / CLAUDE / "1.0.0" / "bin" / "claude"
+    binary.chmod(0o644)
+    return binary
+
+
+def _tree(path: Path) -> set[str]:
+    return {str(p.relative_to(path)) for p in path.rglob("*")}
+
+
+def test_a_broken_current_survives_a_failed_reinstall(box: Box) -> None:
+    """Reinstalling over the directory `current` points at, and then failing,
+    would leave `current` dangling."""
+    box.run("6")
+    _break_current(box)
+    before = _tree(box.root / CLAUDE)
+
+    result = box.run("6", "force", mode="fail")
+
+    assert result.returncode != 0
+    assert box.current() == "1.0.0"
+    assert (box.root / CLAUDE / "current").resolve() == (box.root / CLAUDE / "1.0.0").resolve()
+    assert _tree(box.root / CLAUDE) == before, "something was deleted or left behind"
+
+
+def test_a_broken_current_is_reinstalled_beside_itself(box: Box, monkeypatch) -> None:
+    box.run("6")
+    broken = _break_current(box)
+
+    result = box.run("6", "force")
+
+    assert result.returncode == 0, (box.state / "harness-update.log").read_text()
+    fresh = box.current()
+    assert fresh is not None and fresh.startswith("1.0.0.r"), fresh
+    assert box.previous() == "1.0.0"
+    assert broken.exists(), "previous is kept, broken or not"
+    _stub_harness(box.base / "image" / "claude", "image")
+    launched = _launch(box.base, monkeypatch)
+    assert launched.stdout.splitlines()[0] == "1.0.0", "the launcher ran the reinstall"
+
+    # The sibling counts as that version: nothing more to do.
+    box.npm_log.unlink()
+    assert box.run("6", "force").returncode == 0
+    assert box.current() == fresh
+    assert not [c for c in box.npm_calls() if c.startswith("npm install")]
+
+
+def test_a_leftover_at_the_versions_path_is_never_installed_over(box: Box) -> None:
+    """An install killed halfway leaves the directory behind; something there
+    may be in use, so the release goes beside it and prune clears it."""
+    box.run("6")
+    (box.root / CLAUDE / "2.0.0" / "lib" / "half").mkdir(parents=True)
+
+    result = box.run("6", "force", version="2.0.0")
+
+    assert result.returncode == 0
+    fresh = box.current()
+    assert fresh is not None and fresh.startswith("2.0.0.r"), fresh
+    assert box.previous() == "1.0.0"
+    assert box.versions() == {"1.0.0", fresh}
+    assert box.current(OPENCODE) == "2.0.0"
+
+
 def test_an_unresolvable_channel_changes_nothing(box: Box) -> None:
     box.run("6")
     box.npm_log.unlink()
@@ -356,9 +422,9 @@ def test_a_run_older_than_the_interval_goes_ahead(box: Box) -> None:
 
 
 def test_the_interval_counts_from_when_the_last_run_started(box: Box) -> None:
-    """The monitor asks again one interval after it last asked. Counted from
-    the end of a run, that ask always lands too early and does nothing, and
-    updates happen every second interval."""
+    """Counted from the end, every interval would also stretch by however long
+    the run took, and an ask landing one interval after the start would find
+    it not yet due."""
     hours = f"{2 / 3600:.6f}"  # two seconds
     box.run(hours, STUB_SLEEP="1")  # one second per package: the run takes two
 
@@ -522,6 +588,18 @@ def test_current_and_previous_are_kept_with_nothing_running_them(box: Box) -> No
     assert box.previous() == "1.0.0"
 
 
+def test_prune_keeps_what_previous_resolves_to_however_it_is_spelled(box: Box) -> None:
+    for version in ("1.0.0", "2.0.0"):
+        box.run("6", "force", version=version)
+    previous = box.root / CLAUDE / "previous"
+    previous.unlink()
+    previous.symlink_to(box.root / CLAUDE / "1.0.0")
+
+    box.run("6", "force", version="2.0.0")
+
+    assert box.versions(CLAUDE) == {"1.0.0", "2.0.0"}
+
+
 def test_a_session_the_launcher_started_keeps_its_version(box: Box, monkeypatch) -> None:
     """The two halves together: what the launcher puts in argv is what prune
     finds, with no readable exe to fall back on."""
@@ -540,35 +618,22 @@ def test_a_session_the_launcher_started_keeps_its_version(box: Box, monkeypatch)
 # --- the rest of the container --------------------------------------------------
 
 
-def test_a_switch_points_the_image_bin_dir_at_current(box: Box) -> None:
-    """So a shell, `claude mcp list` and anything else that finds the harness
-    on PATH runs the same release sessions do, not the image's."""
-    (box.links / "claude").symlink_to("../lib/node_modules/@anthropic-ai/claude-code/cli.js")
-    box.run("6", "force", version="1.0.0")
-    box.run("6", "force", version="2.0.0")
+def test_the_image_copy_is_never_touched() -> None:
+    """It is the fallback when Moonphase's copy is missing or broken, and a
+    link over it makes root's own `npm i -g` fail with EEXIST."""
+    script = harness_updates.update_script()
 
-    for slug, binary in ((CLAUDE, "claude"), (OPENCODE, "opencode")):
-        link = box.links / binary
-        assert os.readlink(link) == str(box.root / slug / "current" / "bin" / binary)
-        assert link.resolve() == (box.root / slug / "2.0.0" / "bin" / binary).resolve()
-        out = subprocess.run([str(link)], capture_output=True, text=True, check=True)
-        assert out.stdout.strip() == "2.0.0"
-    assert not [p for p in box.links.iterdir() if p.name.startswith(".")]
+    mentions = [line for line in script.splitlines() if harness_updates.IMAGE_BIN_DIR in line]
+    assert mentions and all(line.startswith("PATH=") for line in mentions), mentions
 
 
-@pytest.mark.parametrize("mode", ["fail", "broken"])
-def test_a_failed_install_leaves_the_image_bin_dir_alone(box: Box, mode: str) -> None:
-    image = box.base / "image" / "claude"
-    image.parent.mkdir()
-    image.write_text("#!/bin/sh\necho 0.9.0\n")
-    image.chmod(0o755)
-    (box.links / "claude").symlink_to(image)
-
-    result = box.run("6", "force", mode=mode)
-
-    assert result.returncode != 0
-    assert os.readlink(box.links / "claude") == str(image)
-    assert not (box.links / "opencode").exists()
+def _login(box: Box, command: str, path: str) -> str:
+    """What `command` prints in a login shell, which sources the profile."""
+    out = subprocess.run(
+        ["sh", "-c", f'. "$1"; {command}', "sh", str(box.profile)],
+        env={"PATH": path}, capture_output=True, text=True, timeout=30,
+    )
+    return out.stdout.strip()
 
 
 def test_login_shells_get_the_updater_switches(box: Box) -> None:
@@ -577,15 +642,45 @@ def test_login_shells_get_the_updater_switches(box: Box) -> None:
     box.run("6")
 
     lines = box.profile.read_text().splitlines()
-    exports = [line for line in lines if line and not line.startswith("#")]
-    assert exports == ["export DISABLE_AUTOUPDATER=1", "export OPENCODE_DISABLE_AUTOUPDATE=1"]
+    code = [line for line in lines if line and not line.startswith("#")]
+    assert code[:2] == ["export DISABLE_AUTOUPDATER=1", "export OPENCODE_DISABLE_AUTOUPDATE=1"]
+    assert code[-1] == "export PATH"
     assert box.profile.stat().st_mode & 0o777 == 0o644
-    sourced = subprocess.run(
-        ["sh", "-c", '. "$1"; echo "$DISABLE_AUTOUPDATER$OPENCODE_DISABLE_AUTOUPDATE"',
-         "sh", str(box.profile)],
-        capture_output=True, text=True, check=True,
-    )
-    assert sourced.stdout.strip() == "11"
+    switches = _login(box, 'echo "$DISABLE_AUTOUPDATER$OPENCODE_DISABLE_AUTOUPDATE"', "/bin")
+    assert switches == "11"
+
+
+def test_login_shells_find_moonphases_copy_first(box: Box) -> None:
+    image = box.base / "image"
+    _stub_harness(image / "claude", "image")
+    _stub_harness(image / "opencode", "image")
+    box.run("6", version="2.0.0")
+    path = f"{image}:/usr/bin:/bin"
+
+    for slug, binary in ((CLAUDE, "claude"), (OPENCODE, "opencode")):
+        found = _login(box, f"command -v {binary}", path)
+        assert found == str(box.root / slug / "current" / "bin" / binary)
+        assert _login(box, binary, path) == "2.0.0"
+
+
+@pytest.mark.parametrize("breakage", ["dangling", "not executable"])
+def test_login_shells_fall_back_to_the_images_copy(box: Box, breakage: str) -> None:
+    """Checked at login rather than baked in, so a broken `current` costs a
+    shell nothing — the image's copy is still where it always was."""
+    image = box.base / "image"
+    _stub_harness(image / "claude", "image")
+    box.run("6")
+    if breakage == "dangling":
+        (box.root / CLAUDE / "current").unlink()
+        (box.root / CLAUDE / "current").symlink_to("9.9.9")
+    else:
+        _break_current(box)
+    path = f"{image}:/usr/bin:/bin"
+
+    assert _login(box, "command -v claude", path) == str(image / "claude")
+    assert _login(box, 'echo "$PATH"', path) == (
+        f"{box.root / OPENCODE / 'current' / 'bin'}:{path}"
+    ), "nothing added for the broken one"
 
 
 # --- the launcher -------------------------------------------------------------------
@@ -602,11 +697,18 @@ def _stub_harness(path: Path, label: str) -> None:
     path.chmod(0o755)
 
 
-def _run_launcher(tmp_path: Path, monkeypatch, *, extra_path: Path | None = None) -> str:
-    if shutil.which("bash") is None:
-        pytest.skip("bash is not installed")
+def _copies_under(tmp_path: Path, monkeypatch) -> None:
+    """Point Moonphase's install root and the image's bin dir into `tmp_path`."""
     monkeypatch.setattr(harness_updates, "INSTALL_ROOT", str(tmp_path / "opt"))
     monkeypatch.setattr(harness_updates, "IMAGE_BIN_DIR", str(tmp_path / "image"))
+
+
+def _launch(
+    tmp_path: Path, monkeypatch, *, extra_path: Path | None = None
+) -> subprocess.CompletedProcess[str]:
+    if shutil.which("bash") is None:
+        pytest.skip("bash is not installed")
+    _copies_under(tmp_path, monkeypatch)
     space = SessionSpace(home=str(tmp_path / "home"), workdir=str(tmp_path / "work"))
     Path(space.home).mkdir(exist_ok=True)
     Path(space.workdir).mkdir(exist_ok=True)
@@ -622,7 +724,7 @@ def _run_launcher(tmp_path: Path, monkeypatch, *, extra_path: Path | None = None
     path = os.environ["PATH"]
     if extra_path is not None:
         path = f"{extra_path}:{path}"
-    subprocess.run(
+    return subprocess.run(
         ["bash", str(launcher)],
         env={"PATH": path},
         stdin=subprocess.DEVNULL,
@@ -630,7 +732,11 @@ def _run_launcher(tmp_path: Path, monkeypatch, *, extra_path: Path | None = None
         text=True,
         timeout=30,
     )
-    return (Path(space.home) / "ran").read_text().strip()
+
+
+def _run_launcher(tmp_path: Path, monkeypatch, *, extra_path: Path | None = None) -> str:
+    _launch(tmp_path, monkeypatch, extra_path=extra_path)
+    return (tmp_path / "home" / "ran").read_text().strip()
 
 
 def test_launcher_prefers_moonphases_own_copy(tmp_path: Path, monkeypatch) -> None:
@@ -721,6 +827,116 @@ def test_every_npm_harness_turns_its_own_updater_off() -> None:
         if harness.managed_package:
             assert harness.managed_binary
             assert harness.managed_env(), harness.kind
+
+
+# --- Moonphase's own calls ------------------------------------------------------------
+
+
+def _copies(tmp_path: Path, monkeypatch, *, managed: bool) -> Path:
+    """The image's claude, and Moonphase's when `managed`. Returns a HOME."""
+    _copies_under(tmp_path, monkeypatch)
+    _stub_harness(tmp_path / "image" / "claude", "image")
+    if managed:
+        _stub_harness(tmp_path / "opt" / CLAUDE / "1.0.0" / "bin" / "claude", "managed")
+        (tmp_path / "opt" / CLAUDE / "current").symlink_to("1.0.0")
+    home = tmp_path / "home"
+    home.mkdir()
+    return home
+
+
+def _ran(argv: list[str], home: Path) -> str:
+    """Run `argv` as `docker exec` would, from a PATH with no claude on it."""
+    subprocess.run(
+        argv, env={"PATH": "/usr/bin:/bin", "HOME": str(home)},
+        stdin=subprocess.DEVNULL, capture_output=True, timeout=30,
+    )
+    return (home / "ran").read_text().strip()
+
+
+@pytest.mark.parametrize("managed", [True, False])
+def test_own_calls_run_what_a_session_would(tmp_path: Path, monkeypatch, managed: bool) -> None:
+    home = _copies(tmp_path, monkeypatch, managed=managed)
+    argv = harness_updates.managed_command(registry.get("claude_code"), ["claude", "a b", "c"])
+
+    label = "managed" if managed else "image"
+    assert _ran(argv, home) == f"{label}|a b c|1|"
+
+
+def test_own_calls_leave_other_commands_alone() -> None:
+    harness = registry.get("claude_code")
+    assert harness_updates.managed_command(harness, ["tmux", "ls"]) == ["tmux", "ls"]
+    assert harness_updates.managed_command(registry.get("pydantic_ai"), ["clai"]) == ["clai"]
+
+
+@pytest.mark.parametrize("managed", [True, False])
+async def test_mcp_list_runs_what_a_session_would(
+    tmp_path: Path, monkeypatch, managed: bool
+) -> None:
+    from moonphase import docker_remote, runtime
+    from moonphase.harness import HarnessKind
+    from moonphase.routers import mcp_oauth
+
+    home = _copies(tmp_path, monkeypatch, managed=managed)
+    captured: list[list[str]] = []
+    ctx = SimpleNamespace(
+        harness=HarnessKind.CLAUDE_CODE, target=object(), container="mp-c", project={}
+    )
+
+    def returning(value):
+        async def fake(*_a, **_k):
+            return value
+        return fake
+
+    async def exec_capture(_conn, _container, command, **_kw):
+        captured.append(command)
+        return CommandResult(0, "", "")
+
+    monkeypatch.setattr(runtime, "load_project_context", returning(ctx))
+    monkeypatch.setattr(
+        runtime, "load_session_space", returning((SessionSpace(), {"is_mine": True}))
+    )
+    monkeypatch.setattr(runtime, "load_session_profile", returning(None))
+    monkeypatch.setattr(ssh.pool, "get", returning(object()))
+    monkeypatch.setattr(sessions, "ensure_session", returning(False))
+    monkeypatch.setattr(docker_remote, "exec_capture", exec_capture)
+
+    await mcp_oauth._check(uuid4(), "mine", SimpleNamespace(claims={}))
+
+    label = "managed" if managed else "image"
+    assert _ran(captured[0], home) == f"{label}|mcp list|1|"
+
+
+@pytest.mark.parametrize("managed", [True, False])
+async def test_mcp_login_runs_what_a_session_would(
+    tmp_path: Path, monkeypatch, managed: bool
+) -> None:
+    from moonphase import mcp_login
+
+    home = _copies(tmp_path, monkeypatch, managed=managed)
+    commands: list[str] = []
+
+    async def run(_conn, command, *, timeout: float = 60.0, stdin=None):
+        commands.append(command)
+        if "capture-pane" in command:
+            return CommandResult(0, "Visit https://auth.example/authorize?x=1\n", "")
+        return CommandResult(0, "", "")
+
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(ssh, "run", run)
+    monkeypatch.setattr(mcp_login.asyncio, "sleep", lambda _s: real_sleep(0))
+    monkeypatch.setattr(mcp_login, "SESSION_TTL_SECONDS", 0)
+    session = mcp_login.McpLoginSession(
+        id="s1", org_id="o", project_id="p", session_name="mine", server_name="srv",
+        home=str(home), container="mp-c", tmux_session="moonphase-mcp-login-s1",
+    )
+
+    await mcp_login._prepare(None, session)
+
+    assert session.state == "awaiting_paste", session.detail
+    start = next(c for c in commands if " new-session " in c)
+    pane_command = shlex.split(start)[-1]
+    label = "managed" if managed else "image"
+    assert _ran(["sh", "-c", pane_command], home) == f"{label}|mcp login srv --no-browser|1|"
 
 
 # --- triggers ------------------------------------------------------------------------
@@ -858,15 +1074,57 @@ async def test_sweep_asks_running_containers_hourly_and_leaves_the_interval_to_t
     assert triggered == ["c1", "c5", "c1", "c5"]
 
 
-async def test_a_short_interval_is_asked_at_that_interval(sweep, monkeypatch) -> None:
-    monitor, clock, triggered = sweep
-    monkeypatch.setattr(get_settings(), "moonphase_harness_update_hours", 0.25)
+@pytest.mark.parametrize("hours", [1.5, 0.25])
+async def test_an_update_is_at_most_a_quarter_interval_late(
+    sweep, monkeypatch, tmp_path: Path, hours: float
+) -> None:
+    """The container's last update can start at any moment relative to the
+    asks — a session start, an API restart, a new container. Asking once an
+    hour put 1.5h updates two hours apart, and asking once an interval let a
+    short one slip by nearly a whole extra interval. The real script decides,
+    on a clock shared with the monitor's."""
+    if shutil.which("flock") is None:
+        pytest.skip("flock is not installed")
+    monitor, clock, _triggered = sweep
+    monkeypatch.setattr(get_settings(), "moonphase_harness_update_hours", hours)
+    interval = hours * 3600
+    poll = get_settings().moonphase_monitor_interval
+    real_date = shutil.which("date")
 
-    await monitor.sweep_harnesses()
-    clock["now"] += 10 * 60
-    assert await monitor.sweep_harnesses() == 0
-    clock["now"] += 5 * 60
-    assert await monitor.sweep_harnesses() == 2
+    for phase in (0.0, 0.3, 0.6, 0.9, 0.99):
+        box = Box(tmp_path / f"phase-{phase}")
+        date = box.bin / "date"
+        date.write_text(
+            '#!/bin/sh\n[ "$1" = +%s ] && { echo "$FAKE_NOW"; exit 0; }\n'
+            f'exec {real_date} "$@"\n'
+        )
+        date.chmod(0o755)
+        starts: list[int] = []
+
+        def update(box: Box = box, starts: list[int] = starts) -> None:
+            box.run(f"{hours:g}", FAKE_NOW=str(int(clock["now"])))
+            stamp = int((box.state / "harness-update.stamp").read_text())
+            if stamp not in starts:
+                starts.append(stamp)
+
+        async def trigger(_conn, container, update=update):
+            if container == "c1":
+                update()
+            return True
+
+        monkeypatch.setattr("moonphase.monitor.harness_updates.trigger", trigger)
+        monitor._harnesses_checked.clear()
+
+        # A session start runs one; the monitor first asks `phase` later.
+        update()
+        clock["now"] += phase * interval
+        deadline = clock["now"] + 2 * interval
+        while len(starts) < 2 and clock["now"] < deadline:
+            await monitor.sweep_harnesses()
+            clock["now"] += poll
+
+        assert len(starts) == 2, (phase, starts)
+        assert interval * 0.9 <= starts[1] - starts[0] <= interval * 1.25, (phase, starts)
 
 
 async def test_sweep_is_off_at_zero_hours(sweep, monkeypatch) -> None:
@@ -875,41 +1133,6 @@ async def test_sweep_is_off_at_zero_hours(sweep, monkeypatch) -> None:
 
     assert await monitor.sweep_harnesses() == 0
     assert triggered == []
-
-
-async def test_one_container_refusing_does_not_silence_the_others(sweep, monkeypatch) -> None:
-    """docker answering "no" about one container is a fact about that container;
-    the server is fine, so its others are asked and nothing backs off."""
-    monitor, clock, triggered = sweep
-    attempts: list[str] = []
-
-    async def flaky_trigger(_conn, container):
-        attempts.append(container)
-        if container == "c1":
-            raise ssh.CommandFailed("Writing the script into c1 failed (exit 1): paused")
-        triggered.append(container)
-        return True
-
-    monkeypatch.setattr("moonphase.monitor.harness_updates.trigger", flaky_trigger)
-
-    assert await monitor.sweep_harnesses() == 1
-    assert triggered == ["c5"]
-    assert "srv-1" not in monitor._retry_after
-    assert set(monitor._harnesses_checked) == {"c5"}, "c1 was never actually asked"
-
-    # So it is asked again on the next pass, not an interval later.
-    assert await monitor.sweep_harnesses() == 0
-    assert attempts == ["c1", "c5", "c1"]
-
-
-async def test_a_refusal_from_docker_is_a_command_failure(monkeypatch) -> None:
-    """What the sweep tells apart from a connection that has gone."""
-    fake = _FakeSSH(running=False, fail_update=True)
-    monkeypatch.setattr(ssh, "run", fake.run)
-
-    with pytest.raises(ssh.CommandFailed):
-        await harness_updates.trigger(None, "mp-c")
-    assert issubclass(ssh.CommandFailed, ssh.SSHError)
 
 
 def _second_server(monkeypatch) -> None:
@@ -988,22 +1211,48 @@ async def test_an_unreachable_server_costs_one_connect_per_pass(sweep, monkeypat
     assert "srv-1" not in monitor._failures
 
 
-async def test_a_dropped_connection_stops_the_rest_of_that_server(sweep, monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "error",
+    [
+        ssh.CommandFailed("Writing the script into c1 failed (exit 1): container is paused"),
+        ssh.SSHError("Command timed out after 60.0s: docker exec -i -u root c1"),
+        ssh.SSHError("The server is at its limit of concurrent SSH channels (open failed)."),
+        ssh.SSHError("Command failed to execute: Connection lost"),
+    ],
+    ids=["refused", "timeout", "channels", "asyncssh"],
+)
+async def test_one_container_failing_holds_up_only_its_server_and_only_this_pass(
+    sweep, monkeypatch, error: ssh.SSHError
+) -> None:
+    """Connecting worked, so the server is reachable: backing it off would
+    also silence the activity sweep for it. Its other containers wait for the
+    next pass, and the one that failed for its next ask."""
     monitor, clock, triggered = sweep
     _second_server(monkeypatch)
     attempts: list[str] = []
+    backed_off: list[Any] = []
 
     async def trigger(_conn, container):
         attempts.append(container)
         if container == "c1":
-            raise ssh.SSHError("Command timed out after 60.0s: docker exec -i -u root c1")
+            raise error
         triggered.append(container)
         return True
 
     monkeypatch.setattr("moonphase.monitor.harness_updates.trigger", trigger)
+    monkeypatch.setattr(monitor, "_back_off", lambda *a: backed_off.append(a))
 
     assert await monitor.sweep_harnesses() == 1
-    assert attempts == ["c1", "c6"], "c5 would only have waited out the same timeout"
-    assert triggered == ["c6"]
-    assert monitor._retry_after["srv-1"] > clock["now"]
-    assert set(monitor._harnesses_checked) == {"c6"}
+    assert attempts == ["c1", "c6"], "the rest of srv-1 waits; srv-3 does not"
+    assert backed_off == []
+    assert monitor._retry_after == {}
+    assert set(monitor._harnesses_checked) == {"c1", "c6"}
+
+    clock["now"] += get_settings().moonphase_monitor_interval
+    assert await monitor.sweep_harnesses() == 1
+    assert attempts == ["c1", "c6", "c5"], "c1 is not retried on every pass"
+
+    clock["now"] += 3600  # the next ask, at the default six hours
+    await monitor.sweep_harnesses()
+    assert attempts[3:] == ["c1", "c6"]
+    assert backed_off == []
