@@ -76,6 +76,8 @@ own configuration at runtime rather than having it baked into the bundle.
 | `POST` | `/api/projects/{project_id}/sessions/start` | Start the harness |
 | `DELETE` | `/api/projects/{project_id}/sessions/{name}` | Remove |
 | `PATCH` | `/api/projects/{project_id}/sessions/{name}/rename` | Display name only — see [sessions](../concepts/sessions.md) |
+| `PUT` | `/api/projects/{project_id}/sessions/{name}/account` | Move one of your sessions to another of your accounts; restarts and resumes it |
+| `PUT` | `/api/projects/{project_id}/account` | Which of the owner's accounts their sessions here run on |
 | `POST` | `/api/projects/{project_id}/sessions/keys` | Type into a session |
 | `GET` | `/api/projects/{project_id}/sessions/snapshot` | Plain-text pane capture |
 | `POST` | `/api/projects/{project_id}/sessions/{name}/detach-clients` | Drop stale tmux clients |
@@ -172,10 +174,13 @@ preview work against an instance running somewhere else — see
 | ------ | ---- | ------- |
 | `GET`, `PUT` | `/api/profile` | Claude settings, MCP, CLAUDE.md, skills, env vars, git identity |
 | `POST` | `/api/profile/harness/api-key` | Store an API key |
-| `POST` | `/api/profile/harness/login/start` | Begin subscription sign-in |
+| `POST` | `/api/profile/harness/login/start` | Begin subscription sign-in. `label` adds an account, `account_id` signs one in again; neither replaces the default |
 | `GET` | `/api/profile/harness/login/{session_id}` | Poll it |
 | `POST` | `/api/profile/harness/login/code` | Submit the code |
-| `DELETE` | `/api/profile/harness` | Disconnect |
+| `DELETE` | `/api/profile/harness` | Disconnect every account |
+| `GET` | `/api/profile/harness/accounts` | Your accounts, default first |
+| `PATCH` | `/api/profile/harness/accounts/{id}` | Rename, or make it the default |
+| `DELETE` | `/api/profile/harness/accounts/{id}` | Remove one; what used it falls back to the default |
 | `POST` | `/api/profile/github/device/start` | Begin GitHub device flow |
 | `GET` | `/api/profile/github/device/{session_id}` | Poll it |
 | `POST` | `/api/profile/github/token` | Store a personal access token |

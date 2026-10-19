@@ -15,13 +15,17 @@ import {
   api,
   instance,
   type Environment,
+  type AccountTarget,
   type GitHubDevice,
+  type HarnessAccount,
   type HarnessLogin,
   type McpOAuthConnectionInfo,
   type PushStatus,
   type WorkspaceProfile,
 } from '../lib/api'
 import { copyText } from '../lib/clipboard'
+import { useResource } from '../lib/useResource'
+import { accountName } from '../components/AccountPicker'
 import { playAlertSound, soundChoiceLabel, SOUND_CHOICES, type SoundChoice } from '../lib/sound'
 import { useSoundAlertPreference } from '../lib/soundAlertPreference'
 
@@ -173,13 +177,242 @@ function AccountsTab({
 }
 
 function ClaudeAccount({
-  profile,
   busy,
   run,
 }: {
   profile: WorkspaceProfile
   busy: boolean
   run: Runner
+}) {
+  const accounts = useResource<HarnessAccount[]>(() => api.harnessAccounts(), [])
+  const list = accounts.data ?? []
+  // What the sign-in panel below is for: a new account, or one already in the
+  // list being signed in again.
+  const [adding, setAdding] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [renewing, setRenewing] = useState<string | null>(null)
+  const [renaming, setRenaming] = useState<string | null>(null)
+  const [renameTo, setRenameTo] = useState('')
+  const [removing, setRemoving] = useState<string | null>(null)
+
+  const change = async (fn: () => Promise<unknown>, message: string) => {
+    await run(async () => {
+      await fn()
+      await accounts.reload(true)
+    }, message)
+  }
+
+  const signedIn = async (message: string) => {
+    setAdding(false)
+    setRenewing(null)
+    setNewName('')
+    await accounts.reload(true)
+    await run(async () => {}, message)
+  }
+
+  if (accounts.loading && !accounts.data) {
+    return (
+      <div className="card inner">
+        <h3>
+          <span className="dot" /> Claude
+        </h3>
+        <p className="hint">Loading…</p>
+      </div>
+    )
+  }
+
+  if (list.length === 0) {
+    return (
+      <div className="card inner">
+        <h3>
+          <span className="dot" /> Claude
+        </h3>
+        <p className="hint">
+          Sign in once here. Moonphase stores the credential encrypted and injects it into
+          every project container. You can add more accounts afterwards — a work one, a
+          client&rsquo;s — and choose per project or per session.
+        </p>
+        <ClaudeSignIn
+          target={{ label: 'Personal' }}
+          onDone={() => void signedIn('Signed in to Claude. Every project will use it.')}
+        />
+      </div>
+    )
+  }
+
+  return (
+    <div className="card inner">
+      <h3>
+        <span className="dot connected" /> Claude
+      </h3>
+      <p className="hint">
+        {list.length === 1
+          ? 'Every project uses this account. Add another to run some projects or sessions on a different subscription.'
+          : 'New sessions run on the default unless their project or the session itself picks another.'}
+      </p>
+      <ul className="account-list">
+        {list.map((account) => (
+          <li key={account.id}>
+            <div className="account-list-main">
+              {renaming === account.id ? (
+                <span className="row-menu-confirm">
+                  <input
+                    value={renameTo}
+                    onChange={(e) => setRenameTo(e.target.value)}
+                    aria-label="Account name"
+                    autoFocus
+                    maxLength={80}
+                  />
+                  <button
+                    className="primary"
+                    disabled={busy || !renameTo.trim()}
+                    onClick={() =>
+                      void change(
+                        () => api.updateHarnessAccount(account.id, { label: renameTo.trim() }),
+                        'Renamed.',
+                      ).then(() => setRenaming(null))
+                    }
+                  >
+                    Save
+                  </button>
+                  <button onClick={() => setRenaming(null)}>Cancel</button>
+                </span>
+              ) : (
+                <>
+                  <strong>{accountName(account)}</strong>
+                  {account.is_default && <span className="shared-tag">default</span>}
+                  <span className="hint">
+                    {account.auth_mode === 'oauth' ? 'Claude subscription' : 'API key'}
+                  </span>
+                </>
+              )}
+            </div>
+            {renaming !== account.id && (
+              <div className="account-list-actions">
+                {removing === account.id ? (
+                  <span className="row-menu-confirm">
+                    <span className="hint">
+                      Remove it? Anything using it moves to
+                      {account.is_default ? ' another account' : ' the default'}.
+                    </span>
+                    <button
+                      className="danger"
+                      disabled={busy}
+                      onClick={() =>
+                        void change(
+                          () => api.deleteHarnessAccount(account.id),
+                          `${accountName(account)} removed.`,
+                        ).then(() => setRemoving(null))
+                      }
+                    >
+                      Remove
+                    </button>
+                    <button onClick={() => setRemoving(null)}>Cancel</button>
+                  </span>
+                ) : (
+                  <>
+                    {!account.is_default && (
+                      <button
+                        className="link"
+                        disabled={busy}
+                        onClick={() =>
+                          void change(
+                            () => api.updateHarnessAccount(account.id, { is_default: true }),
+                            `${accountName(account)} is now the default.`,
+                          )
+                        }
+                      >
+                        Make default
+                      </button>
+                    )}
+                    <button
+                      className="link"
+                      onClick={() => {
+                        setRenaming(account.id)
+                        setRenameTo(account.label ?? '')
+                      }}
+                    >
+                      Rename
+                    </button>
+                    <button
+                      className="link"
+                      onClick={() => {
+                        setAdding(false)
+                        setRenewing(renewing === account.id ? null : account.id)
+                      }}
+                    >
+                      Sign in again
+                    </button>
+                    <button className="link danger" onClick={() => setRemoving(account.id)}>
+                      Remove
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+            {renewing === account.id && (
+              <ClaudeSignIn
+                target={{ accountId: account.id }}
+                onDone={() => void signedIn(`${accountName(account)} signed in again.`)}
+                onCancel={() => setRenewing(null)}
+              />
+            )}
+          </li>
+        ))}
+      </ul>
+
+      {adding ? (
+        <div className="account-add">
+          <label>
+            <span>Name it</span>
+            <input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="Work, a client's name…"
+              maxLength={80}
+              autoFocus
+            />
+          </label>
+          {newName.trim() ? (
+            <ClaudeSignIn
+              target={{ label: newName.trim() }}
+              onDone={() => void signedIn(`${newName.trim()} added.`)}
+              onCancel={() => setAdding(false)}
+            />
+          ) : (
+            <div className="actions">
+              <button onClick={() => setAdding(false)}>Cancel</button>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="actions">
+          <button
+            onClick={() => {
+              setRenewing(null)
+              setAdding(true)
+            }}
+          >
+            Add another account
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * One Claude sign-in, by subscription or by API key, landing in `target`:
+ * an existing account to replace, or a new account by that name.
+ */
+function ClaudeSignIn({
+  target,
+  onDone,
+  onCancel,
+}: {
+  target: AccountTarget
+  onDone: () => void
+  onCancel?: () => void
 }) {
   const [login, setLogin] = useState<HarnessLogin | null>(null)
   const [code, setCode] = useState('')
@@ -206,7 +439,7 @@ function ClaudeAccount({
     setWorking(true)
     setError(null)
     try {
-      const started = await api.startHarnessLogin()
+      const started = await api.startHarnessLogin(target)
       setLogin(started)
       if (started.state !== 'starting') {
         setWorking(false)
@@ -259,7 +492,7 @@ function ClaudeAccount({
             if (next.state === 'complete') {
               setCode('')
               setLogin(null)
-              await run(async () => {}, 'Signed in to Claude. Every project will use it.')
+              onDone()
             } else {
               setError(next.detail ?? 'Sign-in failed.')
             }
@@ -281,48 +514,27 @@ function ClaudeAccount({
     setLogin(null)
     setWorking(false)
     setCode('')
+    onCancel?.()
   }
 
-  if (profile.harness_connected) {
-    return (
-      <div className="card inner">
-        <div className="row-between">
-          <div>
-            <h3>
-              <span className="dot connected" /> Claude
-            </h3>
-            <p className="hint">
-              Connected via{' '}
-              {profile.harness_auth_mode === 'oauth'
-                ? 'your Claude subscription'
-                : 'an API key'}
-              . Every project uses this — no per-project sign-in.
-            </p>
-          </div>
-          <button
-            className="danger"
-            disabled={busy}
-            onClick={() => void run(() => api.disconnectHarness(), 'Claude disconnected.')}
-          >
-            Disconnect
-          </button>
-        </div>
-      </div>
-    )
+  const saveKey = async () => {
+    setWorking(true)
+    setError(null)
+    try {
+      await api.setHarnessApiKey(apiKey.trim(), target)
+      setApiKey('')
+      onDone()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setWorking(false)
+    }
   }
 
   const verifying = login?.state === 'verifying'
 
   return (
-    <div className="card inner">
-      <h3>
-        <span className="dot" /> Claude
-      </h3>
-      <p className="hint">
-        Sign in once here. Moonphase stores the credential encrypted and injects it into
-        every project container.
-      </p>
-
+    <div className="claude-signin">
       {error && <div className="banner error">{error}</div>}
 
       {/* The slow step is a container build, and a button that says "Starting…"
@@ -403,9 +615,12 @@ function ClaudeAccount({
               // way out but closing the dialog.
               <button onClick={cancel}>Cancel</button>
             ) : (
-              <button onClick={() => setShowKey((v) => !v)}>
-                {showKey ? 'Hide API key option' : 'Use an API key instead'}
-              </button>
+              <>
+                <button onClick={() => setShowKey((v) => !v)}>
+                  {showKey ? 'Hide API key option' : 'Use an API key instead'}
+                </button>
+                {onCancel && <button onClick={cancel}>Cancel</button>}
+              </>
             )}
           </div>
 
@@ -422,10 +637,8 @@ function ClaudeAccount({
               </label>
               <button
                 className="primary"
-                disabled={busy || !apiKey.trim()}
-                onClick={() =>
-                  void run(() => api.setHarnessApiKey(apiKey.trim()), 'API key saved.')
-                }
+                disabled={working || !apiKey.trim()}
+                onClick={() => void saveKey()}
               >
                 Save key
               </button>

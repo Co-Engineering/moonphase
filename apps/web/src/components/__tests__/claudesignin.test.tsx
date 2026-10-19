@@ -47,6 +47,7 @@ describe('signing in to Claude', () => {
   it('waits for the URL instead of stopping at the first answer', async () => {
     vi.spyOn(api, 'profile').mockResolvedValue(profile)
     vi.spyOn(api, 'environments').mockResolvedValue([])
+    vi.spyOn(api, 'harnessAccounts').mockResolvedValue([])
     vi.spyOn(api, 'startHarnessLogin').mockResolvedValue(
       login({ detail: 'Preparing the container image. First time only.' }),
     )
@@ -78,6 +79,7 @@ describe('signing in to Claude', () => {
   it('says so when the preparation fails, rather than going quiet', async () => {
     vi.spyOn(api, 'profile').mockResolvedValue(profile)
     vi.spyOn(api, 'environments').mockResolvedValue([])
+    vi.spyOn(api, 'harnessAccounts').mockResolvedValue([])
     vi.spyOn(api, 'startHarnessLogin').mockResolvedValue(login({}))
     vi.spyOn(api, 'pollHarnessLogin').mockResolvedValue(
       login({ state: 'error', detail: 'Could not build the environment image.' }),

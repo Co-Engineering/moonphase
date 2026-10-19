@@ -8,6 +8,7 @@ import {
   checkedAgo,
   liveActivity,
   type ActivityState,
+  type HarnessAccount,
   type Project,
   type Server,
   type ServerResources,
@@ -20,6 +21,12 @@ import { useSessionOrder } from './lib/sessionOrder'
 import { playAlertSound } from './lib/sound'
 import { formatBytes } from './lib/bytes'
 import { LeftoverCleanup } from './components/LeftoverCleanup'
+import {
+  accountName,
+  projectAccount,
+  ProjectAccountSelect,
+  SessionAccountSwitcher,
+} from './components/AccountPicker'
 import { readSoundAlertPreference } from './lib/soundAlertPreference'
 import { justStartedWaiting } from './lib/sessionActivity'
 import { Logo } from './components/Logo'
@@ -274,6 +281,7 @@ function Shell({ email }: { email: string }) {
   const projects = useResource<Project[]>(() => api.projects(), [], { pollMs: 8000 })
   const harnesses = useResource(() => api.harnesses(), [])
   const profile = useResource(() => api.profile(), [])
+  const accounts = useResource(() => api.harnessAccounts(), [])
   const environments = useResource(() => api.environments(), [])
   // Every session, in one query and without touching a server. Listing what
   // exists must not cost a connection to a machine that may be asleep.
@@ -303,7 +311,8 @@ function Shell({ email }: { email: string }) {
     // Signing in changes which harnesses are usable, so this must refresh too.
     void harnesses.reload(true)
     void sessions.reload(true)
-  }, [servers, projects, profile, harnesses, sessions])
+    void accounts.reload(true)
+  }, [servers, projects, profile, harnesses, sessions, accounts])
 
   const selectProject = useCallback((id: string, session?: string) => {
     setSelected({ kind: 'project', id, session })
@@ -702,6 +711,7 @@ function Shell({ email }: { email: string }) {
             project={activeProject}
             session={selected?.kind === 'project' ? (selected.session ?? null) : null}
             sessions={(sessions.data ?? []).filter((s) => s.project_id === activeProject.id)}
+            accounts={accounts.data ?? []}
             onEnter={(name) => selectProject(activeProject.id, name)}
             onChanged={reloadAll}
             onToggleSidebar={toggleSidebar}
@@ -1136,6 +1146,7 @@ export function ProjectView({
   project,
   session,
   sessions,
+  accounts = [],
   onEnter,
   onChanged,
   onToggleSidebar,
@@ -1146,6 +1157,8 @@ export function ProjectView({
   /** Null until a session is entered — and nothing connects before that. */
   session: string | null
   sessions: Session[]
+  /** Your Claude accounts. Choosing between them only appears once there are two. */
+  accounts?: HarnessAccount[]
   onEnter: (name: string) => void
   onChanged: () => void
   onToggleSidebar: () => void
@@ -1162,6 +1175,9 @@ export function ProjectView({
   // it costs a round trip to the server, and nobody is picking a starting
   // branch while they are already inside a session.
   const [newBranch, setNewBranch] = useState('')
+  // Blank means the project's account, which is what nearly everyone wants.
+  const [newAccount, setNewAccount] = useState('')
+  const choosingAccounts = accounts.length > 1
   const branches = useResource<string[]>(
     () =>
       session === null && project.status === 'running' && canControl(project.access)
@@ -1320,6 +1336,14 @@ export function ProjectView({
           </button>
         </div>
         <div className="topbar-actions">
+          {choosingAccounts && drivable && active?.is_mine && (
+            <SessionAccountSwitcher
+              project={project}
+              session={active}
+              accounts={accounts}
+              onSwitched={onChanged}
+            />
+          )}
           {project.access === 'admin' && (
             <button onClick={onShare} title="Give someone else access to this session">
               Share{project.share_count > 0 ? ` (${project.share_count})` : ''}
@@ -1471,6 +1495,9 @@ export function ProjectView({
               A session is one person&rsquo;s agent — their account, their branch, their
               commits. Open one to connect; nothing is attached until you do.
             </p>
+            {choosingAccounts && project.access === 'admin' && (
+              <ProjectAccountSelect project={project} accounts={accounts} onChanged={onChanged} />
+            )}
             {sessions.length === 0 ? (
               <p className="hint">Nothing running here yet.</p>
             ) : (
@@ -1504,6 +1531,14 @@ export function ProjectView({
                       >
                         Resume
                       </button>
+                    )}
+                    {choosingAccounts && item.is_mine && canControl(project.access) && (
+                      <SessionAccountSwitcher
+                        project={project}
+                        session={item}
+                        accounts={accounts}
+                        onSwitched={onChanged}
+                      />
                     )}
                     <button
                       className="ghost"
@@ -1572,6 +1607,27 @@ export function ProjectView({
                     </option>
                   ))}
                 </select>
+                {choosingAccounts && (
+                  <select
+                    className="account-choice"
+                    value={newAccount}
+                    onChange={(e) => setNewAccount(e.target.value)}
+                    aria-label="Claude account"
+                    title="Which of your Claude accounts the session runs on"
+                    disabled={busy}
+                  >
+                    <option value="">
+                      {projectAccount(project, accounts)
+                        ? `${accountName(projectAccount(project, accounts)!)} (project's)`
+                        : "Project's account"}
+                    </option>
+                    {accounts.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {accountName(a)}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <button
                   className="primary"
                   disabled={busy}
@@ -1581,9 +1637,11 @@ export function ProjectView({
                         project.id,
                         newSession.trim() || undefined,
                         newBranch.trim() || undefined,
+                        newAccount || undefined,
                       )
                       setNewSession('')
                       setNewBranch('')
+                      setNewAccount('')
                       onEnter(created.tmux_session)
                     })
                   }

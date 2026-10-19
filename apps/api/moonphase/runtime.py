@@ -228,6 +228,7 @@ async def load_session_profile(
     project: dict[str, Any],
     harness_kind: str,
     session: str | None = None,
+    account_id: UUID | None = None,
 ) -> WorkspaceProfile:
     """Everything one person brings to a session they are about to start.
 
@@ -254,6 +255,10 @@ async def load_session_profile(
     here instead, since they apply regardless of harness. `session` is the
     tmux session name; omitted for a session that does not exist yet, which
     simply means no session-level layer.
+
+    Which of the caller's accounts it runs on: `account_id` when given (a
+    session being created), else the one the session row names, else the
+    project's, else the caller's default — see the resolving query.
     """
     async with user_session(claims) as conn:
         org_id = await queries.personal_org_id(conn)
@@ -280,6 +285,7 @@ async def load_session_profile(
             org_id=org_id,
             project_id=project_id or org_id,
             harness=harness_kind,
+            account_id=account_id or (session_row or {}).get("harness_credential_id"),
         )
         vcs_row = await queries.get_vcs_credential_privileged(conn, org_id, "github")
         mcp_oauth = await queries.get_mcp_oauth_credentials_privileged(conn, org_id)
@@ -326,7 +332,11 @@ async def load_session_profile_privileged(
             else None
         )
         credential_row = await queries.resolve_harness_credential_privileged(
-            conn, org_id=org_id, project_id=project["id"], harness=harness_kind
+            conn,
+            org_id=org_id,
+            project_id=project["id"],
+            harness=harness_kind,
+            account_id=(session_row or {}).get("harness_credential_id"),
         )
         vcs_row = await queries.get_vcs_credential_privileged(conn, org_id, "github")
         mcp_oauth = await queries.get_mcp_oauth_credentials_privileged(conn, org_id)

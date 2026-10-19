@@ -87,7 +87,7 @@ describe('starting sessions', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Start my session' }))
 
-    await waitFor(() => expect(create).toHaveBeenCalledWith('p1', undefined, undefined))
+    await waitFor(() => expect(create).toHaveBeenCalledWith('p1', undefined, undefined, undefined))
   })
 
   it('passes the name you typed', async () => {
@@ -101,7 +101,7 @@ describe('starting sessions', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'New session' }))
 
-    await waitFor(() => expect(create).toHaveBeenCalledWith('p1', 'refactor', undefined))
+    await waitFor(() => expect(create).toHaveBeenCalledWith('p1', 'refactor', undefined, undefined))
   })
 
   it('also takes a name for the very first session, not just later ones', async () => {
@@ -115,7 +115,7 @@ describe('starting sessions', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Start my session' }))
 
-    await waitFor(() => expect(create).toHaveBeenCalledWith('p1', 'refactor', undefined))
+    await waitFor(() => expect(create).toHaveBeenCalledWith('p1', 'refactor', undefined, undefined))
   })
 
   it('lets you pick a starting branch', async () => {
@@ -132,7 +132,52 @@ describe('starting sessions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'New session' }))
 
     await waitFor(() =>
-      expect(create).toHaveBeenCalledWith('p1', undefined, 'staging'),
+      expect(create).toHaveBeenCalledWith('p1', undefined, 'staging', undefined),
+    )
+  })
+
+  it('offers no account choice with only one account', async () => {
+    vi.spyOn(api, 'branches').mockResolvedValue(['main'])
+    view([session({})])
+    await screen.findByLabelText('Starting branch')
+    expect(screen.queryByLabelText('Claude account')).toBeNull()
+  })
+
+  it('starts a session on the account you pick', async () => {
+    vi.spyOn(api, 'branches').mockResolvedValue(['main'])
+    const create = vi.spyOn(api, 'createSession').mockResolvedValue(
+      session({ tmux_session: 'client' }),
+    )
+    const account = (id: string, label: string, is_default: boolean) => ({
+      id,
+      label,
+      auth_mode: 'oauth' as const,
+      is_default,
+      created_at: '',
+      updated_at: '',
+    })
+    render(
+      <ProjectView
+        project={{ ...project, harness_credential_id: null }}
+        session={null}
+        sessions={[]}
+        accounts={[account('a1', 'Personal', true), account('a2', 'Client X', false)]}
+        onEnter={() => {}}
+        onChanged={() => {}}
+        onToggleSidebar={() => {}}
+        onShare={() => {}}
+        onRemoved={() => {}}
+      />,
+    )
+
+    const picker = screen
+      .getAllByLabelText<HTMLSelectElement>('Claude account')
+      .find((el) => el.closest('.new-session'))!
+    fireEvent.change(picker, { target: { value: 'a2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Start my session' }))
+
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith('p1', undefined, undefined, 'a2'),
     )
   })
 })

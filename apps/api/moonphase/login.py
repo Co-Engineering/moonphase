@@ -79,6 +79,10 @@ class LoginSession:
     oauth_token: str | None = None
     # Last pane contents, so the UI can show what the harness is doing.
     pane: str = ""
+    # Where the result goes: an existing account to replace, or a name for a
+    # new one. Neither means the default account, as before there were many.
+    account_id: str | None = None
+    label: str | None = None
     cleaned_up: bool = False
 
     @property

@@ -420,7 +420,11 @@ class ClaudeCode(Harness):
         return f"{_claude_home(space)}/.credentials.json"
 
     def merge_into_credentials_file(
-        self, existing: str | None, mcp_oauth: dict[str, str]
+        self,
+        existing: str | None,
+        mcp_oauth: dict[str, str],
+        *,
+        keep_account_login: bool = True,
     ) -> str | None:
         """Merge saved MCP server OAuth tokens into Claude Code's own credentials file.
 
@@ -438,6 +442,12 @@ class ClaudeCode(Harness):
             doc = {}
         if not isinstance(doc, dict):
             doc = {}
+
+        # A session switched from a subscription sign-in to an API key or a
+        # token would otherwise still carry the old account's login here, and
+        # Claude Code would go on using it.
+        if not keep_account_login:
+            doc.pop("claudeAiOauth", None)
 
         existing_oauth = doc.get("mcpOAuth")
         merged_oauth = dict(existing_oauth) if isinstance(existing_oauth, dict) else {}

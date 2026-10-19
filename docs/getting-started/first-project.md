@@ -19,6 +19,7 @@ launches the harness.
 ## Connect your Claude account
 
 Do this once, in **Settings → Accounts**, and every project uses it.
+You can add more accounts later — see [more than one account](#more-than-one-account).
 
 === "Claude subscription"
 
@@ -35,6 +36,23 @@ Do this once, in **Settings → Accounts**, and every project uses it.
     With an API key the [usage screen](../guides/usage-and-limits.md) leads with spend
     rather than with how much of a window you have used, because that is the limit you
     actually have.
+
+### More than one account
+
+Most people have more than one subscription: their own, an employer's, a client's.
+Add each one under **Settings → Accounts → Add another account** and give it a name.
+One of them is the default; the rest are chosen where they matter:
+
+- **Per project.** On a project's session list, *Your sessions here run on* picks
+  the account. Point a client's repository at the client's account once and every
+  session there uses it.
+- **Per session.** When starting a session, or later from the session list (or the
+  top bar on a wide screen). Switching restarts Claude on the other account and
+  resumes the same conversation.
+
+A session's own choice wins, then the project's, then the default. Removing an
+account moves anything that used it back to the default. Only your own accounts
+are offered: in a shared project, everyone's sessions still run on their own.
 
 ## First attach
 

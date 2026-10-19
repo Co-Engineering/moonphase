@@ -26,6 +26,8 @@ from ..schemas import (
     GitHubDeviceStart,
     GitHubRepoOut,
     GitHubTokenIn,
+    HarnessAccountOut,
+    HarnessAccountUpdateIn,
     HarnessApiKeyIn,
     HarnessLoginCode,
     HarnessLoginOut,
@@ -249,28 +251,88 @@ def _login_out(session: login.LoginSession) -> HarnessLoginOut:
     )
 
 
-async def _store_login_credential(
-    principal: Principal, session: login.LoginSession
+async def _check_account(org_id: UUID, account_id: UUID | None, harness: str) -> None:
+    """Refuse an account id that is not one of this org's, for this harness."""
+    if account_id is None:
+        return
+    async with service_session() as conn:
+        row = await queries.get_harness_account_privileged(conn, account_id)
+    if row is None or row["org_id"] != org_id or str(row["harness"]) != harness:
+        raise HTTPException(status_code=404, detail="No such account.")
+
+
+async def _store_account(
+    principal: Principal,
+    *,
+    org_id: UUID,
+    harness: str,
+    auth_mode: str,
+    account_id: UUID | None,
+    label: str | None,
+    api_key: str | None = None,
+    oauth_token: str | None = None,
+    oauth_blob: str | None = None,
 ) -> None:
-    """Persist whatever the flow produced, org-wide.
+    """Put a fresh credential where the person asked for it to go.
 
     Stored verbatim and unparsed: a token becomes an environment variable and a
     credentials file becomes a file, and neither needs Moonphase to understand
     its contents.
     """
     async with service_session() as conn:
-        await queries.upsert_harness_credential_privileged(
-            conn,
-            org_id=UUID(session.org_id),
-            project_id=None,
-            harness=session.harness_kind,
-            auth_mode="oauth",
-            label="Signed in",
-            api_key=None,
-            oauth_token=session.oauth_token,
-            oauth_blob=session.oauth_blob,
-            created_by=principal.user_id,
-        )
+        if account_id is not None:
+            row = await queries.replace_harness_account_material_privileged(
+                conn,
+                org_id=org_id,
+                account_id=account_id,
+                auth_mode=auth_mode,
+                api_key=api_key,
+                oauth_token=oauth_token,
+                oauth_blob=oauth_blob,
+                created_by=principal.user_id,
+            )
+            if row is None:
+                raise HTTPException(status_code=404, detail="No such account.")
+        elif label:
+            await queries.add_harness_account_privileged(
+                conn,
+                org_id=org_id,
+                harness=harness,
+                auth_mode=auth_mode,
+                label=label,
+                api_key=api_key,
+                oauth_token=oauth_token,
+                oauth_blob=oauth_blob,
+                created_by=principal.user_id,
+            )
+        else:
+            await queries.upsert_harness_credential_privileged(
+                conn,
+                org_id=org_id,
+                project_id=None,
+                harness=harness,
+                auth_mode=auth_mode,
+                label="Signed in" if auth_mode == "oauth" else "API key",
+                api_key=api_key,
+                oauth_token=oauth_token,
+                oauth_blob=oauth_blob,
+                created_by=principal.user_id,
+            )
+
+
+async def _store_login_credential(
+    principal: Principal, session: login.LoginSession
+) -> None:
+    await _store_account(
+        principal,
+        org_id=UUID(session.org_id),
+        harness=session.harness_kind,
+        auth_mode="oauth",
+        account_id=UUID(session.account_id) if session.account_id else None,
+        label=session.label,
+        oauth_token=session.oauth_token,
+        oauth_blob=session.oauth_blob,
+    )
 
 
 @router.post("/harness/login/start", response_model=HarnessLoginOut)
@@ -279,6 +341,7 @@ async def start_harness_login(
 ) -> HarnessLoginOut:
     """Begin an interactive sign-in and return the URL to open."""
     org_id = await _resolve_org(principal, payload.org_id)
+    await _check_account(org_id, payload.account_id, payload.harness)
     server = await _pick_login_server(principal, payload.server_id)
     harness = get_harness(payload.harness)
 
@@ -309,6 +372,8 @@ async def start_harness_login(
     except (SSHError, NotFound) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    session.account_id = str(payload.account_id) if payload.account_id else None
+    session.label = payload.label
     return _login_out(session)
 
 
@@ -368,19 +433,74 @@ async def set_harness_api_key(
 ) -> WorkspaceProfileOut:
     """The non-interactive alternative to signing in."""
     org_id = await _resolve_org(principal, payload.org_id)
-    async with service_session() as conn:
-        await queries.upsert_harness_credential_privileged(
-            conn,
-            org_id=org_id,
-            project_id=None,
-            harness=payload.harness,
-            auth_mode="api_key",
-            label="API key",
-            api_key=payload.api_key,
-            oauth_blob=None,
-            created_by=principal.user_id,
-        )
+    await _check_account(org_id, payload.account_id, payload.harness)
+    await _store_account(
+        principal,
+        org_id=org_id,
+        harness=payload.harness,
+        auth_mode="api_key",
+        account_id=payload.account_id,
+        label=payload.label,
+        api_key=payload.api_key,
+    )
     return await _build_out(principal, org_id)
+
+
+@router.get("/harness/accounts", response_model=list[HarnessAccountOut])
+async def list_harness_accounts(
+    org_id: UUID | None = None,
+    harness: str = "claude_code",
+    principal: Principal = Depends(current_principal),
+) -> list[HarnessAccountOut]:
+    """Every account you have signed in with, default first."""
+    resolved = await _resolve_org(principal, org_id)
+    async with service_session() as conn:
+        rows = await queries.list_harness_accounts_privileged(conn, resolved, harness)
+    return [HarnessAccountOut.model_validate(r) for r in rows]
+
+
+@router.patch("/harness/accounts/{account_id}", response_model=list[HarnessAccountOut])
+async def update_harness_account(
+    account_id: UUID,
+    payload: HarnessAccountUpdateIn,
+    org_id: UUID | None = None,
+    principal: Principal = Depends(current_principal),
+) -> list[HarnessAccountOut]:
+    """Rename an account, or make it the one new sessions run on."""
+    resolved = await _resolve_org(principal, org_id)
+    async with service_session() as conn:
+        account = await queries.get_harness_account_privileged(conn, account_id)
+        if account is None or account["org_id"] != resolved:
+            raise HTTPException(status_code=404, detail="No such account.")
+        if payload.label is not None:
+            await queries.rename_harness_account_privileged(
+                conn, resolved, account_id, payload.label.strip()
+            )
+        if payload.is_default:
+            await queries.set_default_harness_account_privileged(conn, resolved, account_id)
+        rows = await queries.list_harness_accounts_privileged(
+            conn, resolved, str(account["harness"])
+        )
+    return [HarnessAccountOut.model_validate(r) for r in rows]
+
+
+@router.delete("/harness/accounts/{account_id}", response_model=list[HarnessAccountOut])
+async def delete_harness_account(
+    account_id: UUID,
+    org_id: UUID | None = None,
+    principal: Principal = Depends(current_principal),
+) -> list[HarnessAccountOut]:
+    """Remove one account. Projects and sessions using it fall back to the default."""
+    resolved = await _resolve_org(principal, org_id)
+    async with service_session() as conn:
+        account = await queries.get_harness_account_privileged(conn, account_id)
+        if account is None or account["org_id"] != resolved:
+            raise HTTPException(status_code=404, detail="No such account.")
+        await queries.delete_harness_account_privileged(conn, resolved, account_id)
+        rows = await queries.list_harness_accounts_privileged(
+            conn, resolved, str(account["harness"])
+        )
+    return [HarnessAccountOut.model_validate(r) for r in rows]
 
 
 @router.delete("/harness", response_model=WorkspaceProfileOut)
