@@ -168,6 +168,22 @@ def parse_windows(doc: Any) -> list[Window]:
     return windows
 
 
+def _anthropic_message(response: httpx.Response) -> str:
+    """Anthropic's own words for a refusal, short enough to show."""
+    try:
+        doc = response.json()
+    except ValueError:
+        return response.text.strip()[:200]
+    error = doc.get("error") if isinstance(doc, dict) else None
+    if isinstance(error, dict) and isinstance(error.get("message"), str):
+        return error["message"][:200]
+    return ""
+
+
+def _said(message: str) -> str:
+    return f" Anthropic said: \u201c{message}\u201d" if message else ""
+
+
 async def fetch(token: str, client: httpx.AsyncClient | None = None) -> list[Window]:
     headers = {
         "Authorization": f"Bearer {token}",
@@ -183,30 +199,32 @@ async def fetch(token: str, client: httpx.AsyncClient | None = None) -> list[Win
     except httpx.HTTPError as exc:
         raise UsageUnavailable("unreachable", f"Could not reach Anthropic: {exc}") from exc
 
+    if response.status_code < 400:
+        try:
+            return parse_windows(response.json())
+        except ValueError as exc:
+            raise UsageUnavailable("error", "Anthropic's answer was not readable.") from exc
+
+    message = _anthropic_message(response)
+    log.info("usage endpoint answered %s: %s", response.status_code, message)
     if response.status_code == 401:
-        raise UsageUnavailable(
-            "expired",
-            "The sign-in has expired. Open a session on this account, or sign it in again.",
-        )
+        raise UsageUnavailable("expired", "This sign-in has expired." + _said(message))
     if response.status_code == 403:
         raise UsageUnavailable(
-            "unsupported", "This kind of sign-in cannot report plan usage."
+            "unsupported", "This sign-in is not allowed to read plan usage." + _said(message)
         )
     if response.status_code == 429:
-        log.info("usage endpoint rate-limited: %s", response.text[:300])
         raise UsageUnavailable(
             "rate_limited",
-            "Anthropic asked us to slow down.",
+            # Seen both when the account has used up a window and when usage is
+            # read too often; the status alone does not say which.
+            "Anthropic refused to report usage right now — usually because this "
+            "account has hit a limit." + _said(message),
             retry_after=retry_after_seconds(response.headers.get("retry-after"), time.time()),
         )
-    if response.status_code >= 400:
-        raise UsageUnavailable(
-            "error", f"Anthropic answered {response.status_code}."
-        )
-    try:
-        return parse_windows(response.json())
-    except ValueError as exc:
-        raise UsageUnavailable("error", "Anthropic's answer was not readable.") from exc
+    raise UsageUnavailable(
+        "error", f"Anthropic answered {response.status_code}." + _said(message)
+    )
 
 
 # account id -> last good reading. Per process, which is all it needs to be:
@@ -233,27 +251,30 @@ def remember(account_id: str, windows: list[Window]) -> Reading:
     return reading
 
 
-# account id -> (do not ask before this time, refusals in a row).
-_backoff: dict[str, tuple[float, int]] = {}
+# account id -> (do not ask before this time, refusals in a row, what was said).
+_backoff: dict[str, tuple[float, int, str | None]] = {}
 
 
-def backing_off_until(account_id: str, now: float) -> float | None:
+def backing_off(account_id: str, now: float) -> tuple[float, str | None] | None:
+    """When it is worth asking again, and what the refusal said — or None."""
     entry = _backoff.get(account_id)
     if entry is None or entry[0] <= now:
         return None
-    return entry[0]
+    return entry[0], entry[2]
 
 
-def refused(account_id: str, now: float, retry_after: float | None) -> float:
+def refused(
+    account_id: str, now: float, retry_after: float | None, detail: str | None = None
+) -> float:
     """Record a 429. Returns when it is worth asking again."""
-    streak = _backoff.get(account_id, (0.0, 0))[1] + 1
+    streak = _backoff.get(account_id, (0.0, 0, None))[1] + 1
     wait = (
         retry_after
         if retry_after is not None
         else min(BACKOFF_CAP_SECONDS, BACKOFF_SECONDS * 2 ** (streak - 1))
     )
     until = now + wait
-    _backoff[account_id] = (until, streak)
+    _backoff[account_id] = (until, streak, detail)
     return until
 
 

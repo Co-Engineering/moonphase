@@ -345,14 +345,17 @@ async def clear_price(
 _BORROW_ATTEMPTS = 3
 
 
-async def _borrow_token(
+async def _borrow_tokens(
     principal: Principal, sessions: list[tuple[dict[str, Any], dict[str, Any]]], now: float
-) -> plan_usage.AccountToken | None:
-    """The current access token from one of your running sessions on an account.
+) -> list[plan_usage.AccountToken]:
+    """Current access tokens from your running sessions on an account.
 
     Read, never refreshed: Claude refreshes its own, and doing it here would
-    spend the refresh token that session relies on.
+    spend the refresh token that session relies on. An idle session's token
+    can have expired too — Claude only refreshes when it next needs it — so
+    those are skipped.
     """
+    found: list[plan_usage.AccountToken] = []
     harness = get_harness("claude_code")
     for session, project in sessions[:_BORROW_ATTEMPTS]:
         try:
@@ -364,15 +367,15 @@ async def _borrow_token(
                 SessionSpace(home=str(session["home_dir"]))
             )
             if path is None:
-                return None
+                return found
             contents = await profile.read_file(conn_ssh, ctx.container, path)
         except (SSHError, runtime.NotFound, runtime.Forbidden) as exc:
             log.debug("could not read a token from %s: %s", session.get("tmux_session"), exc)
             continue
         token = plan_usage.token_from_credentials_file(contents)
         if token is not None and token.valid(now):
-            return token
-    return None
+            found.append(token)
+    return found
 
 
 def _windows_out(windows: list[plan_usage.Window]) -> list[LiveWindowOut]:
@@ -417,7 +420,9 @@ def _fill_from_last(out: AccountUsageOut, account_id: str) -> None:
 def _slow_down(out: AccountUsageOut, account_id: str, until: float) -> None:
     at = datetime.fromtimestamp(until, tz=UTC)
     out.status = "rate_limited"
-    out.detail = "Anthropic asked us to slow down."
+    out.detail = out.detail or (
+        "Anthropic refused to report usage — usually because this account has hit a limit."
+    )
     out.retry_at = at
     _fill_from_last(out, account_id)
 
@@ -438,36 +443,73 @@ async def _read_account(
 
     # Refused recently: asking again before the time it gave only keeps the
     # account pinned at its limit.
-    until = plan_usage.backing_off_until(account_id, now)
-    if until is not None:
-        _slow_down(out, account_id, until)
+    waiting = plan_usage.backing_off(account_id, now)
+    if waiting is not None:
+        out.detail = waiting[1]
+        _slow_down(out, account_id, waiting[0])
         return out
 
+    # Every token there is for this account, best first. A refusal of one
+    # (expired, or a kind not allowed to read usage) moves on to the next.
+    candidates: list[tuple[str, plan_usage.AccountToken]] = []
     stored = plan_usage.token_from_credentials_file((material or {}).get("oauth_blob"))
-    token = stored if stored is not None and stored.valid(now) else None
-    if token is None:
-        token = await _borrow_token(principal, sessions, now)
-    if token is None and (material or {}).get("oauth_token"):
-        token = plan_usage.AccountToken(str(material["oauth_token"]), None)  # type: ignore[index]
+    if stored is not None and stored.valid(now):
+        candidates.append(("stored", stored))
+    if not candidates:
+        candidates += [("session", t) for t in await _borrow_tokens(principal, sessions, now)]
+    long_lived = (material or {}).get("oauth_token")
+    if long_lived:
+        candidates.append(("setup_token", plan_usage.AccountToken(str(long_lived), None)))
 
-    try:
-        if token is None:
-            raise plan_usage.UsageUnavailable(
-                "expired",
-                "The stored sign-in has expired and no running session is using this "
-                "account. Start one on it, or sign it in again.",
-            )
-        reading = plan_usage.remember(account_id, await plan_usage.fetch(token.token))
+    if not candidates:
+        out.status = "expired"
+        out.detail = (
+            "The sign-in Moonphase stored has expired, and none of your running "
+            "sessions on this account has a current one. Use a session on it, or "
+            "sign it in again."
+        )
+        _fill_from_last(out, account_id)
+        return out
+
+    last: plan_usage.UsageUnavailable | None = None
+    for source, token in candidates:
+        try:
+            windows = await plan_usage.fetch(token.token)
+        except plan_usage.UsageUnavailable as exc:
+            last = exc
+            if exc.reason in ("expired", "unsupported"):
+                continue
+            break
+        reading = plan_usage.remember(account_id, windows)
         out.windows = _windows_out(reading.windows)
         out.fetched_at = datetime.fromtimestamp(reading.fetched_at, tz=UTC)
-    except plan_usage.UsageUnavailable as exc:
-        if exc.reason == "rate_limited":
-            _slow_down(out, account_id, plan_usage.refused(account_id, now, exc.retry_after))
-            return out
-        out.status = exc.reason
-        out.detail = exc.detail
-        _fill_from_last(out, account_id)
+        out.source = source
+        return out
+
+    assert last is not None
+    if last.reason == "rate_limited":
+        out.detail = last.detail
+        _slow_down(
+            out,
+            account_id,
+            plan_usage.refused(account_id, now, last.retry_after, last.detail),
+        )
+        return out
+    out.status = last.reason
+    out.detail = last.detail
+    if last.reason == "unsupported" and candidates[-1][0] == "setup_token":
+        out.detail = (
+            "This account was signed in with a long-lived token (claude setup-token), "
+            "which Anthropic does not let read plan usage, and none of your running "
+            "sessions on it has a current interactive sign-in." + _quote(last.detail)
+        )
+    _fill_from_last(out, account_id)
     return out
+
+
+def _quote(detail: str) -> str:
+    marker = " Anthropic said:"
+    return detail[detail.index(marker):] if marker in detail else ""
 
 
 @router.get("/accounts", response_model=list[AccountUsageOut])

@@ -131,6 +131,7 @@ def world(monkeypatch):
         container_files={},
         fetched_with=[],
         refuse=None,
+        refuse_token={},
         ids=SimpleNamespace(personal=personal, work=work, key=key),
     )
 
@@ -164,6 +165,8 @@ def world(monkeypatch):
 
     async def fetch(token, client=None):
         w.fetched_with.append(token)
+        if token in w.refuse_token:
+            raise w.refuse_token[token]
         if w.refuse is not None:
             raise w.refuse
         return plan_usage.parse_windows(SAMPLE)
@@ -326,3 +329,83 @@ async def test_while_waiting_the_last_good_reading_stays_visible(world) -> None:
     out = _personal(await usage_router.read_account_usage(PRINCIPAL))
     assert out.status == "rate_limited" and out.stale
     assert out.windows[0].percent == 42.0
+
+
+def _running_on_work(world, token_expiry_s):
+    project = {"id": uuid4(), "org_id": world.org, "harness_credential_id": world.ids.work}
+    world.projects = [project]
+    world.sessions = [
+        {
+            "project_id": project["id"], "is_mine": True, "state": "running",
+            "home_dir": "/home/dev/sessions/w", "harness_credential_id": None,
+            "tmux_session": "w",
+        }
+    ]
+    world.container_files["/home/dev/sessions/w/.claude/.credentials.json"] = creds(
+        "work-live", token_expiry_s
+    )
+
+
+def _work(out):
+    return next(a for a in out if a.label == "Work")
+
+
+@pytest.mark.asyncio
+async def test_a_refused_token_falls_through_to_the_next(world) -> None:
+    _running_on_work(world, 3600)
+    world.materials[world.ids.work]["oauth_token"] = "work-setup-token"
+    world.refuse_token["work-live"] = plan_usage.UsageUnavailable("expired", "expired")
+
+    out = _work(await usage_router.read_account_usage(PRINCIPAL))
+
+    assert world.fetched_with[-2:] == ["work-live", "work-setup-token"]
+    assert out.status == "ok" and out.source == "setup_token"
+
+
+@pytest.mark.asyncio
+async def test_says_when_only_a_setup_token_is_left_and_it_cannot_read_usage(world) -> None:
+    # The session's token is there but idle and expired, so only the
+    # long-lived token remains — and Anthropic will not let it read usage.
+    _running_on_work(world, -60)
+    world.materials[world.ids.work]["oauth_token"] = "work-setup-token"
+    world.refuse_token["work-setup-token"] = plan_usage.UsageUnavailable(
+        "unsupported", "not allowed. Anthropic said: \u201cscope\u201d"
+    )
+
+    out = _work(await usage_router.read_account_usage(PRINCIPAL))
+
+    assert out.status == "unsupported"
+    assert "setup-token" in (out.detail or "") and "scope" in (out.detail or "")
+
+
+@pytest.mark.asyncio
+async def test_a_borrowed_reading_says_where_it_came_from(world) -> None:
+    _running_on_work(world, 3600)
+    out = _work(await usage_router.read_account_usage(PRINCIPAL))
+    assert out.status == "ok" and out.source == "session"
+
+
+@pytest.mark.asyncio
+async def test_a_limit_refusal_keeps_anthropics_words_while_waiting(world) -> None:
+    world.refuse = plan_usage.UsageUnavailable(
+        "rate_limited", "refused. Anthropic said: \u201cusage limit reached\u201d", retry_after=900
+    )
+    first = _personal(await usage_router.read_account_usage(PRINCIPAL))
+    world.now = NOW + 60
+    later = _personal(await usage_router.read_account_usage(PRINCIPAL))
+    for out in (first, later):
+        assert "usage limit reached" in (out.detail or "")
+        assert out.retry_at is not None
+
+
+@pytest.mark.asyncio
+async def test_anthropics_own_message_is_passed_on() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403, json={"error": {"type": "permission_error", "message": "missing scope"}}
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(plan_usage.UsageUnavailable) as err:
+            await plan_usage.fetch("tok", client)
+    assert "missing scope" in err.value.detail

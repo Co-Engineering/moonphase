@@ -1235,3 +1235,6 @@ class AccountUsageOut(BaseModel):
     stale: bool = False
     # When it is worth asking again, after the provider said to slow down.
     retry_at: datetime | None = None
+    # Which token the reading came from: stored (at sign-in), session
+    # (borrowed from a running session), setup_token.
+    source: str | None = None
