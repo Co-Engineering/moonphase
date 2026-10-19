@@ -112,14 +112,22 @@ A new session starts from origin's current tip of the branch you picked — or,
 with none picked, of the branch `/workspace` is on — fetched at that moment.
 `/workspace` is a shallow clone whose own copy of that branch is never updated
 after cloning, so starting from it put every session behind by whatever had
-landed since. Local commits origin does not have still win, since they may
-exist nowhere else, and an unreachable origin falls back to the local copy;
-either way the app says so. A branch you picked other than the default is
-also added to the clone's fetch list, so a plain `git fetch` in the session
-keeps origin's copy of it current; once origin deletes the branch, the next
-session to start takes it off the list. Where the branch started is recorded, down to the exact
-commit, and the Changes view diffs from there. A duplicate starts from the
-exact commit it was copied at, with no fetch.
+landed since. Origin's copy wins whenever origin has the branch, even over
+local commits it lacks: whether those are somebody's work or just a
+force-push or shallow fetch seen from the other side cannot be told reliably,
+so the app mentions them and leaves them on the local branch. The local copy
+is used only when origin has no such branch — it was never pushed, or origin
+deleted it (a merged pull request, say), in which case the leftover
+`origin/<branch>` is dropped and the app says so. An unreachable origin falls
+back to whatever copy is already here, and the app says it may be behind. A
+duplicate starts from the exact commit it was copied at, with no fetch.
+
+Where a session started — the base, down to the exact commit — is recorded in
+its worktree's own git directory, so it survives the agent switching
+branches. The Changes view diffs from that commit, or from where the session
+last took in the base's work by merging or rebasing, if that is later. A
+force-push or a later shallow fetch can rewrite what origin's branch looks
+like, but not what the session started from.
 
 A session's home and workdir are fixed when it is created and recorded on the
 row. Moving a running session would point it at a directory its harness has

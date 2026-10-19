@@ -212,8 +212,8 @@ class Worktree(NamedTuple):
     # branch already on disk was picked up instead of created.
     base: str | None
     # Anything about where the session started that its owner should be told,
-    # in plain words: a fetch that failed, local commits that won over
-    # origin's, a requested start that could not be honoured.
+    # in plain words: a fetch that failed, local commits origin's copy does
+    # not have, a requested start that could not be honoured.
     note: str | None
 
 
@@ -226,43 +226,11 @@ note() { printf 'MOONPHASE_NOTE=%s\n' "$*"; }
 # `gc --auto` say, would otherwise go on holding the lock after this exits.
 git() { command git "$@" 9>&-; }
 has() { git show-ref --verify --quiet "$1"; }
-# Never moved since it was created, so a copy of origin's and nobody's work.
-# Ancestry cannot show that once origin is force-pushed, or a shallow fetch
-# draws a boundary through the history in between.
-pristine() {
-  ENTRIES=$(git reflog show --format=%gs "$1" -- 2>/dev/null) || return 1
-  case "$ENTRIES" in
-    *$'\n'*) return 1 ;;
-    clone:*|"branch: Created from"*) return 0 ;;
-  esac
-  return 1
-}
-# A refspec of its own keeps origin's copy of a non-default branch current
-# for the agent's own fetches. Recorded so it can be taken out again: a
-# configured refspec for a branch origin no longer has fails every plain
-# `git fetch` with "couldn't find remote ref".
-track() {
-  SPEC="+refs/heads/$1:refs/remotes/origin/$1"
-  if [ "$(git symbolic-ref -q refs/remotes/origin/HEAD || true)" = "refs/remotes/origin/$1" ] \
-      || git config --get-all remote.origin.fetch | grep -qxF -e "$SPEC" \
-        -e '+refs/heads/*:refs/remotes/origin/*' -e 'refs/heads/*:refs/remotes/origin/*'; then
-    return 0
-  fi
-  git config --add remote.origin.fetch "$SPEC" && git config --add moonphase.fetchBranch "$1"
-}
-untrack() {
-  RE=$(printf '%s' "$1" | sed 's/\./\\./g')
-  git config --unset-all remote.origin.fetch "^\\+refs/heads/$RE:refs/remotes/origin/$RE\$" || true
-  git config --unset-all moonphase.fetchBranch "^$RE\$" || true
-}
-prune_tracked() {
-  TRACKED=$(git config --get-all moonphase.fetchBranch || true)
-  [ -n "$TRACKED" ] || return 0
-  HEADS=$(GIT_TERMINAL_PROMPT=0 $TIMEOUT git "${GIT_FLAGS[@]}" ls-remote --heads origin \
-    $(printf 'refs/heads/%s\n' $TRACKED) 2>/dev/null 9>&-) || return 0
-  for B in $TRACKED; do
-    printf '%s\n' "$HEADS" | cut -f2 | grep -qxF "refs/heads/$B" || untrack "$B"
-  done
+# Committed to here rather than only cloned or branched, so commits of its
+# own are somebody's work and not a force-push or a shallow cut on origin.
+committed_to() {
+  git reflog show --format=%gs "$1" -- 2>/dev/null \
+    | grep -qE '^(commit|merge|cherry-pick|rebase|pull|reset)'
 }
 
 if [ -n "$START_COMMIT" ]; then
@@ -335,8 +303,8 @@ if [ -n "$X" ]; then
   REMOTE="refs/remotes/origin/$X"
   FETCH_FAILED=""
   FETCH_DETAIL=""
-  FETCHED=""
   MISSING=""
+  GONE=""
   if git remote get-url origin >/dev/null 2>&1; then
     # Shallow only for a branch with no history here yet. A refresh has to
     # join up with what is already here, or whether local is behind origin
@@ -349,11 +317,10 @@ if [ -n "$X" ]; then
     if command -v timeout >/dev/null 2>&1; then
       TIMEOUT="timeout 60"
     fi
-    if ERR=$(GIT_TERMINAL_PROMPT=0 $TIMEOUT git "${GIT_FLAGS[@]}" fetch --quiet --no-tags \
-        $DEPTH origin "+$LOCAL:$REMOTE" 2>&1 >/dev/null 9>&-); then
-      FETCHED=1
-    else
-      rc=$?
+    rc=0
+    ERR=$(GIT_TERMINAL_PROMPT=0 $TIMEOUT git "${GIT_FLAGS[@]}" fetch --quiet --no-tags \
+      $DEPTH origin "+$LOCAL:$REMOTE" 2>&1 >/dev/null 9>&-) || rc=$?
+    if [ "$rc" != 0 ]; then
       if [ "$rc" = 124 ]; then
         ERR="timed out after 60 seconds"
       fi
@@ -367,21 +334,28 @@ if [ -n "$X" ]; then
       FETCH_FAILED="${FETCH_FAILED:-git fetch failed}"
       FETCH_DETAIL=$(printf '%s' "$ERR" | tr -s '\n\t ' ' ' | cut -c1-400)
     fi
-    if [ -n "$FETCHED$MISSING" ]; then
-      prune_tracked
-    fi
+  fi
+  # Origin deleted it. Its leftover copy would otherwise be started from as if
+  # it were current.
+  if [ -n "$MISSING" ] && has "$REMOTE"; then
+    git update-ref -d "$REMOTE"
+    GONE=1
   fi
 
-  if has "$REMOTE" && { ! has "$LOCAL" || pristine "$LOCAL" \
-      || git merge-base --is-ancestor "$LOCAL" "$REMOTE"; }; then
+  # Origin's copy whenever there is one. Whether local commits are somebody's
+  # work cannot be told reliably (force-pushes, shallow cuts, expired
+  # reflogs), so they only get a mention; they stay on the local branch.
+  if has "$REMOTE"; then
     START="$REMOTE"
+    if has "$LOCAL" && committed_to "$LOCAL" \
+        && [ "$(git rev-list --count "$REMOTE..$LOCAL" 2>/dev/null || echo 0)" != 0 ]; then
+      note "Your local $X has commits that aren't on origin; this session starts" \
+        "from origin's $X. They are still on the local branch."
+    fi
   elif has "$LOCAL"; then
-    # Local commits origin does not have may be the only copy of them, so
-    # they win — but not silently.
     START="$LOCAL"
-    if has "$REMOTE"; then
-      note "Your local $X has commits that are not on origin, so this session" \
-        "starts from the local copy rather than origin's."
+    if [ -n "$GONE" ]; then
+      note "$X no longer exists on origin, so this session starts from the local copy."
     fi
   else
     echo "No branch called '$X' was found locally or on origin.${FETCH_DETAIL:+ $FETCH_DETAIL}" >&2
@@ -393,21 +367,14 @@ if [ -n "$X" ]; then
     note "Could not refresh $X from origin ($FETCH_FAILED), so this session starts" \
       "from the copy already here, which may be behind."
   fi
-  # Not worth failing the session over.
-  if [ -n "$FETCHED" ] && [ -n "$START_BRANCH" ]; then
-    track "$X" || true
-  fi
 fi
 
 BASE_SHA=$(git rev-parse --verify -q "$START^{commit}")
 git worktree add --no-track -b "$BRANCH" "$WORKDIR" "$BASE_SHA"
-# What the Changes view diffs against. Guessing later from whatever local
-# branch is called main attributed every upstream commit since the clone to
-# the session.
-git config "branch.$BRANCH.moonphaseBase" "$START"
-# The commit as well: the ref can be force-pushed, or cut off from this
-# branch's history by a later shallow fetch.
-git config "branch.$BRANCH.moonphaseBaseCommit" "$BASE_SHA"
+# What the Changes view diffs from. In the worktree's own git dir rather than
+# keyed by branch, so the agent switching branches inside it keeps it.
+printf '%s\n%s\n' "$START" "$BASE_SHA" \
+  > "$(git -C "$WORKDIR" rev-parse --absolute-git-dir)/moonphase-base"
 printf 'MOONPHASE_BASE=%s\n' "$START"
 """
 
@@ -485,10 +452,9 @@ async def ensure_worktree(
     never updated after cloning, so starting from it as it stood put every new
     session behind by however much had landed since. The clone is also shallow
     and single-branch, so most other branches are not on disk at all; `token`
-    is the caller's GitHub credential, so a private repo's can be fetched. A
-    `start_branch` other than the default also gets a fetch refspec, so the
-    agent's own `git fetch` keeps it current; the next start after origin
-    deletes the branch takes the refspec out again.
+    is the caller's GitHub credential, so a private repo's can be fetched.
+    Origin's copy is started from whenever origin has the branch; the local
+    one only when it does not.
 
     `start_commit` is a full commit SHA — the output of `snapshot_worktree`,
     say. A SHA is always already local (every session's worktree shares one

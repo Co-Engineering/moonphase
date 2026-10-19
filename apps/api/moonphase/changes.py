@@ -85,40 +85,56 @@ if [ -z "$BASE" ] || [ "$BASE" = "HEAD" ]; then
     git show-ref -q --verify "refs/heads/$b" && BASE="$b" && break
   done
 fi
-# The start ensure_worktree recorded for this branch, if it did. Otherwise
-# origin's copy of the base before the local one: the clone's local default
+# Origin's copy of the base before the local one: the clone's local default
 # branch is never updated, so diffing from it counted everything that landed
 # upstream since the clone as this session's work.
-BASE_REF=""
-BASE_COMMIT=""
-CURRENT=$(git symbolic-ref --short -q HEAD 2>/dev/null)
-if [ -n "$CURRENT" ]; then
-  BASE_REF=$(git config --get "branch.$CURRENT.moonphaseBase" 2>/dev/null)
-  BASE_COMMIT=$(git config --get "branch.$CURRENT.moonphaseBaseCommit" 2>/dev/null)
-fi
-if [ -n "$BASE_REF" ] && git rev-parse -q --verify "$BASE_REF^{{commit}}" >/dev/null 2>&1; then
-  case "$BASE_REF" in
-    refs/heads/*) BASE="${{BASE_REF#refs/heads/}}" ;;
-    refs/remotes/origin/*) BASE="${{BASE_REF#refs/remotes/origin/}}" ;;
-    *) BASE=$(git rev-parse --short "$BASE_REF" 2>/dev/null) ;;
-  esac
-elif git show-ref -q --verify "refs/remotes/origin/$BASE"; then
+if git show-ref -q --verify "refs/remotes/origin/$BASE"; then
   BASE_REF="refs/remotes/origin/$BASE"
 else
   BASE_REF="refs/heads/$BASE"
 fi
-# Compare against where this branch left the base, not against the base as it
-# is now: work someone else landed meanwhile is not this session's doing.
-REF=$(git merge-base HEAD "$BASE_REF" 2>/dev/null)
-# The recorded start commit instead when the merge-base is gone (a shallow
-# fetch cut through the history) or behind it (the base was force-pushed). Any
-# other merge-base means the session took in upstream work since, merged or
-# rebased, which belongs out of the diff.
-if [ -n "$BASE_COMMIT" ] \\
-    && git rev-parse -q --verify "$BASE_COMMIT^{{commit}}" >/dev/null 2>&1; then
-  if [ -z "$REF" ] || git merge-base --is-ancestor "$REF" "$BASE_COMMIT" 2>/dev/null; then
-    REF="$BASE_COMMIT"
-  fi
+# Where ensure_worktree started this worktree: base ref, then start commit.
+RECORD="$(git rev-parse --git-dir 2>/dev/null)/moonphase-base"
+RECORDED=""
+START=""
+if [ -f "$RECORD" ]; then
+  RECORDED=$(sed -n 1p "$RECORD")
+  START=$(sed -n 2p "$RECORD")
+else
+  # Sessions from before the record: where the branch was created, while
+  # its reflog still says.
+  CURRENT=$(git symbolic-ref -q HEAD 2>/dev/null)
+  OLDEST=$(git reflog show --format='%H %gs' "$CURRENT" -- 2>/dev/null | tail -n 1)
+  case "${{OLDEST#* }}" in
+    "branch: Created from"*) START="${{OLDEST%% *}}" ;;
+  esac
+fi
+case "$START" in
+  *[!0-9a-f]*) START="" ;;
+esac
+[ -n "$START" ] && git cat-file -e "$START^{{commit}}" 2>/dev/null || START=""
+case "$RECORDED" in
+  refs/*)
+    BASE="${{RECORDED#refs/heads/}}"
+    BASE="${{BASE#refs/remotes/origin/}}"
+    git show-ref -q --verify "$RECORDED" && BASE_REF="$RECORDED"
+    ;;
+  ?*) BASE=$(printf '%.7s' "$RECORDED") ;;
+esac
+if [ -n "$START" ]; then
+  # From the start, or from where the session last took in the base's work
+  # (merged or rebased) if that is later: that work is not the session's.
+  # A force-push or shallow cut can put either candidate behind the start,
+  # or lose it, so only one at or past the start counts.
+  REF="$START"
+  for C in $(git merge-base HEAD "$BASE_REF" 2>/dev/null) \\
+      $(git merge-base --fork-point "$BASE_REF" HEAD 2>/dev/null); do
+    if git merge-base --is-ancestor "$REF" "$C" 2>/dev/null; then
+      REF="$C"
+    fi
+  done
+else
+  REF=$(git merge-base HEAD "$BASE_REF" 2>/dev/null)
 fi
 [ -n "$REF" ] || REF=$(git rev-list --max-parents=0 HEAD 2>/dev/null | tail -1)
 

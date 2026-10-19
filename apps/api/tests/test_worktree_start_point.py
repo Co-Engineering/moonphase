@@ -105,19 +105,29 @@ class Repos:
         )
         return sorted(f.path for f in out.files)
 
-    def fetch_specs(self) -> list[str]:
-        return self.git(
-            self.workspace, "config", "--get-all", "remote.origin.fetch"
-        ).splitlines()
+    def commit_local(self) -> str:
+        """A commit only the workspace has, made on its main the ordinary way."""
+        self.git(self.workspace, "commit", "-q", "--allow-empty", "-m", "local only")
+        return self.git(self.workspace, "rev-parse", "HEAD")
 
-    def commit_local(self, ref: str) -> str:
-        """A commit only the workspace has, on top of `ref`."""
-        tree = self.git(self.workspace, "rev-parse", f"{ref}^{{tree}}")
-        sha = self.git(
-            self.workspace, "commit-tree", tree, "-p", ref, "-m", "local only"
-        )
-        self.git(self.workspace, "update-ref", ref, sha)
-        return sha
+    def has_ref(self, ref: str) -> bool:
+        return subprocess.run(
+            ["git", "show-ref", "--verify", "--quiet", ref],
+            cwd=self.workspace, env=self.env,
+        ).returncode == 0
+
+    def record(self, session: str) -> Path:
+        gitdir = self.git(self.workdir(session), "rev-parse", "--absolute-git-dir")
+        return Path(gitdir) / "moonphase-base"
+
+    def shallow_cut(self) -> None:
+        """Draw a shallow boundary through main's history, the way fetching a
+        new branch at depth 50 does, then refresh origin's main past it."""
+        self.commit_upstream("main", count=60)
+        self.commit_upstream("pr-123", base="main")
+        self.start("review", start_branch="pr-123")
+        self.commit_upstream("main")
+        self.start("bob")
 
     def upstream_tip(self, branch: str) -> str:
         return self.git(self.upstream, "rev-parse", f"refs/heads/{branch}")
@@ -193,25 +203,51 @@ def test_a_branch_fetched_earlier_is_refreshed(repos: Repos) -> None:
     assert base == "refs/remotes/origin/feature"
 
 
-def test_local_commits_ahead_of_origin_are_kept_and_said_so(repos: Repos) -> None:
-    ahead = repos.commit_local("refs/heads/main")
+_AHEAD_NOTE = (
+    "Your local main has commits that aren't on origin; this session starts "
+    "from origin's main. They are still on the local branch."
+)
+
+
+def test_local_commits_ahead_of_origin_are_mentioned_but_origin_wins(
+    repos: Repos,
+) -> None:
+    tip = repos.upstream_tip("main")
+    ahead = repos.commit_local()
 
     _, base, note = repos.start("alice")
 
-    assert repos.head("alice") == ahead
-    assert base == "refs/heads/main"
-    assert note and "not on origin" in note
+    assert repos.head("alice") == tip
+    assert base == "refs/remotes/origin/main"
+    assert note == _AHEAD_NOTE
+    assert repos.git(repos.workspace, "rev-parse", "refs/heads/main") == ahead
 
 
-def test_a_diverged_local_branch_is_kept_and_said_so(repos: Repos) -> None:
-    repos.commit_upstream("main", count=2)
-    ahead = repos.commit_local("refs/heads/main")
+def test_a_diverged_local_branch_is_mentioned_but_origin_wins(repos: Repos) -> None:
+    tip = repos.commit_upstream("main", count=2)
+    ahead = repos.commit_local()
 
     _, base, note = repos.start("alice")
 
-    assert repos.head("alice") == ahead
-    assert base == "refs/heads/main"
-    assert note and "not on origin" in note
+    assert repos.head("alice") == tip
+    assert base == "refs/remotes/origin/main"
+    assert note == _AHEAD_NOTE
+    assert repos.git(repos.workspace, "rev-parse", "refs/heads/main") == ahead
+
+
+def test_an_expired_reflog_does_not_make_a_force_push_look_like_local_work(
+    repos: Repos,
+) -> None:
+    """gc expires the clone's reflog after 90 days; telling an untouched
+    branch apart by it then failed, and local won over origin."""
+    repos.git(repos.workspace, "reflog", "expire", "--expire=now", "--all")
+    rewritten = repos.commit_upstream("main", base="main~3", count=2)
+
+    _, base, note = repos.start("alice")
+
+    assert repos.head("alice") == rewritten
+    assert base == "refs/remotes/origin/main"
+    assert note is None
 
 
 def test_a_branch_only_on_origin_is_fetched(repos: Repos) -> None:
@@ -320,14 +356,17 @@ def test_a_tag_named_like_the_branch_does_not_win(repos: Repos) -> None:
     assert base == "refs/remotes/origin/release"
 
 
-def test_the_base_is_recorded_for_the_changes_view(repos: Repos) -> None:
+def test_the_start_is_recorded_in_the_worktrees_own_git_dir(repos: Repos) -> None:
+    tip = repos.commit_upstream("main")
+
     repos.start("alice")
 
-    recorded = repos.git(
-        repos.workspace, "config", "--get", "branch.moonphase/alice.moonphaseBase"
+    assert repos.record("alice").read_text() == f"refs/remotes/origin/main\n{tip}\n"
+    config = subprocess.run(
+        ["git", "config", "--get-regexp", "moonphase"],
+        cwd=repos.workspace, env=repos.env, capture_output=True, text=True,
     )
-
-    assert recorded == "refs/remotes/origin/main"
+    assert config.stdout == ""
 
 
 def test_the_session_branch_does_not_track_where_it_started(repos: Repos) -> None:
@@ -476,7 +515,7 @@ def test_changes_diffs_against_the_recorded_base_not_the_stale_local_branch(
 
 
 def test_changes_prefers_origins_copy_when_nothing_was_recorded(repos: Repos) -> None:
-    """Sessions created before the base was recorded still diff against
+    """With no record and no reflog to fall back on, still diff against
     origin's main where there is one, not the stale local copy."""
     upstream_file = repos.seed / "upstream.txt"
     upstream_file.write_text("landed upstream\n")
@@ -484,8 +523,9 @@ def test_changes_prefers_origins_copy_when_nothing_was_recorded(repos: Repos) ->
     repos.git(repos.seed, "commit", "-q", "-m", "upstream change")
     repos.git(repos.seed, "push", "-q", "origin", "main")
     repos.start("alice")
+    repos.record("alice").unlink()
     repos.git(
-        repos.workspace, "config", "--unset", "branch.moonphase/alice.moonphaseBase"
+        repos.workspace, "reflog", "expire", "--expire=now", "refs/heads/moonphase/alice"
     )
     workdir = repos.workdir("alice")
     (workdir / "mine.txt").write_text("session work\n")
@@ -550,16 +590,6 @@ def test_a_force_pushed_branch_created_from_origin_is_followed(repos: Repos) -> 
 # --- The Changes view diffs against the commit the session started from ---
 
 
-def test_the_start_commit_is_recorded_for_the_changes_view(repos: Repos) -> None:
-    tip = repos.commit_upstream("main")
-
-    repos.start("alice")
-
-    assert repos.git(
-        repos.workspace, "config", "--get", "branch.moonphase/alice.moonphaseBaseCommit"
-    ) == tip
-
-
 def test_changes_ignore_a_force_push_of_where_the_session_started(repos: Repos) -> None:
     for name in ("a.txt", "b.txt", "c.txt"):
         repos.commit_upstream_file("main", name)
@@ -577,42 +607,89 @@ def test_changes_survive_a_shallow_fetch_cutting_through_the_base(repos: Repos) 
     repos.commit_upstream_file("main", "landed.txt")
     repos.start("alice")
     repos.commit_in("alice", "mine.txt")
-    repos.commit_upstream("main", count=60)
-    repos.commit_upstream("pr-123", base="main")
-    repos.start("review", start_branch="pr-123")
-    repos.commit_upstream("main")
-    repos.start("bob")
+    repos.shallow_cut()
 
     assert repos.changed("alice") == ["mine.txt"]
+
+
+def _merge_upstream_into(repos: Repos, session: str) -> None:
+    workdir = repos.workdir(session)
+    repos.git(workdir, "fetch", "-q", "origin")
+    repos.git(workdir, "merge", "-q", "--no-edit", "refs/remotes/origin/main")
 
 
 def test_changes_hide_upstream_work_the_session_merged_in(repos: Repos) -> None:
     repos.start("alice")
     repos.commit_in("alice", "mine.txt")
     repos.commit_upstream_file("main", "upstream.txt")
-    workdir = repos.workdir("alice")
-    repos.git(workdir, "fetch", "-q", "origin")
-    repos.git(workdir, "merge", "-q", "--no-edit", "refs/remotes/origin/main")
+    _merge_upstream_into(repos, "alice")
 
     assert repos.changed("alice") == ["mine.txt"]
 
 
-def test_changes_hide_a_rewritten_upstream_the_session_merged_in(repos: Repos) -> None:
-    """Compared the way a pull request would be: what the session has that
-    origin's branch does not, not what origin rewrote meanwhile."""
-    repos.commit_upstream_file("main", "dropped.txt")
+def test_changes_hide_merged_upstream_work_after_a_shallow_cut(repos: Repos) -> None:
     repos.start("alice")
     repos.commit_in("alice", "mine.txt")
-    repos.commit_upstream("main", base="main~1")
-    repos.commit_upstream_file("main", "rewritten.txt")
-    workdir = repos.workdir("alice")
-    repos.git(workdir, "fetch", "-q", "origin")
-    repos.git(workdir, "merge", "-q", "--no-edit", "refs/remotes/origin/main")
+    repos.commit_upstream_file("main", "upstream.txt")
+    _merge_upstream_into(repos, "alice")
+    repos.shallow_cut()
 
-    changed = repos.changed("alice")
+    assert repos.changed("alice") == ["mine.txt"]
 
-    assert "rewritten.txt" not in changed
-    assert "mine.txt" in changed
+
+def test_changes_hide_merged_upstream_work_after_a_force_push_below_the_start(
+    repos: Repos,
+) -> None:
+    repos.start("alice")
+    repos.commit_in("alice", "mine.txt")
+    repos.commit_upstream_file("main", "upstream.txt")
+    _merge_upstream_into(repos, "alice")
+    repos.commit_upstream("main", base="main~3")
+    repos.git(repos.workdir("alice"), "fetch", "-q", "origin")
+
+    assert repos.changed("alice") == ["mine.txt"]
+
+
+@pytest.mark.parametrize("rewrite", ["force-push", "shallow-cut"])
+def test_changes_keep_the_recorded_start_after_the_agent_switches_branch(
+    repos: Repos, rewrite: str
+) -> None:
+    for name in ("a.txt", "b.txt", "c.txt"):
+        repos.commit_upstream_file("main", name)
+    repos.start("alice")
+    repos.git(repos.workdir("alice"), "checkout", "-q", "-b", "my-feature")
+    repos.commit_in("alice", "mine.txt")
+    if rewrite == "force-push":
+        repos.commit_upstream("main", base="main~3")
+        repos.git(repos.workdir("alice"), "fetch", "-q", "origin")
+    else:
+        repos.shallow_cut()
+
+    assert repos.changed("alice") == ["mine.txt"]
+
+
+def test_changes_of_a_session_without_a_record_start_where_its_branch_was_created(
+    repos: Repos,
+) -> None:
+    for name in ("a.txt", "b.txt", "c.txt"):
+        repos.commit_upstream_file("main", name)
+    repos.start("alice")
+    repos.record("alice").unlink()
+    repos.commit_in("alice", "mine.txt")
+    repos.commit_upstream("main", base="main~3")
+    repos.git(repos.workdir("alice"), "fetch", "-q", "origin")
+
+    assert repos.changed("alice") == ["mine.txt"]
+
+
+def test_changes_of_a_duplicate_start_at_its_snapshot(repos: Repos) -> None:
+    repos.start("alice")
+    snapshot = repos.commit_in("alice", "mine.txt")
+    repos.start("dup", start_commit=snapshot)
+    repos.commit_in("dup", "dup.txt")
+
+    assert repos.record("dup").read_text() == f"{snapshot}\n{snapshot}\n"
+    assert repos.changed("dup") == ["dup.txt"]
 
 
 # --- The lock is not held past the script by something git left running ---
@@ -659,56 +736,58 @@ def test_nothing_git_leaves_running_keeps_holding_the_lock(repos: Repos) -> None
                 pass
 
 
-# --- A named branch's refspec is kept, so the agent's own fetch refreshes it ---
+# --- A branch origin deleted (a merged pull request, say) ---
 
 
-def test_a_named_branch_stays_fresh_for_the_sessions_own_fetch(repos: Repos) -> None:
-    repos.commit_upstream("feature", base="main")
-    repos.start("alice", start_branch="feature")
-    tip = repos.commit_upstream("feature", count=2)
-
-    repos.git(repos.workdir("alice"), "fetch", "-q", "origin")
-
-    assert repos.git(repos.workspace, "rev-parse", "refs/remotes/origin/feature") == tip
-
-
-def test_starting_twice_from_a_branch_adds_its_refspec_once(repos: Repos) -> None:
-    repos.commit_upstream("feature", base="main")
-
-    repos.start("alice", start_branch="feature")
-    repos.start("bob", start_branch="feature")
-
-    assert repos.fetch_specs() == [
-        "+refs/heads/main:refs/remotes/origin/main",
-        "+refs/heads/feature:refs/remotes/origin/feature",
-    ]
-
-
-def test_the_default_branch_gets_no_refspec_of_its_own(repos: Repos) -> None:
-    repos.start("alice")
-    repos.start("bob", start_branch="main")
-
-    assert repos.fetch_specs() == ["+refs/heads/main:refs/remotes/origin/main"]
-
-
-def test_a_branch_deleted_upstream_stops_breaking_plain_fetches(repos: Repos) -> None:
-    """A configured refspec for a branch origin no longer has makes every
-    plain `git fetch` fail with "couldn't find remote ref"."""
+def test_a_plain_fetch_still_works_after_a_started_branch_is_deleted_upstream(
+    repos: Repos,
+) -> None:
+    """A refspec persisted for the branch made every plain `git fetch` in the
+    project fail with "couldn't find remote ref" once origin deleted it."""
     repos.commit_upstream("feature", base="main")
     repos.start("alice", start_branch="feature")
     repos.git(repos.seed, "push", "-q", "origin", ":feature")
 
-    repos.start("bob")
-
-    assert repos.fetch_specs() == ["+refs/heads/main:refs/remotes/origin/main"]
+    repos.git(repos.workspace, "fetch", "-q", "origin")
     repos.git(repos.workdir("alice"), "fetch", "-q", "origin")
+
+
+def test_a_branch_deleted_on_origin_starts_from_the_local_copy_and_says_so(
+    repos: Repos,
+) -> None:
+    repos.commit_upstream("feature", base="main")
+    repos.git(repos.workspace, "fetch", "-q", "origin", "feature:refs/remotes/origin/feature")
+    repos.git(repos.workspace, "branch", "feature", "refs/remotes/origin/feature")
+    local = repos.git(repos.workspace, "rev-parse", "refs/heads/feature")
+    repos.git(repos.seed, "push", "-q", "origin", ":feature")
+
+    _, base, note = repos.start("alice", start_branch="feature")
+
+    assert repos.head("alice") == local
+    assert base == "refs/heads/feature"
+    assert note == "feature no longer exists on origin, so this session starts from the local copy."
+    assert not repos.has_ref("refs/remotes/origin/feature")
+
+
+def test_a_branch_deleted_on_origin_is_not_started_from_its_leftover_copy(
+    repos: Repos,
+) -> None:
+    repos.commit_upstream("feature", base="main")
+    repos.start("alice", start_branch="feature")
+    repos.git(repos.seed, "push", "-q", "origin", ":feature")
+
+    result, _, _ = repos.start("bob", ok=False, start_branch="feature")
+
+    assert result.returncode != 0
+    assert "No branch called 'feature' was found locally or on origin." in result.stderr
+    assert not repos.has_ref("refs/remotes/origin/feature")
 
 
 # --- A branch that simply is not on origin is no failure worth a note ---
 
 
 def test_a_local_only_branch_starts_without_a_note(repos: Repos) -> None:
-    local = repos.commit_local("refs/heads/main")
+    local = repos.commit_local()
     repos.git(repos.workspace, "branch", "local-only", local)
 
     _, base, note = repos.start("alice", start_branch="local-only")
@@ -716,7 +795,6 @@ def test_a_local_only_branch_starts_without_a_note(repos: Repos) -> None:
     assert repos.head("alice") == local
     assert base == "refs/heads/local-only"
     assert note is None
-    assert "+refs/heads/local-only:refs/remotes/origin/local-only" not in repos.fetch_specs()
 
 
 def test_a_project_cloned_from_an_empty_repository_starts_without_a_note(
