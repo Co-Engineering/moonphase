@@ -77,6 +77,11 @@ RESOURCE_INTERVAL_SECONDS = 300.0
 # from filling back up between resource-usage readings.
 VOLUME_SWEEP_INTERVAL_SECONDS = 3600.0
 
+# How often each running container is asked to update its harnesses. Cheap
+# (one exec that usually exits at once); the container's own stamp enforces
+# MOONPHASE_HARNESS_UPDATE_HOURS.
+HARNESS_ASK_SECONDS = 3600
+
 # A volume Moonphase created for a project, matching the naming _container_name
 # in routers/projects.py has always used: mp-<slug>-<8 hex chars>-workspace/-home.
 # Matched by name rather than by the moonphase=1 label so volumes created by
@@ -694,11 +699,16 @@ class SessionMonitor:
         pick up a release that came out in the meantime. This only starts the
         update; the container does the work, and skips it by itself if it
         already ran within the interval.
+
+        Asked more often than the interval, because a session starting in a
+        container also runs the update and resets its clock: asking only once
+        per interval could land just inside that window and wait almost a
+        whole extra interval for the next try.
         """
         hours = get_settings().moonphase_harness_update_hours
         if hours <= 0:
             return 0
-        interval = hours * 3600
+        ask_every = min(hours * 3600, HARNESS_ASK_SECONDS)
         now = time.monotonic()
         async with service_session() as conn:
             servers = await queries.list_servers(conn)
@@ -715,7 +725,7 @@ class SessionMonitor:
             # host up for less than the interval a 0.0 default would hold off
             # the first update until it had been.
             last = self._harnesses_checked.get(container)
-            if last is not None and now - last < interval:
+            if last is not None and now - last < ask_every:
                 continue
             due.setdefault(server_id, []).append(container)
 

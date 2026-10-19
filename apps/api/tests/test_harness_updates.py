@@ -842,18 +842,31 @@ def sweep(monkeypatch):
     return monitor, clock, triggered
 
 
-async def test_sweep_asks_running_containers_once_per_interval(sweep) -> None:
+async def test_sweep_asks_running_containers_hourly_and_leaves_the_interval_to_them(
+    sweep,
+) -> None:
     monitor, clock, triggered = sweep
 
     assert await monitor.sweep_harnesses() == 2
     assert triggered == ["c1", "c5"], "only running projects on online servers"
 
-    clock["now"] += 5 * 3600
+    clock["now"] += 30 * 60
     assert await monitor.sweep_harnesses() == 0
 
-    clock["now"] += 3600
+    clock["now"] += 30 * 60
     assert await monitor.sweep_harnesses() == 2
     assert triggered == ["c1", "c5", "c1", "c5"]
+
+
+async def test_a_short_interval_is_asked_at_that_interval(sweep, monkeypatch) -> None:
+    monitor, clock, triggered = sweep
+    monkeypatch.setattr(get_settings(), "moonphase_harness_update_hours", 0.25)
+
+    await monitor.sweep_harnesses()
+    clock["now"] += 10 * 60
+    assert await monitor.sweep_harnesses() == 0
+    clock["now"] += 5 * 60
+    assert await monitor.sweep_harnesses() == 2
 
 
 async def test_sweep_is_off_at_zero_hours(sweep, monkeypatch) -> None:
