@@ -64,7 +64,9 @@ def is_safe_branch(name: str) -> bool:
     refspec position — and git's own rules bar the rest: no `..`, no trailing
     `/` or `.lock`, no component beginning with a dot.
     """
-    if not _SAFE_BRANCH.match(name):
+    # HEAD names no branch; as refs/remotes/origin/HEAD it is the symref to
+    # origin's default branch.
+    if not _SAFE_BRANCH.match(name) or name == "HEAD":
         return False
     if ".." in name or name.endswith("/") or name.endswith(".lock"):
         return False
@@ -226,12 +228,6 @@ note() { printf 'MOONPHASE_NOTE=%s\n' "$*"; }
 # `gc --auto` say, would otherwise go on holding the lock after this exits.
 git() { command git "$@" 9>&-; }
 has() { git show-ref --verify --quiet "$1"; }
-# Committed to here rather than only cloned or branched, so commits of its
-# own are somebody's work and not a force-push or a shallow cut on origin.
-committed_to() {
-  git reflog show --format=%gs "$1" -- 2>/dev/null \
-    | grep -qE '^(commit|merge|cherry-pick|rebase|pull|reset)'
-}
 
 if [ -n "$START_COMMIT" ]; then
   REQUESTED="commit $(printf '%.12s' "$START_COMMIT")"
@@ -273,6 +269,15 @@ fi
 if has "refs/heads/$BRANCH"; then
   reused
   git worktree add "$WORKDIR" "$BRANCH"
+  # Closing the session took its record with the old worktree; where the
+  # branch was created is the best start the Changes view can still have.
+  RECORD="$(git -C "$WORKDIR" rev-parse --absolute-git-dir)/moonphase-base"
+  if [ ! -f "$RECORD" ]; then
+    OLDEST=$(git reflog show --format='%H %gs' "refs/heads/$BRANCH" -- 2>/dev/null | tail -n 1)
+    case "${OLDEST#* }" in
+      "branch: Created from"*) printf '\n%s\n' "${OLDEST%% *}" > "$RECORD" ;;
+    esac
+  fi
   exit 0
 fi
 
@@ -338,20 +343,15 @@ if [ -n "$X" ]; then
   # Origin deleted it. Its leftover copy would otherwise be started from as if
   # it were current.
   if [ -n "$MISSING" ] && has "$REMOTE"; then
-    git update-ref -d "$REMOTE"
+    git update-ref --no-deref -d "$REMOTE"
     GONE=1
   fi
 
-  # Origin's copy whenever there is one. Whether local commits are somebody's
-  # work cannot be told reliably (force-pushes, shallow cuts, expired
-  # reflogs), so they only get a mention; they stay on the local branch.
+  # Origin's copy whenever there is one. Whether a local branch holds work of
+  # its own cannot be told reliably in a shallow clone (force-pushes, shallow
+  # cuts, expired reflogs); whatever it holds stays on it.
   if has "$REMOTE"; then
     START="$REMOTE"
-    if has "$LOCAL" && committed_to "$LOCAL" \
-        && [ "$(git rev-list --count "$REMOTE..$LOCAL" 2>/dev/null || echo 0)" != 0 ]; then
-      note "Your local $X has commits that aren't on origin; this session starts" \
-        "from origin's $X. They are still on the local branch."
-    fi
   elif has "$LOCAL"; then
     START="$LOCAL"
     if [ -n "$GONE" ]; then
@@ -570,7 +570,7 @@ GIT_TERMINAL_PROMPT=0 git {_git_env_flags(credential_file)} ls-remote --heads or
     seen: set[str] = set()
     for line in result.stdout.splitlines():
         name = line.strip()
-        if not name or name in seen:
+        if not name or name in seen or name == "HEAD":
             continue
         seen.add(name)
         names.append(name)

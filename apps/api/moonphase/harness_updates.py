@@ -173,9 +173,16 @@ async def trigger(conn: asyncssh.SSHClientConnection, container: str) -> bool:
     hours = settings.moonphase_harness_update_hours
     if hours <= 0:
         return False
+    # Beside it, then renamed over it: a run still reading the old script
+    # keeps the old file rather than finding new text at its old offset.
+    staged = f"{SCRIPT_PATH}.new"
     await docker_remote.write_file(
-        conn, container, SCRIPT_PATH, update_script(), user="root", mode="755"
+        conn, container, staged, update_script(), user="root", mode="755"
     )
+    renamed = await docker_remote.exec_capture(
+        conn, container, ["mv", "-f", staged, SCRIPT_PATH], user="root", timeout=30
+    )
+    renamed.check("Installing the harness update script")
     await docker_remote.exec_detached(
         conn,
         container,
@@ -292,11 +299,14 @@ write_profile() {
 # second copy into the home volume. Its copy goes first on PATH if it runs.
 @PROFILE_EXPORTS@
 MOONPHASE_PROFILE
+        # Resolved at login, so a `claude` started from a shell runs by its
+        # versioned path, which is how prune tells it is still in use.
         while [ $# -ge 2 ]; do
-            printf '[ -x "%s" ] && PATH="%s:$PATH"\n' \
-                "$ROOT/$1/current/bin/$2" "$ROOT/$1/current/bin"
+            printf 'd=$(readlink -f "%s" 2>/dev/null) && [ -x "$d/%s" ] && PATH="$d:$PATH"\n' \
+                "$ROOT/$1/current/bin" "$2"
             shift 2
         done
+        echo 'unset d'
         echo 'export PATH'
     } > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$PROFILE"; then
         return 0
@@ -368,7 +378,10 @@ update_one() {
         # Never into a directory already there, working or not: `current`,
         # `previous` or a running session may be using it. prune removes it
         # once nothing is.
-        if [ -e "$target" ]; then
+        # A dangling `current` or `previous` still names it.
+        if [ -e "$target" ] || [ -L "$target" ] \
+                || [ "$(readlink "$dir/current" 2>/dev/null)" = "$version" ] \
+                || [ "$(readlink "$dir/previous" 2>/dev/null)" = "$version" ]; then
             target=$dir/$version.r$(date +%s)
             if ! mkdir "$target"; then
                 rm -rf "$cache"
@@ -410,6 +423,12 @@ clean_legacy() {
         */*) parent=$modules/${pkg%/*} name=${pkg#*/} ;;
         *) parent=$modules name=$pkg ;;
     esac
+    # A session started before Moonphase managed the harness may still be
+    # running that copy; it goes on a later run, once nothing is.
+    if in_use "$modules/$pkg" "$modules/$pkg" "$LEGACY/bin/$bin"; then
+        echo "moonphase: $LEGACY still in use for $pkg; leaving it for now"
+        return 0
+    fi
     rm -rf -- "$modules/$pkg" "$parent/.$name-"*
     rm -f -- "$LEGACY/bin/$bin"
 }
@@ -427,7 +446,8 @@ clean_caches() {
 }
 
 in_use() {
-    # $1 version dir, $2 the same with symlinks resolved. Root cannot read
+    # $1 version dir, $2 the same with symlinks resolved, $3 optionally one
+    # exact path (a bin link) that also counts. Root cannot read
     # another user's /proc/<pid>/exe without CAP_SYS_PTRACE, which Docker
     # drops, so the world-readable cmdline is what usually answers: the
     # launcher starts a harness by its resolved, versioned path for this.
@@ -437,6 +457,7 @@ in_use() {
         if tr '\0' '\n' < "$p/cmdline" 2>/dev/null | {
             while IFS= read -r arg || [ -n "$arg" ]; do
                 case $arg in "$1"/*|"$2"/*) exit 0 ;; esac
+                [ -n "${3:-}" ] && [ "$arg" = "$3" ] && exit 0
             done
             exit 1
         }; then

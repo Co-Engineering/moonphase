@@ -496,6 +496,44 @@ def test_legacy_cleanup_removes_exactly_what_the_old_updaters_left(box: Box) -> 
         assert path.exists(), f"{path} was not the cleanup's to remove"
 
 
+def test_legacy_cleanup_waits_for_a_session_still_running_that_copy(box: Box) -> None:
+    """Sessions started before Moonphase managed the harness ran it from the
+    home volume; deleting it under them breaks whatever it loads later."""
+    package = box.legacy / "lib" / "node_modules" / "@anthropic-ai" / "claude-code"
+    package.mkdir(parents=True)
+    (package / "cli.js").write_text("x")
+    (box.legacy / "bin").mkdir(parents=True, exist_ok=True)
+    (box.legacy / "bin" / "claude").symlink_to(
+        "../lib/node_modules/@anthropic-ai/claude-code/cli.js"
+    )
+    box.process(77, ["node", str(box.legacy / "bin" / "claude")], exe=Path("/usr/bin/node"))
+
+    box.run("6")
+
+    assert (package / "cli.js").exists()
+    assert (box.legacy / "bin" / "claude").is_symlink()
+    assert "still in use" in (box.state / "harness-update.log").read_text()
+
+
+def test_a_dangling_current_is_never_installed_over(box: Box) -> None:
+    """`current` naming a version whose directory is gone must not get a
+    half-installed copy there, nor lose it if the install fails."""
+    box.run("6", version="1.0.0")
+    claude = box.root / CLAUDE
+    (claude / "current").unlink()
+    (claude / "current").symlink_to("2.0.0")
+
+    box.run("6", "force", version="2.0.0", mode="fail")
+
+    assert not (claude / "2.0.0").exists(), "nothing installed where current points"
+    assert box.current() == "2.0.0"
+
+    box.run("6", "force", version="2.0.0")
+
+    fresh = box.current()
+    assert fresh is not None and fresh.startswith("2.0.0.r"), fresh
+
+
 def test_large_npm_caches_go_and_small_ones_stay(box: Box) -> None:
     big = box.home / "sessions" / "alice" / ".npm" / "_cacache"
     small = box.home / "sessions" / "bob" / ".npm" / "_cacache"
@@ -659,7 +697,8 @@ def test_login_shells_find_moonphases_copy_first(box: Box) -> None:
 
     for slug, binary in ((CLAUDE, "claude"), (OPENCODE, "opencode")):
         found = _login(box, f"command -v {binary}", path)
-        assert found == str(box.root / slug / "current" / "bin" / binary)
+        # By its versioned path, so prune can see a shell's copy is in use.
+        assert found == str((box.root / slug / "current").resolve() / "bin" / binary)
         assert _login(box, binary, path) == "2.0.0"
 
 
@@ -679,7 +718,7 @@ def test_login_shells_fall_back_to_the_images_copy(box: Box, breakage: str) -> N
 
     assert _login(box, "command -v claude", path) == str(image / "claude")
     assert _login(box, 'echo "$PATH"', path) == (
-        f"{box.root / OPENCODE / 'current' / 'bin'}:{path}"
+        f"{(box.root / OPENCODE / 'current').resolve() / 'bin'}:{path}"
     ), "nothing added for the broken one"
 
 
@@ -967,9 +1006,10 @@ async def test_a_new_session_starts_an_update_in_the_background(monkeypatch) -> 
     created = await sessions.ensure_session(None, "mp-c", harness_kind="claude_code")
 
     assert created is True
-    write, start = fake.root_commands()
+    write, rename, start = fake.root_commands()
     assert "docker exec -i -u root mp-c" in write
-    assert harness_updates.SCRIPT_PATH in write
+    assert f"{harness_updates.SCRIPT_PATH}.new" in write
+    assert rename.endswith(f"mv -f {harness_updates.SCRIPT_PATH}.new {harness_updates.SCRIPT_PATH}")
     script = next(stdin for c, stdin in fake.commands if c == write)
     assert script == harness_updates.update_script()
     assert start.startswith(f"docker exec -d -u root mp-c {harness_updates.SCRIPT_PATH} 6 ")

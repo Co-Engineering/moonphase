@@ -103,10 +103,16 @@ if [ -f "$RECORD" ]; then
 else
   # Sessions from before the record: where the branch was created, while
   # its reflog still says.
+  # Only the session's own branch: one the agent created later started
+  # from the session's work, not from the base.
   CURRENT=$(git symbolic-ref -q HEAD 2>/dev/null)
-  OLDEST=$(git reflog show --format='%H %gs' "$CURRENT" -- 2>/dev/null | tail -n 1)
-  case "${{OLDEST#* }}" in
-    "branch: Created from"*) START="${{OLDEST%% *}}" ;;
+  case "$CURRENT" in
+    refs/heads/moonphase/*)
+      OLDEST=$(git reflog show --format='%H %gs' "$CURRENT" -- 2>/dev/null | tail -n 1)
+      case "${{OLDEST#* }}" in
+        "branch: Created from"*) START="${{OLDEST%% *}}" ;;
+      esac
+      ;;
   esac
 fi
 case "$START" in
@@ -122,15 +128,16 @@ case "$RECORDED" in
   ?*) BASE=$(printf '%.7s' "$RECORDED") ;;
 esac
 if [ -n "$START" ]; then
-  # From the start, or from where the session last took in the base's work
-  # (merged or rebased) if that is later: that work is not the session's.
-  # A force-push or shallow cut can put either candidate behind the start,
-  # or lose it, so only one at or past the start counts.
+  # From where the session last took in the base's work (merged, rebased,
+  # or caught up with a rewritten base), since that work is not the
+  # session's — unless that point is behind the start, as a force-push or a
+  # shallow cut can leave it, or lost. Then from the start.
   REF="$START"
   for C in $(git merge-base HEAD "$BASE_REF" 2>/dev/null) \\
       $(git merge-base --fork-point "$BASE_REF" HEAD 2>/dev/null); do
-    if git merge-base --is-ancestor "$REF" "$C" 2>/dev/null; then
+    if [ "$C" = "$START" ] || ! git merge-base --is-ancestor "$C" "$START" 2>/dev/null; then
       REF="$C"
+      break
     fi
   done
 else

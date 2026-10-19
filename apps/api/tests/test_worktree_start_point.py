@@ -203,13 +203,7 @@ def test_a_branch_fetched_earlier_is_refreshed(repos: Repos) -> None:
     assert base == "refs/remotes/origin/feature"
 
 
-_AHEAD_NOTE = (
-    "Your local main has commits that aren't on origin; this session starts "
-    "from origin's main. They are still on the local branch."
-)
-
-
-def test_local_commits_ahead_of_origin_are_mentioned_but_origin_wins(
+def test_local_commits_ahead_of_origin_stay_local_and_origin_wins(
     repos: Repos,
 ) -> None:
     tip = repos.upstream_tip("main")
@@ -219,11 +213,11 @@ def test_local_commits_ahead_of_origin_are_mentioned_but_origin_wins(
 
     assert repos.head("alice") == tip
     assert base == "refs/remotes/origin/main"
-    assert note == _AHEAD_NOTE
+    assert note is None
     assert repos.git(repos.workspace, "rev-parse", "refs/heads/main") == ahead
 
 
-def test_a_diverged_local_branch_is_mentioned_but_origin_wins(repos: Repos) -> None:
+def test_a_diverged_local_branch_stays_local_and_origin_wins(repos: Repos) -> None:
     tip = repos.commit_upstream("main", count=2)
     ahead = repos.commit_local()
 
@@ -231,7 +225,7 @@ def test_a_diverged_local_branch_is_mentioned_but_origin_wins(repos: Repos) -> N
 
     assert repos.head("alice") == tip
     assert base == "refs/remotes/origin/main"
-    assert note == _AHEAD_NOTE
+    assert note is None
     assert repos.git(repos.workspace, "rev-parse", "refs/heads/main") == ahead
 
 
@@ -692,6 +686,46 @@ def test_changes_of_a_duplicate_start_at_its_snapshot(repos: Repos) -> None:
     assert repos.changed("dup") == ["dup.txt"]
 
 
+def test_changes_of_a_duplicate_hide_upstream_work_it_merged_in(repos: Repos) -> None:
+    repos.start("alice")
+    snapshot = repos.commit_in("alice", "mine.txt")
+    repos.start("dup", start_commit=snapshot)
+    repos.commit_in("dup", "dup.txt")
+    repos.commit_upstream_file("main", "upstream.txt")
+    _merge_upstream_into(repos, "dup")
+
+    assert "upstream.txt" not in repos.changed("dup")
+    assert "dup.txt" in repos.changed("dup")
+
+
+def test_changes_hide_a_rewritten_upstream_the_session_caught_up_with(repos: Repos) -> None:
+    for name in ("a.txt", "b.txt", "c.txt"):
+        repos.commit_upstream_file("main", name)
+    repos.start("alice")
+    repos.commit_in("alice", "mine.txt")
+    repos.commit_upstream("main", base="main~3")
+    repos.commit_upstream_file("main", "x.txt")
+    _merge_upstream_into(repos, "alice")
+
+    # As a pull request would show it: against the rewritten upstream the
+    # session merged, so what the rewrite dropped (a, b, c) comes back as the
+    # session's, and the rewrite's own work (x) is not the session's.
+    changed = repos.changed("alice")
+    assert "mine.txt" in changed and "x.txt" not in changed
+
+
+def test_changes_of_an_old_session_on_a_branch_the_agent_made_show_all_its_work(
+    repos: Repos,
+) -> None:
+    repos.start("alice")
+    repos.record("alice").unlink()
+    repos.commit_in("alice", "first.txt")
+    repos.git(repos.workdir("alice"), "checkout", "-q", "-b", "my-feature")
+    repos.commit_in("alice", "second.txt")
+
+    assert repos.changed("alice") == ["first.txt", "second.txt"]
+
+
 # --- The lock is not held past the script by something git left running ---
 
 
@@ -842,3 +876,20 @@ def test_a_failed_transport_still_says_the_copy_may_be_behind(repos: Repos) -> N
 
     assert base == "refs/remotes/origin/feature"
     assert note and "Could not refresh feature from origin" in note
+
+
+def test_head_is_not_a_branch_to_start_from() -> None:
+    assert not workspaces.is_safe_branch("HEAD")
+
+
+def test_a_reopened_session_keeps_where_it_started_for_the_changes_view(repos: Repos) -> None:
+    repos.start("alice")
+    start = repos.head("alice")
+    record = Path(repos.git(repos.workdir("alice"), "rev-parse", "--absolute-git-dir"))
+    # Closing the session removes the worktree, and its record with it.
+    repos.git(repos.workspace, "worktree", "remove", "--force", str(repos.workdir("alice")))
+
+    repos.start("alice")
+
+    record = Path(repos.git(repos.workdir("alice"), "rev-parse", "--absolute-git-dir"))
+    assert (record / "moonphase-base").read_text().splitlines()[1] == start
