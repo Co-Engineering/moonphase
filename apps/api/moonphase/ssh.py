@@ -35,14 +35,6 @@ class HostKeyMismatch(SSHError):
     """The server presented a different host key than the one we pinned."""
 
 
-class CommandFailed(SSHError):
-    """The server ran the command and it exited non-zero.
-
-    Distinct from losing the connection: the server is answering, so a caller
-    working through several containers on it can carry on with the next one.
-    """
-
-
 @dataclass
 class SSHTarget:
     """Everything needed to open one connection, with secrets already decrypted."""
@@ -81,7 +73,7 @@ class CommandResult:
                     if self.exit_status == -1
                     else "(no output)"
                 )
-            raise CommandFailed(f"{what} failed (exit {self.exit_status}): {detail[:600]}")
+            raise SSHError(f"{what} failed (exit {self.exit_status}): {detail[:600]}")
         return self
 
 

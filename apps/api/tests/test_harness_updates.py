@@ -1214,7 +1214,7 @@ async def test_an_unreachable_server_costs_one_connect_per_pass(sweep, monkeypat
 @pytest.mark.parametrize(
     "error",
     [
-        ssh.CommandFailed("Writing the script into c1 failed (exit 1): container is paused"),
+        ssh.SSHError("Writing the script into c1 failed (exit 1): container is paused"),
         ssh.SSHError("Command timed out after 60.0s: docker exec -i -u root c1"),
         ssh.SSHError("The server is at its limit of concurrent SSH channels (open failed)."),
         ssh.SSHError("Command failed to execute: Connection lost"),
