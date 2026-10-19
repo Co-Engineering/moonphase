@@ -11,18 +11,22 @@ Everything on the Usage screen is counted from the harness's own transcripts —
 five-hour session window, the weekly windows, how full each is and when it resets —
 for every Claude account you have connected, side by side. It refreshes every minute.
 
-Those numbers come from Anthropic, not from transcripts: the allowance is not
-published, and the Usage screen only sees sessions Moonphase ran. So the dashboard asks
-the same endpoint Claude Code asks, with each account's own sign-in.
+Those numbers come from Anthropic, not from transcripts — the allowance is not
+published. They reach Moonphase in two ways:
 
-- **It never refreshes a sign-in.** A running Claude refreshes its own token; doing it
-  from here would spend the refresh token that session depends on. Moonphase uses the
-  token stored at sign-in while it is valid, and after that borrows the current one
-  from one of your running sessions on that account.
-- **An account nothing is using goes quiet.** With the stored token expired and no
-  running session on it, the card says so — start a session on that account, or sign
-  it in again, and the numbers come back. The last reading stays visible, dimmed.
-- **API-key accounts** have no plan windows; their spend is on the Usage screen.
+- **From your sessions, first.** Claude Code hands its status line the same 5-hour and
+  weekly limits `/usage` shows, with every reply. Moonphase starts Claude with a status
+  line that keeps the latest of those in the session's home, then runs whatever status
+  line you configured yourself, so yours still shows. The dashboard reads the newest
+  reading across your sessions on each account. No extra request, and it works with
+  Moonphase's long-lived sign-in.
+- **From Anthropic's usage endpoint, as a fallback**, when no session on an account
+  has reported anything yet. That endpoint is rate-limited and needs an interactive
+  login, so it often can't answer; Moonphase never refreshes a sign-in to make it.
+
+A reading is only as new as the last reply in a session on that account. An account
+nobody has used since a restart shows its last reading with the time it was taken.
+API-key accounts have no plan windows; their spend is on the Usage screen.
 
 ## Two different questions
 

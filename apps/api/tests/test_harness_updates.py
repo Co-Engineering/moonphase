@@ -27,7 +27,7 @@ import pytest
 from moonphase import harness as registry
 from moonphase import harness_updates, sessions, ssh
 from moonphase.config import get_settings
-from moonphase.harness import SessionSpace
+from moonphase.harness import SessionSpace, claude_code
 from moonphase.monitor import SessionMonitor
 from moonphase.ssh import CommandResult
 
@@ -775,7 +775,9 @@ def _launch(
 
 def _run_launcher(tmp_path: Path, monkeypatch, *, extra_path: Path | None = None) -> str:
     _launch(tmp_path, monkeypatch, extra_path=extra_path)
-    return (tmp_path / "home" / "ran").read_text().strip()
+    ran = (tmp_path / "home" / "ran").read_text().strip()
+    # The status line Claude is always launched with is not what these test.
+    return ran.replace(f" --settings {claude_code._STATUSLINE_SETTINGS}", "")
 
 
 def test_launcher_prefers_moonphases_own_copy(tmp_path: Path, monkeypatch) -> None:
