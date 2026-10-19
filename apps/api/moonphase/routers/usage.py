@@ -10,8 +10,9 @@ by a preference they have to set.
 The one number transcripts cannot give is the size of a subscription's
 allowance, so here it is something you tell it once, and the percentage
 appears after you do. The provider's own reading of each account's windows is
-`/accounts` below — see `plan_usage` for why that one does ask Anthropic. Everything else — when the window opened, when it resets, what
-went into it — comes from data already collected.
+`/accounts` below — see `plan_usage` for why that one does ask Anthropic.
+Everything else — when the window opened, when it resets, what went into
+it — comes from data already collected.
 """
 
 from __future__ import annotations
