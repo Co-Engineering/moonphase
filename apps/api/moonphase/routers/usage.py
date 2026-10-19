@@ -402,10 +402,45 @@ async def _account_usage(
         out.detail = "Billed per token, so there are no plan limits to show."
         return out
 
+    async with plan_usage.lock_for(account_id):
+        return await _read_account(principal, out, account_id, material, sessions, now)
+
+
+def _fill_from_last(out: AccountUsageOut, account_id: str) -> None:
+    last = plan_usage.last_known(account_id)
+    if last is not None:
+        out.windows = _windows_out(last.windows)
+        out.fetched_at = datetime.fromtimestamp(last.fetched_at, tz=UTC)
+        out.stale = True
+
+
+def _slow_down(out: AccountUsageOut, account_id: str, until: float) -> None:
+    at = datetime.fromtimestamp(until, tz=UTC)
+    out.status = "rate_limited"
+    out.detail = "Anthropic asked us to slow down."
+    out.retry_at = at
+    _fill_from_last(out, account_id)
+
+
+async def _read_account(
+    principal: Principal,
+    out: AccountUsageOut,
+    account_id: str,
+    material: dict[str, Any] | None,
+    sessions: list[tuple[dict[str, Any], dict[str, Any]]],
+    now: float,
+) -> AccountUsageOut:
     hit = plan_usage.cached(account_id, now)
     if hit is not None:
         out.windows = _windows_out(hit.windows)
         out.fetched_at = datetime.fromtimestamp(hit.fetched_at, tz=UTC)
+        return out
+
+    # Refused recently: asking again before the time it gave only keeps the
+    # account pinned at its limit.
+    until = plan_usage.backing_off_until(account_id, now)
+    if until is not None:
+        _slow_down(out, account_id, until)
         return out
 
     stored = plan_usage.token_from_credentials_file((material or {}).get("oauth_blob"))
@@ -426,13 +461,12 @@ async def _account_usage(
         out.windows = _windows_out(reading.windows)
         out.fetched_at = datetime.fromtimestamp(reading.fetched_at, tz=UTC)
     except plan_usage.UsageUnavailable as exc:
+        if exc.reason == "rate_limited":
+            _slow_down(out, account_id, plan_usage.refused(account_id, now, exc.retry_after))
+            return out
         out.status = exc.reason
         out.detail = exc.detail
-        last = plan_usage.last_known(account_id)
-        if last is not None:
-            out.windows = _windows_out(last.windows)
-            out.fetched_at = datetime.fromtimestamp(last.fetched_at, tz=UTC)
-            out.stale = True
+        _fill_from_last(out, account_id)
     return out
 
 

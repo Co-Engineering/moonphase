@@ -16,11 +16,13 @@ otherwise borrows the current one from a running session on that account.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -30,7 +32,14 @@ log = logging.getLogger(__name__)
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 # Required by the provider for OAuth-authenticated calls.
 OAUTH_BETA = "oauth-2025-04-20"
-CACHE_SECONDS = 60.0
+# The numbers move slowly, and the endpoint is rate-limited per account — a
+# limit the account's own running Claude sessions draw on too.
+CACHE_SECONDS = 120.0
+# After a 429 with no Retry-After, wait this long, doubling on each refusal in
+# a row up to the cap. Asking again a minute later just keeps the account at
+# its limit.
+BACKOFF_SECONDS = 300.0
+BACKOFF_CAP_SECONDS = 1800.0
 
 # Known windows, in display order. Anything else the provider adds is shown
 # after these under its own key rather than dropped.
@@ -71,10 +80,29 @@ class Reading:
 class UsageUnavailable(Exception):
     """The provider would not say. `reason` is a short machine-readable kind."""
 
-    def __init__(self, reason: str, detail: str) -> None:
+    def __init__(self, reason: str, detail: str, retry_after: float | None = None) -> None:
         super().__init__(detail)
         self.reason = reason
         self.detail = detail
+        # Seconds the provider asked us to wait, when it said.
+        self.retry_after = retry_after
+
+
+def retry_after_seconds(value: str | None, now: float) -> float | None:
+    """`Retry-After` as seconds from now — it may be a number or an HTTP date."""
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return max(0.0, when.timestamp() - now)
 
 
 def token_from_credentials_file(contents: str | None) -> AccountToken | None:
@@ -165,7 +193,12 @@ async def fetch(token: str, client: httpx.AsyncClient | None = None) -> list[Win
             "unsupported", "This kind of sign-in cannot report plan usage."
         )
     if response.status_code == 429:
-        raise UsageUnavailable("rate_limited", "Anthropic asked us to slow down.")
+        log.info("usage endpoint rate-limited: %s", response.text[:300])
+        raise UsageUnavailable(
+            "rate_limited",
+            "Anthropic asked us to slow down.",
+            retry_after=retry_after_seconds(response.headers.get("retry-after"), time.time()),
+        )
     if response.status_code >= 400:
         raise UsageUnavailable(
             "error", f"Anthropic answered {response.status_code}."
@@ -196,4 +229,38 @@ def last_known(account_id: str) -> Reading | None:
 def remember(account_id: str, windows: list[Window]) -> Reading:
     reading = Reading(windows=windows, fetched_at=time.time())
     _cache[account_id] = reading
+    _backoff.pop(account_id, None)
     return reading
+
+
+# account id -> (do not ask before this time, refusals in a row).
+_backoff: dict[str, tuple[float, int]] = {}
+
+
+def backing_off_until(account_id: str, now: float) -> float | None:
+    entry = _backoff.get(account_id)
+    if entry is None or entry[0] <= now:
+        return None
+    return entry[0]
+
+
+def refused(account_id: str, now: float, retry_after: float | None) -> float:
+    """Record a 429. Returns when it is worth asking again."""
+    streak = _backoff.get(account_id, (0.0, 0))[1] + 1
+    wait = (
+        retry_after
+        if retry_after is not None
+        else min(BACKOFF_CAP_SECONDS, BACKOFF_SECONDS * 2 ** (streak - 1))
+    )
+    until = now + wait
+    _backoff[account_id] = (until, streak)
+    return until
+
+
+# One request per account at a time, so two people opening the dashboard
+# together — or the page and its own poll — do not both spend the allowance.
+_locks: dict[str, asyncio.Lock] = {}
+
+
+def lock_for(account_id: str) -> asyncio.Lock:
+    return _locks.setdefault(account_id, asyncio.Lock())

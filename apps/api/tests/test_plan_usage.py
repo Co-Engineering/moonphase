@@ -111,6 +111,7 @@ async def test_fetch_says_why_it_could_not(status: int, reason: str) -> None:
 @pytest.fixture
 def world(monkeypatch):
     plan_usage._cache.clear()
+    plan_usage._backoff.clear()
     org = uuid4()
     personal, work, key = uuid4(), uuid4(), uuid4()
     w = SimpleNamespace(
@@ -129,6 +130,7 @@ def world(monkeypatch):
         projects=[],
         container_files={},
         fetched_with=[],
+        refuse=None,
         ids=SimpleNamespace(personal=personal, work=work, key=key),
     )
 
@@ -162,6 +164,8 @@ def world(monkeypatch):
 
     async def fetch(token, client=None):
         w.fetched_with.append(token)
+        if w.refuse is not None:
+            raise w.refuse
         return plan_usage.parse_windows(SAMPLE)
 
     monkeypatch.setattr(usage_router, "user_session", session_ctx)
@@ -179,7 +183,9 @@ def world(monkeypatch):
     monkeypatch.setattr(usage_router.ssh.pool, "get", pool_get)
     monkeypatch.setattr(usage_router.profile, "read_file", read_file)
     monkeypatch.setattr(usage_router.plan_usage, "fetch", fetch)
-    monkeypatch.setattr(usage_router.time, "time", lambda: NOW)
+    w.now = NOW
+    monkeypatch.setattr(usage_router.time, "time", lambda: w.now)
+    monkeypatch.setattr(plan_usage.time, "time", lambda: w.now)
     return w
 
 
@@ -256,3 +262,67 @@ async def test_a_second_look_within_a_minute_does_not_ask_again(world) -> None:
     asked = len(world.fetched_with)
     await usage_router.read_account_usage(PRINCIPAL)
     assert len(world.fetched_with) == asked
+
+
+def test_retry_after_is_read_as_seconds_or_a_date() -> None:
+    assert plan_usage.retry_after_seconds("120", NOW) == 120
+    assert plan_usage.retry_after_seconds(None, NOW) is None
+    assert plan_usage.retry_after_seconds("not a time", NOW) is None
+    assert plan_usage.retry_after_seconds("Thu, 01 Jan 1970 00:00:00 GMT", NOW) == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_passes_on_how_long_to_wait() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, headers={"retry-after": "90"}, json={})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(plan_usage.UsageUnavailable) as err:
+            await plan_usage.fetch("tok", client)
+    assert err.value.reason == "rate_limited" and err.value.retry_after == 90
+
+
+def _personal(out):
+    return next(a for a in out if a.label == "Personal")
+
+
+@pytest.mark.asyncio
+async def test_after_being_told_to_slow_down_it_does_not_ask_again_until_it_may(world) -> None:
+    world.refuse = plan_usage.UsageUnavailable("rate_limited", "slow down", retry_after=600)
+    first = _personal(await usage_router.read_account_usage(PRINCIPAL))
+    assert first.status == "rate_limited" and first.retry_at is not None
+    asked = world.fetched_with.count("personal-stored")
+
+    # A minute later, and five: still inside the wait it was given.
+    for minutes in (1, 5):
+        world.now = NOW + 60 * minutes
+        out = _personal(await usage_router.read_account_usage(PRINCIPAL))
+        assert out.status == "rate_limited"
+    assert world.fetched_with.count("personal-stored") == asked
+
+    # Once it has passed, it asks — and a good answer clears the backoff.
+    world.refuse = None
+    world.now = NOW + 601
+    out = _personal(await usage_router.read_account_usage(PRINCIPAL))
+    assert out.status == "ok" and out.retry_at is None
+
+
+@pytest.mark.asyncio
+async def test_with_no_retry_after_it_backs_off_longer_each_time(world) -> None:
+    world.refuse = plan_usage.UsageUnavailable("rate_limited", "slow down")
+    waits = []
+    for _ in range(3):
+        out = _personal(await usage_router.read_account_usage(PRINCIPAL))
+        waits.append(out.retry_at.timestamp() - world.now)  # type: ignore[union-attr]
+        world.now = out.retry_at.timestamp() + 1  # type: ignore[union-attr]
+    assert waits == [300, 600, 1200]
+
+
+@pytest.mark.asyncio
+async def test_while_waiting_the_last_good_reading_stays_visible(world) -> None:
+    await usage_router.read_account_usage(PRINCIPAL)
+    world.now = NOW + plan_usage.CACHE_SECONDS + 1
+    world.refuse = plan_usage.UsageUnavailable("rate_limited", "slow down", retry_after=60)
+    out = _personal(await usage_router.read_account_usage(PRINCIPAL))
+    assert out.status == "rate_limited" and out.stale
+    assert out.windows[0].percent == 42.0

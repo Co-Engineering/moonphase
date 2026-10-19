@@ -20,6 +20,7 @@ const usage = (over: Partial<AccountUsage>): AccountUsage => ({
   windows: [],
   fetched_at: '2026-10-19T10:00:00Z',
   stale: false,
+  retry_at: null,
   ...over,
 })
 
@@ -55,6 +56,18 @@ describe('the dashboard', () => {
     ])
     render(<Dashboard onToggleSidebar={() => {}} />)
     expect(await screen.findByText(/Out of date — The stored sign-in has expired\./)).toBeTruthy()
+  })
+
+  it('says when it will ask again after being told to slow down', async () => {
+    vi.spyOn(api, 'accountUsage').mockResolvedValue([
+      usage({
+        status: 'rate_limited',
+        detail: 'Anthropic asked us to slow down.',
+        retry_at: '2026-10-19T10:35:00Z',
+      }),
+    ])
+    render(<Dashboard onToggleSidebar={() => {}} />)
+    expect(await screen.findByText(/slow down\. Trying again at/)).toBeTruthy()
   })
 
   it('points to Settings with no accounts', async () => {

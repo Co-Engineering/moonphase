@@ -1233,3 +1233,5 @@ class AccountUsageOut(BaseModel):
     # the last good reading, shown because the current one failed.
     fetched_at: datetime | None = None
     stale: bool = False
+    # When it is worth asking again, after the provider said to slow down.
+    retry_at: datetime | None = None
