@@ -23,7 +23,17 @@ from uuid import UUID
 
 from sqlalchemy import text
 
-from . import activity, docker_remote, push, queries, runtime, sessions, ssh, usage
+from . import (
+    activity,
+    docker_remote,
+    harness_updates,
+    push,
+    queries,
+    runtime,
+    sessions,
+    ssh,
+    usage,
+)
 from . import harness as harness_registry
 from .activity import ActivityState
 from .config import get_settings
@@ -96,6 +106,8 @@ class SessionMonitor:
         # last swept for orphaned volumes — both keyed by server id.
         self._resources_checked: dict[str, float] = {}
         self._volumes_checked: dict[str, float] = {}
+        # When each container was last asked to update its harnesses.
+        self._harnesses_checked: dict[str, float] = {}
 
     def start(self) -> None:
         settings = get_settings()
@@ -137,6 +149,10 @@ class SessionMonitor:
                 await self.sweep_volumes()
             except Exception as exc:  # noqa: BLE001
                 log.warning("volume sweep failed: %s", exc)
+            try:
+                await self.sweep_harnesses()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("harness update sweep failed: %s", exc)
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._stop.wait(), timeout=interval)
 
@@ -668,6 +684,52 @@ class SessionMonitor:
                     row["discovered_at"],
                 )
         return removed
+
+    async def sweep_harnesses(self) -> int:
+        """Ask every running container to bring its harnesses up to date.
+
+        Starting a session asks too, but that update lands after the session it
+        was started for has already launched, and a project whose sessions run
+        for weeks rarely starts one. Asking on a timer is what makes a restart
+        pick up a release that came out in the meantime. This only starts the
+        update; the container does the work, and skips it by itself if it
+        already ran within the interval.
+        """
+        hours = get_settings().moonphase_harness_update_hours
+        if hours <= 0:
+            return 0
+        interval = hours * 3600
+        now = time.monotonic()
+        async with service_session() as conn:
+            servers = await queries.list_servers(conn)
+            projects = await queries.list_projects(conn)
+
+        online = {str(s["id"]): s for s in servers if s.get("status") == "online"}
+        triggered = 0
+        for project in projects:
+            container = project.get("container_name")
+            server = online.get(str(project["server_id"]))
+            if not container or server is None or project.get("status") != "running":
+                continue
+            # Absent rather than 0.0: monotonic time counts from boot, so on a
+            # host up for less than the interval a 0.0 default would hold off
+            # the first update until it had been.
+            last = self._harnesses_checked.get(container)
+            if last is not None and now - last < interval:
+                continue
+            self._harnesses_checked[container] = now
+            try:
+                conn_ssh = await ssh.pool.get(
+                    await self._target_for({"server_id": project["server_id"]})
+                )
+                if await harness_updates.trigger(conn_ssh, container):
+                    triggered += 1
+            except SSHError as exc:
+                log.debug(
+                    "harness sweep: could not reach %s on %s: %s",
+                    container, server["name"], exc,
+                )
+        return triggered
 
     async def _reconcile_project(
         self, row: dict[str, Any], *, status: str, detail: str | None

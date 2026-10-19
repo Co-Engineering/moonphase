@@ -60,6 +60,40 @@ same-origin and needs no entry.
 | `MOONPHASE_RUNTIME_IMAGE`  | `moonphase/runtime-claude:latest`  | Built by `infra/images/claude` |
 | `MOONPHASE_RUNTIME_IMAGE_TEMPLATE` | `moonphase/runtime-claude:{environment}` | Where per-environment images are published. The catalogue itself lives in `environments.py` |
 
+## Harness updates
+
+| Variable                          | Default  | Notes |
+| --------------------------------- | -------- | ----- |
+| `MOONPHASE_HARNESS_UPDATE_HOURS`  | `6`      | Hours between update checks per container. `0` disables updates |
+| `MOONPHASE_HARNESS_CHANNEL`       | `latest` | npm dist-tag or exact version Claude Code and OpenCode are kept at |
+
+An environment image is built once per server and then reused, so the Claude Code and
+OpenCode inside it stay at whatever version was current on the day it was built. Moonphase
+keeps them current itself instead: each project container gets its own install of each
+under `/opt/moonphase/harness/<package>/<version>`, and sessions launch whichever version
+the `current` link there points at, falling back to the image's copy until the first update
+has finished.
+
+An update is started, in the background, whenever a session starts and by the monitor once
+per interval for every running project. It asks npm for the version the channel names,
+installs it only if it is new, and switches `current` over only once the new binary has
+been run successfully — a failed or broken release leaves the working one in place. The
+current and previous versions are kept; older ones are removed once nothing is running them.
+The outcome is recorded in `/var/lib/moonphase/harness-update.json` inside the container.
+
+**A running session keeps the version it started with.** It picks up a new one when it is
+restarted.
+
+Claude Code's and OpenCode's own auto-updaters are switched off in Moonphase sessions
+(`DISABLE_AUTOUPDATER=1`, `OPENCODE_DISABLE_AUTOUPDATE=1`), because Moonphase manages the
+version. They installed into the shared home volume, retried every half hour from every
+session, and filled each session's npm cache with downloads; every update also removes what
+they left behind there, and any session npm cache over 1 GB.
+
+Setting the interval to `0` leaves sessions on the newest version Moonphase has already
+installed, or on the image's copy if it never installed one. The harnesses' own updaters
+stay off either way, so nothing moves the version until updates are turned back on.
+
 ## SSH
 
 | Variable                            | Default | Notes |

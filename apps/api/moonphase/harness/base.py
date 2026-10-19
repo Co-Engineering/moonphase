@@ -96,6 +96,23 @@ class Harness(abc.ABC):
     display_name: str
     # Modes the harness supports, most-preferred first.
     supported_auth_modes: tuple[HarnessAuthMode, ...]
+    # The npm package Moonphase installs and keeps current inside each
+    # container (see harness_updates.py), and the executable it provides. The
+    # image's own copy is frozen at whenever the image was first built, so
+    # without this a container runs that version for the rest of its life.
+    # None means the harness is not installed from npm and is left alone.
+    managed_package: str | None = None
+    managed_binary: str | None = None
+
+    def managed_env(self) -> dict[str, str]:
+        """Environment the launcher exports after the session's env file.
+
+        For switching off whatever a harness does on its own that Moonphase now
+        does instead — chiefly self-updating, which would install a second copy
+        into the shared home volume behind Moonphase's back. Exported last, so
+        a profile variable cannot quietly turn it back on.
+        """
+        return {}
 
     @abc.abstractmethod
     def launch_spec(
