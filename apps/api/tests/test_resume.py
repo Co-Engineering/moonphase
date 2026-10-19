@@ -13,12 +13,12 @@ from moonphase.harness import get as get_harness
 
 def test_a_fresh_session_starts_a_new_conversation() -> None:
     spec = get_harness("claude_code").launch_spec()
-    assert spec.command == ["claude"]
+    assert spec.command[:1] == ["claude"] and "--continue" not in spec.command
 
 
 def test_resuming_reopens_the_previous_one() -> None:
     spec = get_harness("claude_code").launch_spec(resume=True)
-    assert spec.command == ["claude", "--continue"], (
+    assert spec.command[:2] == ["claude", "--continue"], (
         "a resumed session must pick the conversation back up, not open a blank one"
     )
 

@@ -18,6 +18,7 @@ it — comes from data already collected.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from datetime import UTC, datetime, timedelta
@@ -25,10 +26,10 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from .. import plan_usage, profile, queries, runtime, ssh, usage
+from .. import docker_remote, plan_usage, profile, queries, runtime, ssh, usage
 from ..auth import Principal, current_principal
 from ..db import service_session, user_session
-from ..harness import SessionSpace
+from ..harness import SessionSpace, claude_code
 from ..harness import get as get_harness
 from ..schemas import (
     AccountUsageOut,
@@ -378,6 +379,46 @@ async def _borrow_tokens(
     return found
 
 
+# How many of an account's sessions to look in for a status-line reading.
+_STATUSLINE_ATTEMPTS = 5
+
+_READ_USAGE_FILE = 'f="$1"; [ -f "$f" ] || exit 0; stat -c %Y "$f" && cat "$f"'
+
+
+async def _statusline_reading(
+    principal: Principal, sessions: list[tuple[dict[str, Any], dict[str, Any]]], now: float
+) -> tuple[list[plan_usage.Window], float] | None:
+    """The newest plan-limit reading any of your sessions on an account saved.
+
+    Each session's status line keeps what Claude Code last told it (see
+    ClaudeCode's status line), so this needs no request to Anthropic and no
+    sign-in beyond the one the session already runs on.
+    """
+    best: tuple[list[plan_usage.Window], float] | None = None
+    for session, project in sessions[:_STATUSLINE_ATTEMPTS]:
+        path = f"{session['home_dir']}/{claude_code.USAGE_FILE}"
+        try:
+            ctx = await runtime.load_project_context(
+                principal.claims, project["id"], require=runtime.CAN_OBSERVE
+            )
+            conn_ssh = await ssh.pool.get(ctx.target)
+            result = await docker_remote.exec_capture(
+                conn_ssh, ctx.container, ["sh", "-c", _READ_USAGE_FILE, "sh", path], timeout=20
+            )
+        except (SSHError, runtime.NotFound, runtime.Forbidden) as exc:
+            log.debug("no status-line reading from %s: %s", session.get("tmux_session"), exc)
+            continue
+        mtime_line, _, body = result.stdout.partition("\n")
+        try:
+            at = float(mtime_line.strip())
+            windows = plan_usage.parse_statusline(json.loads(body), now)
+        except ValueError:
+            continue
+        if windows and (best is None or at > best[1]):
+            best = (windows, at)
+    return best
+
+
 def _windows_out(windows: list[plan_usage.Window]) -> list[LiveWindowOut]:
     return [
         LiveWindowOut(key=w.key, label=w.label, percent=w.percent, resets_at=w.resets_at)
@@ -435,6 +476,15 @@ async def _read_account(
     sessions: list[tuple[dict[str, Any], dict[str, Any]]],
     now: float,
 ) -> AccountUsageOut:
+    reading = await _statusline_reading(principal, sessions, now)
+    if reading is not None:
+        windows, at = reading
+        plan_usage.remember(account_id, windows, at=at)
+        out.windows = _windows_out(windows)
+        out.fetched_at = datetime.fromtimestamp(at, tz=UTC)
+        out.source = "statusline"
+        return out
+
     hit = plan_usage.cached(account_id, now)
     if hit is not None:
         out.windows = _windows_out(hit.windows)

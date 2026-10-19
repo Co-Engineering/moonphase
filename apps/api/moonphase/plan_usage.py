@@ -184,6 +184,44 @@ def _said(message: str) -> str:
     return f" Anthropic said: \u201c{message}\u201d" if message else ""
 
 
+def parse_statusline(doc: Any, now: float) -> list[Window]:
+    """The `rate_limits` a session's status line saved, as windows.
+
+    Same windows `/usage` shows, in Claude Code's status-line shape:
+    `used_percentage` and `resets_at` in epoch seconds. A window whose reset
+    has passed is empty again until the next message opens a new one.
+    """
+    limits = doc.get("rate_limits") if isinstance(doc, dict) else None
+    if not isinstance(limits, dict):
+        return []
+    keys = [k for k in WINDOW_LABELS if k in limits] + sorted(
+        k for k in limits if k not in WINDOW_LABELS and k != "spend_limit"
+    )
+    windows: list[Window] = []
+    for key in keys:
+        entry = limits.get(key)
+        if not isinstance(entry, dict):
+            continue
+        percent = entry.get("used_percentage")
+        if not isinstance(percent, int | float):
+            continue
+        resets = entry.get("resets_at")
+        resets_at = (
+            datetime.fromtimestamp(resets, tz=UTC) if isinstance(resets, int | float) else None
+        )
+        if resets_at is not None and resets_at.timestamp() <= now:
+            percent, resets_at = 0, None
+        windows.append(
+            Window(
+                key=key,
+                label=WINDOW_LABELS.get(key, key.replace("_", " ").capitalize()),
+                percent=max(0.0, min(100.0, float(percent))),
+                resets_at=resets_at,
+            )
+        )
+    return windows
+
+
 async def fetch(token: str, client: httpx.AsyncClient | None = None) -> list[Window]:
     headers = {
         "Authorization": f"Bearer {token}",
@@ -244,8 +282,8 @@ def last_known(account_id: str) -> Reading | None:
     return _cache.get(account_id)
 
 
-def remember(account_id: str, windows: list[Window]) -> Reading:
-    reading = Reading(windows=windows, fetched_at=time.time())
+def remember(account_id: str, windows: list[Window], at: float | None = None) -> Reading:
+    reading = Reading(windows=windows, fetched_at=time.time() if at is None else at)
     _cache[account_id] = reading
     _backoff.pop(account_id, None)
     return reading

@@ -186,6 +186,17 @@ def world(monkeypatch):
     monkeypatch.setattr(usage_router.ssh.pool, "get", pool_get)
     monkeypatch.setattr(usage_router.profile, "read_file", read_file)
     monkeypatch.setattr(usage_router.plan_usage, "fetch", fetch)
+    w.statusline = {}
+
+    async def exec_capture(conn, container, argv, **kw):
+        # argv is ["sh", "-c", script, "sh", path]
+        entry = w.statusline.get(argv[-1])
+        if entry is None:
+            return SimpleNamespace(ok=True, stdout="")
+        mtime, doc = entry
+        return SimpleNamespace(ok=True, stdout=f"{int(mtime)}\n{json.dumps(doc)}")
+
+    monkeypatch.setattr(usage_router.docker_remote, "exec_capture", exec_capture)
     w.now = NOW
     monkeypatch.setattr(usage_router.time, "time", lambda: w.now)
     monkeypatch.setattr(plan_usage.time, "time", lambda: w.now)
@@ -409,3 +420,75 @@ async def test_anthropics_own_message_is_passed_on() -> None:
         with pytest.raises(plan_usage.UsageUnavailable) as err:
             await plan_usage.fetch("tok", client)
     assert "missing scope" in err.value.detail
+
+
+# --- readings a session's status line saved ----------------------------------
+
+STATUSLINE_DOC = {
+    "rate_limits": {
+        "five_hour": {"used_percentage": 23.5, "resets_at": NOW + 3600},
+        "seven_day": {"used_percentage": 41.2, "resets_at": NOW + 86400},
+        "spend_limit": {"used_percentage": 5, "resets_at": NOW + 99},
+    }
+}
+
+
+def test_a_status_line_reading_becomes_windows() -> None:
+    windows = plan_usage.parse_statusline(STATUSLINE_DOC, NOW)
+    assert [(w.key, w.percent) for w in windows] == [("five_hour", 23.5), ("seven_day", 41.2)]
+    assert windows[0].resets_at is not None
+
+
+def test_a_window_whose_reset_passed_is_empty_again() -> None:
+    doc = {"rate_limits": {"five_hour": {"used_percentage": 90, "resets_at": NOW - 1}}}
+    [w] = plan_usage.parse_statusline(doc, NOW)
+    assert w.percent == 0 and w.resets_at is None
+
+
+def test_an_odd_status_line_file_is_no_windows() -> None:
+    assert plan_usage.parse_statusline({"model": {}}, NOW) == []
+    assert plan_usage.parse_statusline([1], NOW) == []
+
+
+def _on(world, account_id, home):
+    project = {"id": uuid4(), "org_id": world.org, "harness_credential_id": account_id}
+    world.projects.append(project)
+    world.sessions.append(
+        {
+            "project_id": project["id"], "is_mine": True, "state": "running",
+            "home_dir": home, "harness_credential_id": None, "tmux_session": home,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_sessions_status_line_is_read_before_asking_anthropic(world) -> None:
+    _on(world, world.ids.work, "/home/dev/sessions/w")
+    world.statusline["/home/dev/sessions/w/.moonphase/usage.json"] = (NOW - 30, STATUSLINE_DOC)
+
+    work = next(a for a in await usage_router.read_account_usage(PRINCIPAL) if a.label == "Work")
+
+    assert work.status == "ok" and work.source == "statusline"
+    assert [w.percent for w in work.windows] == [23.5, 41.2]
+    assert work.fetched_at is not None and work.fetched_at.timestamp() == NOW - 30
+    assert "work-stored" not in world.fetched_with
+
+
+@pytest.mark.asyncio
+async def test_the_newest_of_several_sessions_wins(world) -> None:
+    _on(world, world.ids.work, "/home/dev/sessions/a")
+    _on(world, world.ids.work, "/home/dev/sessions/b")
+    older = {"rate_limits": {"five_hour": {"used_percentage": 1, "resets_at": NOW + 60}}}
+    world.statusline["/home/dev/sessions/a/.moonphase/usage.json"] = (NOW - 600, older)
+    world.statusline["/home/dev/sessions/b/.moonphase/usage.json"] = (NOW - 5, STATUSLINE_DOC)
+
+    work = next(a for a in await usage_router.read_account_usage(PRINCIPAL) if a.label == "Work")
+
+    assert work.windows[0].percent == 23.5
+
+
+@pytest.mark.asyncio
+async def test_without_a_status_line_reading_anthropic_is_still_asked(world) -> None:
+    out = await usage_router.read_account_usage(PRINCIPAL)
+    personal = next(a for a in out if a.label == "Personal")
+    assert personal.source == "stored" and "personal-stored" in world.fetched_with
