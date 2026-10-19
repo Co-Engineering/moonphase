@@ -39,8 +39,9 @@ from dataclasses import dataclass, field
 
 import asyncssh
 
-from . import docker_remote
-from .harness import SessionSpace
+from . import docker_remote, harness_updates
+from . import harness as harness_registry
+from .harness import HarnessKind, SessionSpace
 from .ssh import SSHError
 
 log = logging.getLogger(__name__)
@@ -157,7 +158,11 @@ async def _prepare(conn: asyncssh.SSHClientConnection, session: McpLoginSession)
         )
         await _supersede(conn, session)
 
-        command = ["claude", "mcp", "login", session.server_name, "--no-browser"]
+        # As a session runs it: the same binary, with its updater off.
+        command = harness_updates.managed_command(
+            harness_registry.get(HarnessKind.CLAUDE_CODE),
+            ["claude", "mcp", "login", session.server_name, "--no-browser"],
+        )
         inner = " ".join(shlex.quote(a) for a in command)
         start_cmd = [
             "tmux", "new-session", "-d", "-s", session.tmux_session,

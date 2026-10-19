@@ -94,29 +94,16 @@ def _launcher_script(
     are exported after the env file, so nothing in a profile overrides them.
     """
     exported = dict(env or {})
-    candidates: list[str] = []
+    resolve = ""
     if harness is not None:
         exported.update(harness.managed_env())
-        candidates = harness_updates.binary_candidates(harness, spec_command)
+        resolve = harness_updates.resolve_snippet(harness, spec_command)
     exports = "".join(f"export {k}={shlex.quote(v)}\n" for k, v in exported.items())
-    if candidates:
+    if resolve:
         argv = " ".join(['"$harness_bin"', *(shlex.quote(a) for a in spec_command[1:])])
-        # Run by its real, versioned path: the update script runs as root
-        # without CAP_SYS_PTRACE, so this process's cmdline is all it can see
-        # when deciding whether an old version is still running.
-        resolve = (
-            f"harness_bin={shlex.quote(spec_command[0])}\n"
-            f"for candidate in {' '.join(shlex.quote(c) for c in candidates)}; do\n"
-            '    if [ -x "$candidate" ]; then\n'
-            '        harness_bin=$(readlink -f -- "$candidate" 2>/dev/null) || harness_bin=\n'
-            '        [ -n "$harness_bin" ] || harness_bin=$candidate\n'
-            "        break\n"
-            "    fi\n"
-            "done\n\n"
-        )
+        resolve += "\n"
     else:
         argv = " ".join(shlex.quote(a) for a in spec_command)
-        resolve = ""
     home = shlex.quote(space.home)
     env_file = shlex.quote(space.env_file)
     workdir = shlex.quote(space.workdir)

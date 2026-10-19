@@ -10,12 +10,13 @@ attempt failing — each one after downloading the release into its session's
 npm cache again, which is how one session's cache reached 2.5GB.
 
 So Moonphase owns the install instead. Each managed package lives in the
-container's own layer under INSTALL_ROOT/<slug>/<version>, a `current` symlink
-names the one sessions launch (see `binary_candidates`) and the image's entry in
-IMAGE_BIN_DIR is pointed at, and the harness's own updater is switched off
-through `Harness.managed_env` and, for login shells, PROFILE_PATH. The work
-happens in a shell script run as root inside the container, started detached
-so nothing in the API ever waits on npm. A running agent keeps the binary it started with;
+container's own layer under INSTALL_ROOT/<slug>/<version>, and a `current`
+symlink names the one to run. Sessions and Moonphase's own calls pick it by
+`resolve_snippet`, login shells by PATH from PROFILE_PATH; both fall back to
+the image's copy in IMAGE_BIN_DIR, which is never touched. The harness's own
+updater is switched off through `Harness.managed_env`. The work happens in a
+shell script run as root inside the container, started detached so nothing in
+the API ever waits on npm. A running agent keeps the binary it started with;
 it picks up a newer one when its session is next restarted.
 """
 
@@ -35,12 +36,12 @@ from .harness import Harness
 # against, which is the mess this replaces.
 INSTALL_ROOT = "/opt/moonphase/harness"
 # Where the image's own copy lives — the fallback until the first update has
-# finished, or if it never can.
+# finished, or if it never can. Left alone: root's own `npm i -g` owns it.
 IMAGE_BIN_DIR = "/usr/local/bin"
 SCRIPT_PATH = "/usr/local/sbin/moonphase-harness-update"
 STATE_DIR = "/var/lib/moonphase"
 # Sourced by login shells: tmux windows and the pane's fallback shell never
-# see the launcher's exports.
+# see the launcher's exports or its choice of binary.
 PROFILE_PATH = "/etc/profile.d/moonphase-harness.sh"
 # Where the harnesses' own updaters used to install to (the image's
 # npm_config_prefix), cleaned up by the script.
@@ -91,6 +92,44 @@ def binary_candidates(harness: Harness, command: list[str]) -> list[str]:
     return candidates
 
 
+def resolve_snippet(harness: Harness, command: list[str]) -> str:
+    """sh that sets $harness_bin to what `command[0]` should run, or "".
+
+    The first of `binary_candidates` that is executable, else the bare name.
+    Empty when `command` does not start with the harness's managed binary.
+    """
+    candidates = binary_candidates(harness, command)
+    if not candidates:
+        return ""
+    # By its real, versioned path: the update script runs as root without
+    # CAP_SYS_PTRACE, so a process's cmdline is all it can see when deciding
+    # whether an old version is still running.
+    return (
+        f"harness_bin={shlex.quote(command[0])}\n"
+        f"for candidate in {' '.join(shlex.quote(c) for c in candidates)}; do\n"
+        '    if [ -x "$candidate" ]; then\n'
+        '        harness_bin=$(readlink -f -- "$candidate" 2>/dev/null) || harness_bin=\n'
+        '        [ -n "$harness_bin" ] || harness_bin=$candidate\n'
+        "        break\n"
+        "    fi\n"
+        "done\n"
+    )
+
+
+def managed_command(harness: Harness, command: list[str]) -> list[str]:
+    """`command` as an argv that runs the binary a session would.
+
+    For Moonphase's own calls into a container (`claude mcp list`), which go
+    through neither the launcher nor a login shell. Unchanged for a command
+    that is not the harness's managed binary.
+    """
+    resolve = resolve_snippet(harness, command)
+    if not resolve:
+        return list(command)
+    exports = "".join(f"export {k}={shlex.quote(v)}\n" for k, v in harness.managed_env().items())
+    return ["sh", "-c", f'{exports}{resolve}exec "$harness_bin" "$@"', "sh", *command[1:]]
+
+
 def update_script() -> str:
     """The POSIX sh script the container runs as root.
 
@@ -100,7 +139,8 @@ def update_script() -> str:
     the environment so the tests can run it against temporary directories.
     """
     managed = managed_packages()
-    updates = "write_profile\n" + "".join(
+    bins = "".join(f" {shlex.quote(package_slug(p))} {shlex.quote(b)}" for p, b in managed)
+    updates = f"write_profile{bins}\n" + "".join(
         f"update_one {shlex.quote(package_slug(p))} {shlex.quote(p)} {shlex.quote(b)}\n"
         for p, b in managed
     )
@@ -113,7 +153,6 @@ def update_script() -> str:
         .replace("@LEGACY_PREFIX@", LEGACY_PREFIX)
         .replace("@DEV_HOME@", DEV_HOME)
         .replace("@NPM_CACHE_LIMIT_KB@", str(NPM_CACHE_LIMIT_KB))
-        .replace("@IMAGE_BIN_DIR@", IMAGE_BIN_DIR)
         .replace("@PROFILE_PATH@", PROFILE_PATH)
         .replace("@PROFILE_EXPORTS@\n", profile)
         + updates
@@ -171,7 +210,6 @@ LEGACY=${MOONPHASE_LEGACY_PREFIX:-@LEGACY_PREFIX@}
 DEV_HOME=${MOONPHASE_DEV_HOME:-@DEV_HOME@}
 CACHE_LIMIT_KB=${MOONPHASE_NPM_CACHE_LIMIT_KB:-@NPM_CACHE_LIMIT_KB@}
 PROC=${MOONPHASE_PROC:-/proc}
-LINK_DIR=${MOONPHASE_BIN_LINK_DIR:-@IMAGE_BIN_DIR@}
 PROFILE=${MOONPHASE_PROFILE_FILE:-@PROFILE_PATH@}
 # The image puts the dev user's home volume first on PATH; a root job should
 # not run whatever happens to be there.
@@ -201,13 +239,13 @@ if [ -z "$force" ] && [ -f "$STATE/harness-update.stamp" ]; then
     last=$(cat "$STATE/harness-update.stamp" 2>/dev/null)
     case $last in ''|*[!0-9]*) last=0 ;; esac
     # Up to a minute short, so an ask that lands a moment early (SSH latency,
-    # whole-second stamps) is not put off for a whole interval.
+    # whole-second stamps) is not put off until the next one.
     interval=$(awk -v h="$hours" \
         'BEGIN { i = h * 3600; s = i / 10; if (s > 60) s = 60; printf "%d", i - s }')
     [ $(( now - last )) -lt "${interval:-0}" ] && exit 0
 fi
-# The start, not the end: the monitor asks again one interval after it last
-# asked, and against a stamp taken at the end that ask is always too early.
+# The start, not the end, so the interval does not also stretch by however
+# long each run takes.
 # Taken whatever the outcome, so a release that will not install is retried
 # on the next interval, not by every session that starts in the meantime.
 echo "$now" > "$STATE/harness-update.stamp"
@@ -242,30 +280,25 @@ verify() {
     echo "moonphase: $1/bin/$2 --version: $out"
 }
 
-link_bin() {
-    # $1 package dir, $2 binary. Points the image's copy on PATH at ours, so
-    # shells and Moonphase's own `claude mcp` calls run what sessions run.
-    [ -d "$LINK_DIR" ] || return 0
-    want=$1/current/bin/$2
-    [ "$(readlink "$LINK_DIR/$2" 2>/dev/null)" = "$want" ] && return 0
-    if ln -sfn "$want" "$LINK_DIR/.$2.moonphase.$$" \
-            && mv -Tf "$LINK_DIR/.$2.moonphase.$$" "$LINK_DIR/$2"; then
-        echo "moonphase: $LINK_DIR/$2 -> $want"
-    else
-        rm -f "$LINK_DIR/.$2.moonphase.$$"
-        echo "moonphase: could not link $LINK_DIR/$2"
-    fi
-}
-
 write_profile() {
+    # $@ slug/binary pairs. Tested at login, so a `current` that is missing or
+    # broken leaves the image's copy to be found as before.
     mkdir -p "${PROFILE%/*}" || return 0
     tmp=$PROFILE.moonphase.$$
-    if cat > "$tmp" <<'MOONPHASE_PROFILE' && chmod 644 "$tmp" && mv -f "$tmp" "$PROFILE"; then
+    if {
+        cat <<'MOONPHASE_PROFILE'
 # Generated by Moonphase (moonphase/harness_updates.py). Edits will be overwritten.
 # Moonphase keeps these harnesses current; their own updaters would install a
-# second copy into the home volume.
+# second copy into the home volume. Its copy goes first on PATH if it runs.
 @PROFILE_EXPORTS@
 MOONPHASE_PROFILE
+        while [ $# -ge 2 ]; do
+            printf '[ -x "%s" ] && PATH="%s:$PATH"\n' \
+                "$ROOT/$1/current/bin/$2" "$ROOT/$1/current/bin"
+            shift 2
+        done
+        echo 'export PATH'
+    } > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$PROFILE"; then
         return 0
     fi
     rm -f "$tmp"
@@ -318,20 +351,32 @@ update_one() {
         return
     fi
 
-    target=$dir/$version
-    if [ "$(readlink "$dir/current" 2>/dev/null)" = "$version" ] && [ -x "$target/bin/$bin" ]
-    then
-        rm -rf "$cache"
-        link_bin "$dir" "$bin"
-        record "$pkg" ok
-        return
-    fi
+    # A `.r` sibling is the same version, installed beside a broken copy.
+    case $(readlink "$dir/current" 2>/dev/null) in
+        "$version"|"$version".r[0-9]*)
+            if [ -x "$dir/current/bin/$bin" ]; then
+                rm -rf "$cache"
+                record "$pkg" ok
+                return
+            fi ;;
+    esac
 
     # Installed in place rather than staged and moved, in case a postinstall
     # records its own path. `current` never points here until it has run.
-    if ! verify "$target" "$bin" >/dev/null; then
-        echo "moonphase: installing $pkg@$version"
-        rm -rf "$target"
+    target=$dir/$version
+    if ! verify "$target" "$bin"; then
+        # Never into a directory already there, working or not: `current`,
+        # `previous` or a running session may be using it. prune removes it
+        # once nothing is.
+        if [ -e "$target" ]; then
+            target=$dir/$version.r$(date +%s)
+            if ! mkdir "$target"; then
+                rm -rf "$cache"
+                record "$pkg" "failed: cannot create $target"
+                return
+            fi
+        fi
+        echo "moonphase: installing $pkg@$version into $target"
         if ! timeout 900 npm install -g --prefix "$target" --cache "$cache" \
                 --no-audit --no-fund --no-update-notifier --loglevel=error \
                 "$pkg@$version"; then
@@ -340,19 +385,18 @@ update_one() {
             return
         fi
         chmod -R a+rX "$target"
+        if ! verify "$target" "$bin"; then
+            rm -rf "$target" "$cache"
+            record "$pkg" "failed: $version does not run"
+            return
+        fi
     fi
     rm -rf "$cache"
 
-    if ! verify "$target" "$bin"; then
-        rm -rf "$target"
-        record "$pkg" "failed: $version does not run"
+    if ! switch_to "$dir" "${target##*/}"; then
+        record "$pkg" "failed: could not switch to ${target##*/}"
         return
     fi
-    if ! switch_to "$dir" "$version"; then
-        record "$pkg" "failed: could not switch to $version"
-        return
-    fi
-    link_bin "$dir" "$bin"
     record "$pkg" ok
 }
 
@@ -403,19 +447,18 @@ in_use() {
 }
 
 prune() {
-    # Keeps current and previous. Anything older goes unless a process is
-    # still running a binary from it — a session that has not been restarted
-    # since two releases ago.
+    # Keeps whatever current and previous resolve to. Anything else goes
+    # unless a process is still running a binary from it — a session that has
+    # not been restarted since two releases ago.
     [ -d "$1" ] || return 0
-    keep_current=$(readlink "$1/current" 2>/dev/null || true)
-    keep_previous=$(readlink "$1/previous" 2>/dev/null || true)
+    keep_current=$(cd "$1/current" 2>/dev/null && pwd -P) || keep_current=
+    keep_previous=$(cd "$1/previous" 2>/dev/null && pwd -P) || keep_previous=
     for v in "$1"/*; do
-        name=${v##*/}
-        case $name in current|previous) continue ;; esac
+        case ${v##*/} in current|previous) continue ;; esac
         [ -d "$v" ] || continue
-        [ "$name" = "$keep_current" ] && continue
-        [ "$name" = "$keep_previous" ] && continue
         real=$(cd "$v" 2>/dev/null && pwd -P) || real=$v
+        [ "$real" = "$keep_current" ] && continue
+        [ "$real" = "$keep_previous" ] && continue
         if in_use "$v" "$real"; then
             echo "moonphase: keeping $v, still running"
             continue
