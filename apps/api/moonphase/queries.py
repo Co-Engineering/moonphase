@@ -951,6 +951,9 @@ async def upsert_harness_credential_privileged(
         "oauth_token": encrypt(oauth_token),
         "oauth": encrypt(oauth_blob),
         "created_by": created_by,
+        # Decided here rather than as `:project_id is null` in SQL, where a
+        # null parameter has no type for Postgres to infer.
+        "is_default": project_id is None,
     }
     if project_id is not None:
         # One credential per (project, harness); replacing is the common case.
@@ -992,7 +995,7 @@ async def upsert_harness_credential_privileged(
             values
               (:org_id, :project_id, cast(:harness as harness_kind),
                cast(:auth_mode as harness_auth_mode), :label, :api_key,
-               :oauth_token, :oauth, :created_by, :project_id is null)
+               :oauth_token, :oauth, :created_by, :is_default)
             returning {HARNESS_ACCOUNT_COLUMNS}
             """
         ),
