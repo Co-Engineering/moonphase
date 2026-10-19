@@ -64,8 +64,8 @@ same-origin and needs no entry.
 
 | Variable                          | Default  | Notes |
 | --------------------------------- | -------- | ----- |
-| `MOONPHASE_HARNESS_UPDATE_HOURS`  | `6`      | Hours between update checks per container. `0` disables updates |
-| `MOONPHASE_HARNESS_CHANNEL`       | `latest` | npm dist-tag or exact version Claude Code and OpenCode are kept at |
+| `MOONPHASE_HARNESS_UPDATE_HOURS`  | `6`      | Hours between update checks per container, counted from when the last check started. `0` disables updates |
+| `MOONPHASE_HARNESS_CHANNEL`       | `latest` | npm dist-tag or exact version Claude Code and OpenCode are kept at. It applies to both, so a package npm says has no such tag or version follows `latest` instead |
 
 An environment image is built once per server and then reused, so the Claude Code and
 OpenCode inside it stay at whatever version was current on the day it was built. Moonphase
@@ -79,13 +79,21 @@ per interval for every running project. It asks npm for the version the channel 
 installs it only if it is new, and switches `current` over only once the new binary has
 been run successfully — a failed or broken release leaves the working one in place. The
 current and previous versions are kept; older ones are removed once nothing is running them.
-The outcome is recorded in `/var/lib/moonphase/harness-update.json` inside the container.
+The outcome is recorded in `/var/lib/moonphase/harness-update.json` inside the container,
+including any package that fell back to `latest` because the channel names a tag or version
+it does not have (`"fallback_from"`) — pinning Claude Code to `2.1.290`, say, leaves OpenCode
+on `latest` rather than unable to update at all.
+
+Once a version is in place, `/usr/local/bin/claude` and `/usr/local/bin/opencode` point at it
+too, so a shell in the container, a terminal window and Moonphase's own `claude mcp` checks
+run the same version sessions do rather than the image's.
 
 **A running session keeps the version it started with.** It picks up a new one when it is
 restarted.
 
 Claude Code's and OpenCode's own auto-updaters are switched off in Moonphase sessions
-(`DISABLE_AUTOUPDATER=1`, `OPENCODE_DISABLE_AUTOUPDATE=1`), because Moonphase manages the
+(`DISABLE_AUTOUPDATER=1`, `OPENCODE_DISABLE_AUTOUPDATE=1`), and in login shells in the
+container through `/etc/profile.d/moonphase-harness.sh`, because Moonphase manages the
 version. They installed into the shared home volume, retried every half hour from every
 session, and filled each session's npm cache with downloads; every update also removes what
 they left behind there, and any session npm cache over 1 GB.

@@ -705,11 +705,11 @@ class SessionMonitor:
             projects = await queries.list_projects(conn)
 
         online = {str(s["id"]): s for s in servers if s.get("status") == "online"}
-        triggered = 0
+        due: dict[str, list[str]] = {}
         for project in projects:
             container = project.get("container_name")
-            server = online.get(str(project["server_id"]))
-            if not container or server is None or project.get("status") != "running":
+            server_id = str(project["server_id"])
+            if not container or server_id not in online or project.get("status") != "running":
                 continue
             # Absent rather than 0.0: monotonic time counts from boot, so on a
             # host up for less than the interval a 0.0 default would hold off
@@ -717,18 +717,43 @@ class SessionMonitor:
             last = self._harnesses_checked.get(container)
             if last is not None and now - last < interval:
                 continue
-            self._harnesses_checked[container] = now
+            due.setdefault(server_id, []).append(container)
+
+        triggered = 0
+        for server_id, containers in due.items():
+            # Shares the activity sweep's back-off: an unreachable server
+            # would otherwise cost a full connect timeout per container.
+            if now < self._retry_after.get(server_id, 0.0):
+                continue
+            server = online[server_id]
             try:
-                conn_ssh = await ssh.pool.get(
-                    await self._target_for({"server_id": project["server_id"]})
-                )
-                if await harness_updates.trigger(conn_ssh, container):
-                    triggered += 1
+                target = await self._target_for({"server_id": server["id"]})
+                if target is None:
+                    continue
+                conn_ssh = await ssh.pool.get(target)
             except SSHError as exc:
-                log.debug(
-                    "harness sweep: could not reach %s on %s: %s",
-                    container, server["name"], exc,
-                )
+                self._back_off(server_id, str(server["name"]), exc)
+                continue
+            for container in containers:
+                try:
+                    started = await harness_updates.trigger(conn_ssh, container)
+                except ssh.CommandFailed as exc:
+                    # The server answered, about this container only (paused,
+                    # gone since the query); the rest are still worth asking.
+                    log.debug("harness sweep: %s on %s: %s", container, server["name"], exc)
+                    continue
+                except SSHError as exc:
+                    # The connection itself: each remaining container would
+                    # only wait out the same timeout.
+                    self._back_off(server_id, str(server["name"]), exc)
+                    break
+                self._failures.pop(server_id, None)
+                self._retry_after.pop(server_id, None)
+                # Only once asked, so a container that could not be is asked
+                # again on the next pass rather than an interval later.
+                self._harnesses_checked[container] = now
+                if started:
+                    triggered += 1
         return triggered
 
     async def _reconcile_project(

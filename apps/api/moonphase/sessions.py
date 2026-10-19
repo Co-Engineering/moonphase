@@ -101,10 +101,17 @@ def _launcher_script(
     exports = "".join(f"export {k}={shlex.quote(v)}\n" for k, v in exported.items())
     if candidates:
         argv = " ".join(['"$harness_bin"', *(shlex.quote(a) for a in spec_command[1:])])
+        # Run by its real, versioned path: the update script runs as root
+        # without CAP_SYS_PTRACE, so this process's cmdline is all it can see
+        # when deciding whether an old version is still running.
         resolve = (
             f"harness_bin={shlex.quote(spec_command[0])}\n"
             f"for candidate in {' '.join(shlex.quote(c) for c in candidates)}; do\n"
-            '    if [ -x "$candidate" ]; then harness_bin=$candidate; break; fi\n'
+            '    if [ -x "$candidate" ]; then\n'
+            '        harness_bin=$(readlink -f -- "$candidate" 2>/dev/null) || harness_bin=\n'
+            '        [ -n "$harness_bin" ] || harness_bin=$candidate\n'
+            "        break\n"
+            "    fi\n"
             "done\n\n"
         )
     else:
