@@ -114,9 +114,12 @@ with none picked, of the branch `/workspace` is on — fetched at that moment.
 after cloning, so starting from it put every session behind by whatever had
 landed since. Local commits origin does not have still win, since they may
 exist nowhere else, and an unreachable origin falls back to the local copy;
-either way the app says so. Where the branch started is recorded, and the
-Changes view diffs from there. A duplicate starts from the exact commit it was
-copied at, with no fetch.
+either way the app says so. A branch you picked other than the default is
+also added to the clone's fetch list, so a plain `git fetch` in the session
+keeps origin's copy of it current; once origin deletes the branch, the next
+session to start takes it off the list. Where the branch started is recorded, down to the exact
+commit, and the Changes view diffs from there. A duplicate starts from the
+exact commit it was copied at, with no fetch.
 
 A session's home and workdir are fixed when it is created and recorded on the
 row. Moving a running session would point it at a directory its harness has

@@ -90,9 +90,11 @@ fi
 # branch is never updated, so diffing from it counted everything that landed
 # upstream since the clone as this session's work.
 BASE_REF=""
+BASE_COMMIT=""
 CURRENT=$(git symbolic-ref --short -q HEAD 2>/dev/null)
 if [ -n "$CURRENT" ]; then
   BASE_REF=$(git config --get "branch.$CURRENT.moonphaseBase" 2>/dev/null)
+  BASE_COMMIT=$(git config --get "branch.$CURRENT.moonphaseBaseCommit" 2>/dev/null)
 fi
 if [ -n "$BASE_REF" ] && git rev-parse -q --verify "$BASE_REF^{{commit}}" >/dev/null 2>&1; then
   case "$BASE_REF" in
@@ -108,6 +110,16 @@ fi
 # Compare against where this branch left the base, not against the base as it
 # is now: work someone else landed meanwhile is not this session's doing.
 REF=$(git merge-base HEAD "$BASE_REF" 2>/dev/null)
+# The recorded start commit instead when the merge-base is gone (a shallow
+# fetch cut through the history) or behind it (the base was force-pushed). Any
+# other merge-base means the session took in upstream work since, merged or
+# rebased, which belongs out of the diff.
+if [ -n "$BASE_COMMIT" ] \\
+    && git rev-parse -q --verify "$BASE_COMMIT^{{commit}}" >/dev/null 2>&1; then
+  if [ -z "$REF" ] || git merge-base --is-ancestor "$REF" "$BASE_COMMIT" 2>/dev/null; then
+    REF="$BASE_COMMIT"
+  fi
+fi
 [ -n "$REF" ] || REF=$(git rev-list --max-parents=0 HEAD 2>/dev/null | tail -1)
 
 echo "{_SECTION}BRANCH"
