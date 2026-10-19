@@ -883,7 +883,7 @@ wheels = [
 
 [[package]]
 name = "moonphase-api"
-version = "0.10.28"
+version = "0.10.29"
 source = { editable = "." }
 dependencies = [
     { name = "asyncpg" },
