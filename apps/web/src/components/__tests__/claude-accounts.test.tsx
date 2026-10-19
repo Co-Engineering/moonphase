@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Settings } from '../../routes/Settings'
-import { SessionAccountSwitcher } from '../AccountPicker'
+import { AccountDialog, SessionAccountSwitcher } from '../AccountPicker'
 import {
   api,
   type HarnessAccount,
@@ -148,5 +148,44 @@ describe('switching a session to another account', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(switched).not.toHaveBeenCalled()
     expect(screen.queryByText(/Restart on/)).toBeNull()
+  })
+})
+
+
+describe('the account dialog the sidebar menus open', () => {
+  const project = { id: 'p1', name: 'Clockwork', harness_credential_id: null } as unknown as Project
+  const session = { tmux_session: 'olol', display_name: null, harness_credential_id: null } as unknown as Session
+
+  it('sets the project account', async () => {
+    const set = vi.spyOn(api, 'setProjectAccount').mockResolvedValue(project)
+    render(
+      <AccountDialog project={project} accounts={[personal, work]} onChanged={() => {}} onClose={() => {}} />,
+    )
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'a2' } })
+    await waitFor(() => expect(set).toHaveBeenCalledWith('p1', 'a2'))
+  })
+
+  it('switches a session, then closes', async () => {
+    vi.spyOn(api, 'switchSessionAccount').mockResolvedValue(session)
+    const onClose = vi.fn()
+    render(
+      <AccountDialog
+        project={project}
+        session={session}
+        accounts={[personal, work]}
+        onChanged={() => {}}
+        onClose={onClose}
+      />,
+    )
+    fireEvent.change(screen.getByLabelText('Claude account'), { target: { value: 'a2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Switch' }))
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+  })
+
+  it('explains how to get a choice with only one account', () => {
+    render(
+      <AccountDialog project={project} accounts={[personal]} onChanged={() => {}} onClose={() => {}} />,
+    )
+    expect(screen.getByText(/Add another under/)).toBeTruthy()
   })
 })

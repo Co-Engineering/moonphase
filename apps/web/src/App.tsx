@@ -23,6 +23,7 @@ import { formatBytes } from './lib/bytes'
 import { LeftoverCleanup } from './components/LeftoverCleanup'
 import { Dashboard } from './components/Dashboard'
 import {
+  AccountDialog,
   accountName,
   projectAccount,
   ProjectAccountSelect,
@@ -278,6 +279,10 @@ function Shell({ email }: { email: string }) {
   }, [])
   const [shareTarget, setShareTarget] = useState<ShareTarget | null>(null)
   const [configureTarget, setConfigureTarget] = useState<ConfigureTarget | null>(null)
+  const [accountTarget, setAccountTarget] = useState<{
+    projectId: string
+    session?: string
+  } | null>(null)
 
   // Servers are polled: bootstrap and Docker installs finish out of band, and
   // a stale "bootstrapping" chip is the most confusing thing the UI can show.
@@ -587,6 +592,9 @@ function Shell({ email }: { email: string }) {
                           session: item.tmux_session,
                         })
                       }
+                      onChooseAccount={(item, session) =>
+                        setAccountTarget({ projectId: item.id, session: session?.tmux_session })
+                      }
                     />
                   ))}
               </div>
@@ -656,6 +664,9 @@ function Shell({ email }: { email: string }) {
                       projectName: project.name,
                       session: item.tmux_session,
                     })
+                  }
+                  onChooseAccount={(item, session) =>
+                    setAccountTarget({ projectId: item.id, session: session?.tmux_session })
                   }
                 />
               ))}
@@ -844,6 +855,25 @@ function Shell({ email }: { email: string }) {
           onChanged={reloadAll}
         />
       )}
+      {accountTarget &&
+        (() => {
+          const project = projects.data?.find((p) => p.id === accountTarget.projectId)
+          if (!project) return null
+          const session = accountTarget.session
+            ? (sessions.data ?? []).find(
+                (s) => s.project_id === project.id && s.tmux_session === accountTarget.session,
+              )
+            : undefined
+          return (
+            <AccountDialog
+              project={project}
+              session={session}
+              accounts={accounts.data ?? []}
+              onChanged={reloadAll}
+              onClose={() => setAccountTarget(null)}
+            />
+          )
+        })()}
       {configureTarget && (
         <ClaudeConfigDialog
           title={
@@ -929,6 +959,7 @@ function ProjectRow({
   onDuplicateSession,
   onConfigure,
   onConfigureSession,
+  onChooseAccount,
   onReorderSession,
 }: {
   project: Project
@@ -947,6 +978,8 @@ function ProjectRow({
   onDuplicateSession?: (session: Session) => void
   onConfigure?: (project: Project) => void
   onConfigureSession?: (session: Session) => void
+  /** Pick which Claude account the project, or one session, runs on. */
+  onChooseAccount?: (project: Project, session?: Session) => void
   /** `beforeName` is null when dropped after the last session. */
   onReorderSession?: (draggedName: string, beforeName: string | null) => void
 }) {
@@ -1022,6 +1055,16 @@ function ProjectRow({
               disabledReason: canControl(project.access) ? undefined : 'view only',
               onSelect: () => onConfigure?.(project),
             },
+            ...(onChooseAccount
+              ? [
+                  {
+                    label: 'Claude account',
+                    detail: 'Which of your accounts your sessions here run on.',
+                    disabledReason: project.access === 'admin' ? undefined : 'not yours',
+                    onSelect: () => onChooseAccount(project),
+                  },
+                ]
+              : []),
             {
               label: 'Remove project',
               danger: true,
@@ -1133,6 +1176,17 @@ function ProjectRow({
                     : "someone else's",
                 onSelect: () => onConfigureSession?.(session),
               },
+              ...(onChooseAccount
+                ? [
+                    {
+                      label: 'Claude account',
+                      detail: 'Restart this session on another of your accounts.',
+                      disabledReason:
+                        session.is_mine && canControl(project.access) ? undefined : 'not yours',
+                      onSelect: () => onChooseAccount(project, session),
+                    },
+                  ]
+                : []),
               {
                 label: 'Duplicate',
                 detail: 'Copies the conversation and everything changed so far.',
@@ -1193,6 +1247,7 @@ export function ProjectView({
   const [newBranch, setNewBranch] = useState('')
   // Blank means the project's account, which is what nearly everyone wants.
   const [newAccount, setNewAccount] = useState('')
+  const [choosingAccount, setChoosingAccount] = useState(false)
   const choosingAccounts = accounts.length > 1
   const branches = useResource<string[]>(
     () =>
@@ -1308,6 +1363,15 @@ export function ProjectView({
 
   return (
     <>
+      {choosingAccount && active && (
+        <AccountDialog
+          project={project}
+          session={active}
+          accounts={accounts}
+          onChanged={onChanged}
+          onClose={() => setChoosingAccount(false)}
+        />
+      )}
       <div className="topbar">
         <button className="ghost" onClick={onToggleSidebar} title="Toggle sidebar" aria-label="Toggle sidebar">
           ☰
@@ -1442,6 +1506,15 @@ export function ProjectView({
                             url: sessionWindowUrl(project.id, session),
                           }),
                         ),
+                    },
+                  ]
+                : []),
+              ...(drivable && active?.is_mine
+                ? [
+                    {
+                      label: 'Claude account',
+                      detail: 'Restart this session on another of your accounts.',
+                      onSelect: () => setChoosingAccount(true),
                     },
                   ]
                 : []),
