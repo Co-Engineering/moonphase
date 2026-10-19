@@ -21,6 +21,7 @@ import { useSessionOrder } from './lib/sessionOrder'
 import { playAlertSound } from './lib/sound'
 import { formatBytes } from './lib/bytes'
 import { LeftoverCleanup } from './components/LeftoverCleanup'
+import { Dashboard } from './components/Dashboard'
 import {
   accountName,
   projectAccount,
@@ -226,7 +227,10 @@ function Shell({ email }: { email: string }) {
   // it is the thing you are actually looking at, so it belongs in the place
   // that says what you are looking at.
   const [selected, setSelected] = useState<
-    { kind: 'server'; id: string } | { kind: 'project'; id: string; session?: string } | null
+    | { kind: 'server'; id: string }
+    | { kind: 'project'; id: string; session?: string }
+    | { kind: 'dashboard' }
+    | null
   >(null)
   const [showAddServer, setShowAddServer] = useState(false)
   const [showNewProject, setShowNewProject] = useState(false)
@@ -682,6 +686,16 @@ function Shell({ email }: { email: string }) {
           >
             Search
           </button>
+          <button
+            className="ghost"
+            onClick={() => {
+              setSelected({ kind: 'dashboard' })
+              setShowSidebar(false)
+            }}
+            title="Plan limits for every connected Claude account"
+          >
+            Dashboard
+          </button>
           <button className="ghost" onClick={() => setShowUsage(true)} title="Token usage and spend">
             Usage
           </button>
@@ -702,7 +716,9 @@ function Shell({ email }: { email: string }) {
       </aside>
 
       <main className="main">
-        {activeProject ? (
+        {selected?.kind === 'dashboard' ? (
+          <Dashboard onToggleSidebar={toggleSidebar} />
+        ) : activeProject ? (
           <ErrorBoundary
             key={`${activeProject.id}:${selected?.kind === 'project' ? (selected.session ?? '') : ''}`}
             what="This session"

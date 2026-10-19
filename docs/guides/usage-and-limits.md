@@ -2,8 +2,27 @@
 
 What the agents consumed, and how much of your allowance is left.
 
-Everything here is counted from the harness's own transcripts — the same `usage` figures
-the provider billed. Nothing is estimated, intercepted, or asked for.
+Everything on the Usage screen is counted from the harness's own transcripts — the same
+`usage` figures the provider billed. Nothing is estimated, intercepted, or asked for.
+
+## The dashboard: every account's limits, live
+
+**Dashboard** in the sidebar shows what `/usage` shows inside Claude Code — the
+five-hour session window, the weekly windows, how full each is and when it resets —
+for every Claude account you have connected, side by side. It refreshes every minute.
+
+Those numbers come from Anthropic, not from transcripts: the allowance is not
+published, and the Usage screen only sees sessions Moonphase ran. So the dashboard asks
+the same endpoint Claude Code asks, with each account's own sign-in.
+
+- **It never refreshes a sign-in.** A running Claude refreshes its own token; doing it
+  from here would spend the refresh token that session depends on. Moonphase uses the
+  token stored at sign-in while it is valid, and after that borrows the current one
+  from one of your running sessions on that account.
+- **An account nothing is using goes quiet.** With the stored token expired and no
+  running session on it, the card says so — start a session on that account, or sign
+  it in again, and the numbers come back. The last reading stays visible, dimmed.
+- **API-key accounts** have no plan windows; their spend is on the Usage screen.
 
 ## Two different questions
 

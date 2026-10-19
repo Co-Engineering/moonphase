@@ -7,25 +7,31 @@ it comes back. On an API key the limit is money, so what matters is the bill.
 Which is which is decided by the credential the person actually connected, not
 by a preference they have to set.
 
-The one number Moonphase cannot derive is the size of a subscription's
-allowance: it is not published, and reading it from the provider would mean
-using the session's own OAuth token to call an endpoint on the person's behalf.
-So the allowance is something you tell it once, and the percentage appears
-after you do. Everything else — when the window opened, when it resets, what
+The one number transcripts cannot give is the size of a subscription's
+allowance, so here it is something you tell it once, and the percentage
+appears after you do. The provider's own reading of each account's windows is
+`/accounts` below — see `plan_usage` for why that one does ask Anthropic. Everything else — when the window opened, when it resets, what
 went into it — comes from data already collected.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from .. import queries, usage
+from .. import plan_usage, profile, queries, runtime, ssh, usage
 from ..auth import Principal, current_principal
 from ..db import service_session, user_session
+from ..harness import SessionSpace
+from ..harness import get as get_harness
 from ..schemas import (
+    AccountUsageOut,
+    LiveWindowOut,
     ModelPriceIn,
     ModelPriceOut,
     UsageLimitsIn,
@@ -35,6 +41,7 @@ from ..schemas import (
     UsageSliceOut,
     UsageWindowOut,
 )
+from ..ssh import SSHError
 
 log = logging.getLogger(__name__)
 
@@ -330,3 +337,156 @@ async def clear_price(
     async with user_session(principal.claims) as conn:
         org_id = await queries.resolve_org(conn, None)
         await queries.delete_model_price(conn, org_id, model)
+
+
+# How many of an account's running sessions to look in for a current token
+# before giving up. Each one costs an SSH round trip.
+_BORROW_ATTEMPTS = 3
+
+
+async def _borrow_token(
+    principal: Principal, sessions: list[tuple[dict[str, Any], dict[str, Any]]], now: float
+) -> plan_usage.AccountToken | None:
+    """The current access token from one of your running sessions on an account.
+
+    Read, never refreshed: Claude refreshes its own, and doing it here would
+    spend the refresh token that session relies on.
+    """
+    harness = get_harness("claude_code")
+    for session, project in sessions[:_BORROW_ATTEMPTS]:
+        try:
+            ctx = await runtime.load_project_context(
+                principal.claims, project["id"], require=runtime.CAN_OBSERVE
+            )
+            conn_ssh = await ssh.pool.get(ctx.target)
+            path = harness.credentials_merge_target(
+                SessionSpace(home=str(session["home_dir"]))
+            )
+            if path is None:
+                return None
+            contents = await profile.read_file(conn_ssh, ctx.container, path)
+        except (SSHError, runtime.NotFound, runtime.Forbidden) as exc:
+            log.debug("could not read a token from %s: %s", session.get("tmux_session"), exc)
+            continue
+        token = plan_usage.token_from_credentials_file(contents)
+        if token is not None and token.valid(now):
+            return token
+    return None
+
+
+def _windows_out(windows: list[plan_usage.Window]) -> list[LiveWindowOut]:
+    return [
+        LiveWindowOut(key=w.key, label=w.label, percent=w.percent, resets_at=w.resets_at)
+        for w in windows
+    ]
+
+
+async def _account_usage(
+    principal: Principal,
+    account: dict[str, Any],
+    material: dict[str, Any] | None,
+    sessions: list[tuple[dict[str, Any], dict[str, Any]]],
+    now: float,
+) -> AccountUsageOut:
+    account_id = str(account["id"])
+    out = AccountUsageOut(
+        account_id=account["id"],
+        label=account.get("label"),
+        auth_mode=account["auth_mode"],
+        is_default=bool(account.get("is_default")),
+        status="ok",
+    )
+    if account["auth_mode"] == "api_key":
+        out.status = "api_key"
+        out.detail = "Billed per token, so there are no plan limits to show."
+        return out
+
+    hit = plan_usage.cached(account_id, now)
+    if hit is not None:
+        out.windows = _windows_out(hit.windows)
+        out.fetched_at = datetime.fromtimestamp(hit.fetched_at, tz=UTC)
+        return out
+
+    stored = plan_usage.token_from_credentials_file((material or {}).get("oauth_blob"))
+    token = stored if stored is not None and stored.valid(now) else None
+    if token is None:
+        token = await _borrow_token(principal, sessions, now)
+    if token is None and (material or {}).get("oauth_token"):
+        token = plan_usage.AccountToken(str(material["oauth_token"]), None)  # type: ignore[index]
+
+    try:
+        if token is None:
+            raise plan_usage.UsageUnavailable(
+                "expired",
+                "The stored sign-in has expired and no running session is using this "
+                "account. Start one on it, or sign it in again.",
+            )
+        reading = plan_usage.remember(account_id, await plan_usage.fetch(token.token))
+        out.windows = _windows_out(reading.windows)
+        out.fetched_at = datetime.fromtimestamp(reading.fetched_at, tz=UTC)
+    except plan_usage.UsageUnavailable as exc:
+        out.status = exc.reason
+        out.detail = exc.detail
+        last = plan_usage.last_known(account_id)
+        if last is not None:
+            out.windows = _windows_out(last.windows)
+            out.fetched_at = datetime.fromtimestamp(last.fetched_at, tz=UTC)
+            out.stale = True
+    return out
+
+
+@router.get("/accounts", response_model=list[AccountUsageOut])
+async def read_account_usage(
+    principal: Principal = Depends(current_principal),
+) -> list[AccountUsageOut]:
+    """Every one of your Claude accounts' limits, as `/usage` shows them."""
+    now = time.time()
+    async with user_session(principal.claims) as conn:
+        org_id = await queries.personal_org_id(conn)
+        if org_id is None:
+            return []
+        session_rows = await queries.list_all_sessions(conn)
+        project_rows = await queries.list_projects(conn)
+
+    async with service_session() as conn:
+        accounts = await queries.list_harness_accounts_privileged(conn, org_id, "claude_code")
+        materials: dict[Any, dict[str, Any] | None] = {}
+        for account in accounts:
+            row = await queries.resolve_harness_credential_privileged(
+                conn,
+                org_id=org_id,
+                project_id=org_id,
+                harness="claude_code",
+                account_id=account["id"],
+            )
+            materials[account["id"]] = row if row and row["id"] == account["id"] else None
+
+    # Which of your running sessions runs on which account: the session's own
+    # choice, else its project's (when the project is yours), else the default.
+    default_id = next((a["id"] for a in accounts if a.get("is_default")), None)
+    projects = {p["id"]: p for p in project_rows}
+    by_account: dict[Any, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
+    for session in session_rows:
+        if not session.get("is_mine") or session.get("state") != "running":
+            continue
+        project = projects.get(session["project_id"])
+        if project is None:
+            continue
+        own_project = project.get("org_id") == org_id
+        account = (
+            session.get("harness_credential_id")
+            or (project.get("harness_credential_id") if own_project else None)
+            or default_id
+        )
+        by_account.setdefault(account, []).append((session, project))
+
+    return list(
+        await asyncio.gather(
+            *(
+                _account_usage(
+                    principal, a, materials.get(a["id"]), by_account.get(a["id"], []), now
+                )
+                for a in accounts
+            )
+        )
+    )

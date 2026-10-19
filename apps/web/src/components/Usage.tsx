@@ -12,10 +12,10 @@ import { useResource } from '../lib/useResource'
  * numbers people actually want are how full the window is and what time it
  * clears — the same two facts the harness itself reports.
  *
- * The allowance is the one thing that cannot be derived. It is not published,
- * and reading it from the provider would mean using a session's own OAuth
- * token on the person's behalf. So it is asked for once, and until it is given
- * the bar is absent rather than drawn against a number nobody supplied.
+ * The allowance is the one thing that cannot be derived from transcripts. It
+ * is asked for once here, and until it is given the bar is absent rather than
+ * drawn against a number nobody supplied. The provider's own reading, per
+ * account, is on the Dashboard instead.
  */
 
 const SPANS: { label: string; hours: number }[] = [
