@@ -202,6 +202,27 @@ export interface HarnessAccount {
   updated_at: string
 }
 
+/** One limit window, as the provider reports it — the same numbers as `/usage`. */
+export interface LiveWindow {
+  key: string
+  label: string
+  percent: number
+  resets_at: string | null
+}
+
+export interface AccountUsage {
+  account_id: string
+  label: string | null
+  auth_mode: 'oauth' | 'api_key'
+  is_default: boolean
+  status: 'ok' | 'api_key' | 'expired' | 'unsupported' | 'rate_limited' | 'unreachable' | 'error'
+  detail: string | null
+  windows: LiveWindow[]
+  fetched_at: string | null
+  /** The last good reading, shown because the current one failed. */
+  stale: boolean
+}
+
 /** Where a sign-in goes: an account to replace, or a name for a new one. */
 export type AccountTarget = { accountId: string } | { label: string }
 
@@ -787,6 +808,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ api_key: apiKey, harness, ...targetBody(target) }),
     }),
+  accountUsage: () => request<AccountUsage[]>('/api/usage/accounts'),
   harnessAccounts: (harness: HarnessKind = 'claude_code') =>
     request<HarnessAccount[]>(`/api/profile/harness/accounts?harness=${harness}`),
   updateHarnessAccount: (id: string, change: { label?: string; is_default?: boolean }) =>

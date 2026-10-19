@@ -1208,3 +1208,28 @@ class LeftoversCleanIn(BaseModel):
 class LeftoversCleanOut(BaseModel):
     removed: list[str]
     freed_bytes: int
+
+
+class LiveWindowOut(BaseModel):
+    key: str
+    label: str
+    percent: float
+    resets_at: datetime | None = None
+
+
+class AccountUsageOut(BaseModel):
+    """One account's limits as the provider reports them, like `/usage`."""
+
+    account_id: UUID
+    label: str | None
+    auth_mode: HarnessAuthModeStr
+    is_default: bool
+    # ok, api_key (no plan limits to show), expired, unsupported,
+    # rate_limited, unreachable, error.
+    status: str
+    detail: str | None = None
+    windows: list[LiveWindowOut] = []
+    # When the windows were read. Older than a minute or two means `stale`:
+    # the last good reading, shown because the current one failed.
+    fetched_at: datetime | None = None
+    stale: bool = False

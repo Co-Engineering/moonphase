@@ -3659,3 +3659,12 @@ button.link.danger { color: var(--red); }
 @media (max-width: 1300px) {
   .topbar-actions .account-switcher { display: none; }
 }
+
+/* --- Dashboard ---------------------------------------------------------- */
+.dashboard-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 16px; align-items: start; }
+.dashboard-card h2 { display: flex; align-items: center; gap: 8px; margin: 0; }
+.dashboard-card .windows { margin: 14px 0 8px; }
+.dashboard-card .windows.stale { opacity: 0.55; }
+.dashboard-card .dashboard-problem { color: var(--amber); }
+.dashboard-updated { margin: 4px 0 0; font-size: 12px; }
+.dashboard-grid .card { margin: 0; }
