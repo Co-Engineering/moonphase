@@ -188,7 +188,25 @@ export interface Project {
   share_count: number
   /** Runs under Sysbox, so it can safely install and run its own Docker. */
   docker_access: boolean
+  /** The owner's account their sessions here run on. Null: their default. */
+  harness_credential_id: string | null
 }
+
+/** One of your Claude accounts. Never the credential itself. */
+export interface HarnessAccount {
+  id: string
+  label: string | null
+  auth_mode: 'oauth' | 'api_key'
+  is_default: boolean
+  created_at: string
+  updated_at: string
+}
+
+/** Where a sign-in goes: an account to replace, or a name for a new one. */
+export type AccountTarget = { accountId: string } | { label: string }
+
+const targetBody = (target?: AccountTarget) =>
+  !target ? {} : 'accountId' in target ? { account_id: target.accountId } : { label: target.label }
 
 export interface Session {
   id: string
@@ -223,6 +241,8 @@ export interface Session {
   /** The git worktree this session works in, and the branch it is on. */
   workdir: string
   branch: string | null
+  /** The account this session was told to run on. Null: the project's, then the default. */
+  harness_credential_id: string | null
   /** Devices currently viewing this session, live from tmux. */
   attached_clients: number
   alive: boolean
@@ -610,10 +630,14 @@ export const api = {
    * Omit the name and it is derived from you, which is the useful default.
    * Omit the branch and the worktree starts from whatever `/workspace` is on.
    */
-  createSession: (projectId: string, name?: string, branch?: string) =>
+  createSession: (projectId: string, name?: string, branch?: string, accountId?: string) =>
     request<Session>(`/api/projects/${projectId}/sessions`, {
       method: 'POST',
-      body: JSON.stringify({ name: name ?? null, branch: branch ?? null }),
+      body: JSON.stringify({
+        name: name ?? null,
+        branch: branch ?? null,
+        account_id: accountId ?? null,
+      }),
     }),
   /** Branches worth offering as a new session's starting point. */
   branches: (projectId: string) => request<string[]>(`/api/projects/${projectId}/branches`),
@@ -742,10 +766,10 @@ export const api = {
       body: JSON.stringify(input),
     }),
 
-  startHarnessLogin: (harness: HarnessKind = 'claude_code') =>
+  startHarnessLogin: (target?: AccountTarget, harness: HarnessKind = 'claude_code') =>
     request<HarnessLogin>('/api/profile/harness/login/start', {
       method: 'POST',
-      body: JSON.stringify({ harness }),
+      body: JSON.stringify({ harness, ...targetBody(target) }),
     }),
   pollHarnessLogin: (sessionId: string) =>
     request<HarnessLogin>(`/api/profile/harness/login/${sessionId}`),
@@ -754,13 +778,35 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ session_id: sessionId, code }),
     }),
-  setHarnessApiKey: (apiKey: string, harness: HarnessKind = 'claude_code') =>
+  setHarnessApiKey: (
+    apiKey: string,
+    target?: AccountTarget,
+    harness: HarnessKind = 'claude_code',
+  ) =>
     request<WorkspaceProfile>('/api/profile/harness/api-key', {
       method: 'POST',
-      body: JSON.stringify({ api_key: apiKey, harness }),
+      body: JSON.stringify({ api_key: apiKey, harness, ...targetBody(target) }),
     }),
-  disconnectHarness: () =>
-    request<WorkspaceProfile>('/api/profile/harness', { method: 'DELETE' }),
+  harnessAccounts: (harness: HarnessKind = 'claude_code') =>
+    request<HarnessAccount[]>(`/api/profile/harness/accounts?harness=${harness}`),
+  updateHarnessAccount: (id: string, change: { label?: string; is_default?: boolean }) =>
+    request<HarnessAccount[]>(`/api/profile/harness/accounts/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(change),
+    }),
+  deleteHarnessAccount: (id: string) =>
+    request<HarnessAccount[]>(`/api/profile/harness/accounts/${id}`, { method: 'DELETE' }),
+  /** Restarts the session on the other account and resumes its conversation. */
+  switchSessionAccount: (projectId: string, session: string, accountId: string | null) =>
+    request<Session>(
+      `/api/projects/${projectId}/sessions/${encodeURIComponent(session)}/account`,
+      { method: 'PUT', body: JSON.stringify({ account_id: accountId }) },
+    ),
+  setProjectAccount: (projectId: string, accountId: string | null) =>
+    request<Project>(`/api/projects/${projectId}/account`, {
+      method: 'PUT',
+      body: JSON.stringify({ account_id: accountId }),
+    }),
 
   githubAvailable: () => request<{ device_flow: boolean }>('/api/profile/github/available'),
   startGitHubDevice: () =>

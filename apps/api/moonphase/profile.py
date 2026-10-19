@@ -221,7 +221,15 @@ async def apply(
     creds_target = harness.credentials_merge_target(space)
     if creds_target is not None:
         existing_creds = await read_file(conn, container, creds_target)
-        merged_creds = harness.merge_into_credentials_file(existing_creds, profile.mcp_oauth)
+        credential = profile.harness_credential
+        merged_creds = harness.merge_into_credentials_file(
+            existing_creds,
+            profile.mcp_oauth,
+            keep_account_login=(
+                credential is None
+                or (credential.mode is HarnessAuthMode.OAUTH and bool(credential.oauth_blob))
+            ),
+        )
         if merged_creds is not None:
             await write_file(conn, container, creds_target, merged_creds, mode="600")
 

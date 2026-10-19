@@ -43,6 +43,7 @@ from ..runtime import (
     NotFound,
 )
 from ..schemas import (
+    AccountChoiceIn,
     LeftoversCleanIn,
     LeftoversCleanOut,
     LeftoverSessionOut,
@@ -715,10 +716,13 @@ async def _prepare_space(
 
 
 async def _profile_or_409(
-    principal: Principal, ctx: runtime.ProjectContext, session: str | None = None
+    principal: Principal,
+    ctx: runtime.ProjectContext,
+    session: str | None = None,
+    account_id: UUID | None = None,
 ) -> Any:
     profile = await runtime.load_session_profile(
-        principal.claims, ctx.project, ctx.harness, session
+        principal.claims, ctx.project, ctx.harness, session, account_id=account_id
     )
     if not profile.has_harness_auth:
         harness_name = harness_registry.get(ctx.harness).display_name
@@ -849,11 +853,15 @@ async def create_session(
         also_avoid = await workspaces.existing_branch_names(conn_ssh, ctx.container)
         name = _session_name_for(principal, taken, also_avoid)
 
+    account_id = payload.account_id if payload else None
+    if account_id is not None:
+        await _own_account(principal, account_id, ctx.harness)
+
     # After the name is settled, because the profile now carries this
     # session's own configuration layer and there is no session without a
     # name to ask about. No row exists yet, so only the org and project
     # layers can contribute here.
-    profile = await _profile_or_409(principal, ctx, name)
+    profile = await _profile_or_409(principal, ctx, name, account_id)
 
     requested_branch = payload.branch if payload and payload.branch else None
     space, workdir, branch = await _prepare_space(
@@ -886,6 +894,10 @@ async def create_session(
             transcript_path=harness_registry.get(ctx.harness).transcript_dir(space),
             mark_started=True,
         )
+    if account_id is not None:
+        async with service_session() as conn:
+            await queries.set_session_harness_account(conn, project_id, name, account_id)
+        row = {**row, "harness_credential_id": account_id}
     return SessionOut.model_validate({**row, "alive": True, "attached_clients": 0})
 
 
@@ -1125,6 +1137,118 @@ async def clean_leftovers(
     )
 
 
+async def _own_account(principal: Principal, account_id: UUID, harness: str) -> None:
+    """Refuse an account that is not the caller's own, for this harness.
+
+    A session runs on its owner's subscription; naming anyone else's account
+    is a 404, the same as naming one that does not exist.
+    """
+    async with user_session(principal.claims) as conn:
+        org_id = await queries.personal_org_id(conn)
+    async with service_session() as conn:
+        row = await queries.get_harness_account_privileged(conn, account_id)
+    if row is None or row["org_id"] != org_id or str(row["harness"]) != harness:
+        raise HTTPException(status_code=404, detail="No such account.")
+
+
+# Claude Code caches who it is signed in as here, separately from the login
+# itself. Left in place after a switch it would keep naming the old account.
+_FORGET_SIGNED_IN_ACCOUNT = (
+    'f="$HOME/.claude.json"; [ -f "$f" ] || exit 0; '
+    'jq "del(.oauthAccount)" "$f" > "$f.tmp" && mv "$f.tmp" "$f"'
+)
+
+
+@router.put("/{project_id}/sessions/{name}/account", response_model=SessionOut)
+async def switch_session_account(
+    project_id: UUID,
+    name: str,
+    payload: AccountChoiceIn,
+    principal: Principal = Depends(current_principal),
+) -> SessionOut:
+    """Run one of your sessions on a different account of yours.
+
+    The harness reads its credentials only when it starts, so this restarts
+    it — reopening the same conversation, so nothing is lost but a moment.
+    """
+    session_name = sessions.sanitise_name(name)
+    try:
+        ctx = await runtime.load_project_context(principal.claims, project_id)
+    except NotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    async with user_session(principal.claims) as conn:
+        row = await queries.get_session(conn, project_id, session_name)
+    if row is None:
+        raise HTTPException(status_code=404, detail="No such session.")
+    if not row.get("is_mine"):
+        raise Forbidden(
+            "That session runs on someone else's account. Only they can change it."
+        )
+    if payload.account_id is not None:
+        await _own_account(principal, payload.account_id, ctx.harness)
+
+    async with service_session() as conn:
+        await queries.set_session_harness_account(
+            conn, project_id, session_name, payload.account_id
+        )
+
+    try:
+        conn_ssh = await ssh.pool.get(ctx.target)
+        await docker_remote.exec_capture(
+            conn_ssh,
+            ctx.container,
+            ["sh", "-c", _FORGET_SIGNED_IN_ACCOUNT],
+            env={"HOME": str(row["home_dir"])},
+            timeout=30,
+        )
+    except SSHError as exc:
+        log.warning("could not clear the cached account for %s: %s", session_name, exc)
+
+    return await start_session(
+        project_id,
+        SessionStartIn(session=session_name, restart=True, resume=True),
+        principal,
+    )
+
+
+@router.put("/{project_id}/account", response_model=ProjectOut)
+async def set_project_account(
+    project_id: UUID,
+    payload: AccountChoiceIn,
+    principal: Principal = Depends(current_principal),
+) -> ProjectOut:
+    """Which of the owner's accounts their sessions in this project run on.
+
+    Takes effect for sessions started from now on; running ones keep the
+    account they started with until they are restarted or switched.
+    """
+    try:
+        ctx = await runtime.load_project_context(
+            principal.claims, project_id, require=CAN_ADMINISTER
+        )
+    except NotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if payload.account_id is not None:
+        async with service_session() as conn:
+            account = await queries.get_harness_account_privileged(conn, payload.account_id)
+        if (
+            account is None
+            or account["org_id"] != ctx.project["org_id"]
+            or str(account["harness"]) != ctx.harness
+        ):
+            raise HTTPException(status_code=404, detail="No such account.")
+
+    async with service_session() as conn:
+        await queries.set_project_harness_account(conn, project_id, payload.account_id)
+    async with user_session(principal.claims) as conn:
+        project = await queries.get_project(conn, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return _to_out(project)
+
+
 @router.patch("/{project_id}/sessions/{name}/rename", response_model=SessionOut)
 async def rename_session(
     project_id: UUID,
@@ -1209,7 +1333,9 @@ async def duplicate_session(
     also_avoid = await workspaces.existing_branch_names(conn_ssh, ctx.container)
     new_name = _unique_name(source_name, taken | also_avoid)
 
-    profile = await _profile_or_409(principal, ctx, new_name)
+    # The copy carries on the same conversation, so on the same account.
+    source_account = source_row.get("harness_credential_id")
+    profile = await _profile_or_409(principal, ctx, new_name, source_account)
 
     source_space = SessionSpace(
         home=str(source_row["home_dir"]), workdir=str(source_row["workdir"])
@@ -1293,6 +1419,12 @@ async def duplicate_session(
                     ).items()
                 },
             )
+    if source_account is not None:
+        async with service_session() as conn:
+            await queries.set_session_harness_account(
+                conn, project_id, new_name, source_account
+            )
+        row = {**row, "harness_credential_id": source_account}
     return SessionOut.model_validate({**row, "alive": True, "attached_clients": 0})
 
 

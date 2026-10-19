@@ -195,15 +195,21 @@ class Harness(abc.ABC):
         return None
 
     def merge_into_credentials_file(
-        self, existing: str | None, mcp_oauth: dict[str, str]
+        self,
+        existing: str | None,
+        mcp_oauth: dict[str, str],
+        *,
+        keep_account_login: bool = True,
     ) -> str | None:
         """New contents for `credentials_merge_target`.
 
         `mcp_oauth` maps an MCP server's name to the raw credential entry a
-        successful OAuth relay captured for it. Return None to leave the file
-        untouched.
+        successful OAuth relay captured for it. `keep_account_login` is false
+        when the session now runs on something other than a sign-in stored in
+        this file, so a previous account's login left in it must go. Return
+        None to leave the file untouched.
         """
-        del existing, mcp_oauth
+        del existing, mcp_oauth, keep_account_login
         return None
 
     def compose_project_layers(

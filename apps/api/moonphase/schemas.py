@@ -189,6 +189,9 @@ class ProjectOut(ORMModel):
     preview_url: str | None
     created_at: datetime
     docker_access: bool = False
+    # The Claude account the owner's sessions here run on, unless a session
+    # names its own. Null means the owner's default account.
+    harness_credential_id: UUID | None = None
     # What the agent is doing right now, so the sidebar means something.
     activity: str = "unknown"
     activity_detail: str | None = None
@@ -297,6 +300,9 @@ class SessionOut(ORMModel):
     # The git worktree this session works in, and the branch it is on.
     workdir: str = "/workspace"
     branch: str | None = None
+    # The account this session was told to run on. Null means it follows the
+    # project's account, then the owner's default.
+    harness_credential_id: UUID | None = None
     # Devices currently viewing this session. Live from tmux, not stored:
     # a stale count would be worse than none.
     attached_clients: int = 0
@@ -330,6 +336,9 @@ class SessionCreateIn(BaseModel):
     branch: str | None = Field(
         default=None, max_length=255, pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]*$"
     )
+    # Which of the caller's accounts to run on. Left out, the project's
+    # account, then the caller's default.
+    account_id: UUID | None = None
 
 
 class DiffLineOut(BaseModel):
@@ -436,7 +445,32 @@ class HarnessCredentialOut(BaseModel):
     harness: HarnessKindStr
     auth_mode: HarnessAuthModeStr
     label: str | None
+    is_default: bool = False
     created_at: datetime
+
+
+class HarnessAccountOut(BaseModel):
+    """One of a person's accounts for a harness. Never the material itself."""
+
+    id: UUID
+    label: str | None
+    auth_mode: HarnessAuthModeStr
+    is_default: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class HarnessAccountUpdateIn(BaseModel):
+    label: str | None = Field(default=None, min_length=1, max_length=80)
+    # Only `true` means anything: an account stops being the default by
+    # another one becoming it.
+    is_default: bool | None = None
+
+
+class AccountChoiceIn(BaseModel):
+    """Which account to run on. Null means "follow the default"."""
+
+    account_id: UUID | None = None
 
 
 class HarnessInfoOut(BaseModel):
@@ -645,6 +679,12 @@ class HarnessLoginStart(BaseModel):
     harness: HarnessKindStr = "claude_code"
     # Which server runs the throwaway login container. Defaults to any online one.
     server_id: UUID | None = None
+    # Sign in to an account that already exists, replacing its credential...
+    account_id: UUID | None = None
+    # ...or add a new one under this name. With neither, the default account
+    # is replaced, which is what signing in meant before there could be more
+    # than one.
+    label: str | None = Field(default=None, min_length=1, max_length=80)
 
 
 class HarnessLoginOut(BaseModel):
@@ -666,6 +706,9 @@ class HarnessApiKeyIn(BaseModel):
     org_id: UUID | None = None
     harness: HarnessKindStr = "claude_code"
     api_key: str = Field(min_length=8, max_length=512)
+    # Same meaning as on HarnessLoginStart.
+    account_id: UUID | None = None
+    label: str | None = Field(default=None, min_length=1, max_length=80)
 
 
 # --- MCP server OAuth ---------------------------------------------------------

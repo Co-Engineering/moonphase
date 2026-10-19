@@ -356,7 +356,7 @@ PROJECT_COLUMNS = """
     p.id, p.org_id, p.server_id, p.name, p.slug, p.harness, p.environment, p.repo_url,
     p.container_name, p.container_id, p.workspace_volume, p.home_volume,
     p.status, p.status_detail, p.preview_port, p.preview_url, p.created_at,
-    p.docker_access,
+    p.docker_access, p.harness_credential_id,
     -- Scoped to the caller's own sessions. In a shared project "waiting for
     -- you" must mean you: someone else's agent needing its owner is not a
     -- thing you can act on, and a sidebar dot you cannot clear is noise.
@@ -708,7 +708,7 @@ async def delete_project(conn: AsyncConnection, project_id: UUID) -> bool:
 SESSION_COLUMNS = """
     id, project_id, tmux_session, harness, state, started_at, last_attached_at,
     transcript_path, user_id, workdir, home_dir, branch, activity_at, checked_at,
-    activity::text as activity, activity_detail, display_name,
+    activity::text as activity, activity_detail, display_name, harness_credential_id,
     (user_id = auth.uid()) as is_mine,
     public.session_owner_label(user_id) as owner
 """
@@ -917,6 +917,11 @@ async def touch_attached(
 # ---------------------------------------------------------------------------
 
 
+HARNESS_ACCOUNT_COLUMNS = (
+    "id, org_id, project_id, harness, auth_mode, label, is_default, created_at, updated_at"
+)
+
+
 async def upsert_harness_credential_privileged(
     conn: AsyncConnection,
     *,
@@ -930,6 +935,26 @@ async def upsert_harness_credential_privileged(
     created_by: str,
     oauth_token: str | None = None,
 ) -> dict[str, Any]:
+    """Replace a project's credential, or the org's default account.
+
+    The single-account behaviour, kept for callers that do not name an
+    account: signing in again replaces what was there rather than adding a
+    second one beside it.
+    """
+    params = {
+        "org_id": org_id,
+        "project_id": project_id,
+        "harness": harness,
+        "auth_mode": auth_mode,
+        "label": label,
+        "api_key": encrypt(api_key),
+        "oauth_token": encrypt(oauth_token),
+        "oauth": encrypt(oauth_blob),
+        "created_by": created_by,
+        # Decided here rather than as `:project_id is null` in SQL, where a
+        # null parameter has no type for Postgres to infer.
+        "is_default": project_id is None,
+    }
     if project_id is not None:
         # One credential per (project, harness); replacing is the common case.
         await conn.execute(
@@ -939,33 +964,82 @@ async def upsert_harness_credential_privileged(
             ),
             {"pid": project_id, "h": harness},
         )
-    # The org-wide row is replaced in place. It used to be a plain insert, which
-    # meant signing in again appended a second row and resolution could keep
-    # handing back the old one — "I signed in and nothing changed", with the UI
-    # insisting it had worked.
+    else:
+        result = await conn.execute(
+            text(
+                f"""
+                update private.harness_credentials set
+                  auth_mode       = cast(:auth_mode as harness_auth_mode),
+                  label           = coalesce(:label, label),
+                  api_key_enc     = :api_key,
+                  oauth_token_enc = :oauth_token,
+                  oauth_blob_enc  = :oauth,
+                  created_by      = :created_by
+                where org_id = :org_id and harness = cast(:harness as harness_kind)
+                  and project_id is null and is_default
+                returning {HARNESS_ACCOUNT_COLUMNS}
+                """
+            ),
+            params,
+        )
+        row = result.first()
+        if row is not None:
+            return _row_to_dict(row)
+
     result = await conn.execute(
         text(
-            """
+            f"""
             insert into private.harness_credentials
               (org_id, project_id, harness, auth_mode, label, api_key_enc,
-               oauth_token_enc, oauth_blob_enc, created_by)
+               oauth_token_enc, oauth_blob_enc, created_by, is_default)
             values
               (:org_id, :project_id, cast(:harness as harness_kind),
                cast(:auth_mode as harness_auth_mode), :label, :api_key,
-               :oauth_token, :oauth, :created_by)
-            on conflict (org_id, harness) where project_id is null do update set
-              auth_mode       = excluded.auth_mode,
-              label           = excluded.label,
-              api_key_enc     = excluded.api_key_enc,
-              oauth_token_enc = excluded.oauth_token_enc,
-              oauth_blob_enc  = excluded.oauth_blob_enc,
-              created_by      = excluded.created_by
-            returning id, org_id, project_id, harness, auth_mode, label, created_at
+               :oauth_token, :oauth, :created_by, :is_default)
+            returning {HARNESS_ACCOUNT_COLUMNS}
+            """
+        ),
+        params,
+    )
+    row = result.first()
+    if row is None:
+        raise RuntimeError("Failed to store harness credential.")
+    return _row_to_dict(row)
+
+
+async def add_harness_account_privileged(
+    conn: AsyncConnection,
+    *,
+    org_id: UUID,
+    harness: str,
+    auth_mode: str,
+    label: str,
+    api_key: str | None,
+    oauth_token: str | None,
+    oauth_blob: str | None,
+    created_by: str,
+) -> dict[str, Any]:
+    """Another account beside the ones already there. The first is the default."""
+    result = await conn.execute(
+        text(
+            f"""
+            insert into private.harness_credentials
+              (org_id, project_id, harness, auth_mode, label, api_key_enc,
+               oauth_token_enc, oauth_blob_enc, created_by, is_default)
+            values
+              (:org_id, null, cast(:harness as harness_kind),
+               cast(:auth_mode as harness_auth_mode), :label, :api_key,
+               :oauth_token, :oauth, :created_by,
+               not exists (
+                 select 1 from private.harness_credentials
+                 where org_id = :org_id and harness = cast(:harness as harness_kind)
+                   and project_id is null and is_default
+               ))
+            returning {HARNESS_ACCOUNT_COLUMNS}
             """
         ),
         {
             "org_id": org_id,
-            "project_id": project_id,
             "harness": harness,
             "auth_mode": auth_mode,
             "label": label,
@@ -975,36 +1049,215 @@ async def upsert_harness_credential_privileged(
             "created_by": created_by,
         },
     )
+    return _row_to_dict(result.one())
+
+
+async def replace_harness_account_material_privileged(
+    conn: AsyncConnection,
+    *,
+    org_id: UUID,
+    account_id: UUID,
+    auth_mode: str,
+    api_key: str | None,
+    oauth_token: str | None,
+    oauth_blob: str | None,
+    created_by: str,
+) -> dict[str, Any] | None:
+    """Sign an existing account in again, keeping its name and where it is used."""
+    result = await conn.execute(
+        text(
+            f"""
+            update private.harness_credentials set
+              auth_mode       = cast(:auth_mode as harness_auth_mode),
+              api_key_enc     = :api_key,
+              oauth_token_enc = :oauth_token,
+              oauth_blob_enc  = :oauth,
+              created_by      = :created_by
+            where id = :id and org_id = :org_id and project_id is null
+            returning {HARNESS_ACCOUNT_COLUMNS}
+            """
+        ),
+        {
+            "id": account_id,
+            "org_id": org_id,
+            "auth_mode": auth_mode,
+            "api_key": encrypt(api_key),
+            "oauth_token": encrypt(oauth_token),
+            "oauth": encrypt(oauth_blob),
+            "created_by": created_by,
+        },
+    )
+    row = result.first()
+    return _row_to_dict(row) if row else None
+
+
+async def list_harness_accounts_privileged(
+    conn: AsyncConnection, org_id: UUID, harness: str
+) -> list[dict[str, Any]]:
+    """An org's accounts for one harness. Metadata only, never the material."""
+    result = await conn.execute(
+        text(
+            f"""
+            select {HARNESS_ACCOUNT_COLUMNS}
+            from private.harness_credentials
+            where org_id = :org_id and harness = cast(:h as harness_kind)
+              and project_id is null
+            order by is_default desc, created_at
+            """
+        ),
+        {"org_id": org_id, "h": harness},
+    )
+    return [_row_to_dict(r) for r in result]
+
+
+async def get_harness_account_privileged(
+    conn: AsyncConnection, account_id: UUID
+) -> dict[str, Any] | None:
+    result = await conn.execute(
+        text(
+            f"select {HARNESS_ACCOUNT_COLUMNS} from private.harness_credentials "
+            "where id = :id and project_id is null"
+        ),
+        {"id": account_id},
+    )
+    row = result.first()
+    return _row_to_dict(row) if row else None
+
+
+async def rename_harness_account_privileged(
+    conn: AsyncConnection, org_id: UUID, account_id: UUID, label: str
+) -> bool:
+    result = await conn.execute(
+        text(
+            "update private.harness_credentials set label = :label "
+            "where id = :id and org_id = :org_id and project_id is null returning id"
+        ),
+        {"id": account_id, "org_id": org_id, "label": label},
+    )
+    return result.first() is not None
+
+
+async def set_default_harness_account_privileged(
+    conn: AsyncConnection, org_id: UUID, account_id: UUID
+) -> bool:
+    """Make one account the default. Two statements, because the one-default
+    index is checked row by row and would refuse the swap mid-statement."""
+    target = await get_harness_account_privileged(conn, account_id)
+    if target is None or target["org_id"] != org_id:
+        return False
+    await conn.execute(
+        text(
+            "update private.harness_credentials set is_default = false "
+            "where org_id = :org_id and harness = cast(:h as harness_kind) "
+            "and project_id is null and is_default"
+        ),
+        {"org_id": org_id, "h": str(target["harness"])},
+    )
+    await conn.execute(
+        text("update private.harness_credentials set is_default = true where id = :id"),
+        {"id": account_id},
+    )
+    return True
+
+
+async def delete_harness_account_privileged(
+    conn: AsyncConnection, org_id: UUID, account_id: UUID
+) -> bool:
+    """Remove one account. If it was the default, the oldest remaining one
+    takes over, so there is still something for new sessions to run on."""
+    result = await conn.execute(
+        text(
+            "delete from private.harness_credentials "
+            "where id = :id and org_id = :org_id and project_id is null "
+            "returning harness::text, is_default"
+        ),
+        {"id": account_id, "org_id": org_id},
+    )
     row = result.first()
     if row is None:
-        raise RuntimeError("Failed to store harness credential.")
-    return _row_to_dict(row)
+        return False
+    harness, was_default = row
+    if was_default:
+        await conn.execute(
+            text(
+                """
+                update private.harness_credentials set is_default = true
+                where id = (
+                  select id from private.harness_credentials
+                  where org_id = :org_id and harness = cast(:h as harness_kind)
+                    and project_id is null
+                  order by created_at limit 1
+                )
+                """
+            ),
+            {"org_id": org_id, "h": harness},
+        )
+    return True
+
+
+async def set_project_harness_account(
+    conn: AsyncConnection, project_id: UUID, account_id: UUID | None
+) -> None:
+    await conn.execute(
+        text("update projects set harness_credential_id = :aid where id = :pid"),
+        {"aid": account_id, "pid": project_id},
+    )
+
+
+async def set_session_harness_account(
+    conn: AsyncConnection, project_id: UUID, tmux_session: str, account_id: UUID | None
+) -> None:
+    await conn.execute(
+        text(
+            "update project_sessions set harness_credential_id = :aid "
+            "where project_id = :pid and tmux_session = :ts"
+        ),
+        {"aid": account_id, "pid": project_id, "ts": tmux_session},
+    )
 
 
 async def resolve_harness_credential_privileged(
-    conn: AsyncConnection, *, org_id: UUID, project_id: UUID, harness: str
+    conn: AsyncConnection,
+    *,
+    org_id: UUID,
+    project_id: UUID,
+    harness: str,
+    account_id: UUID | None = None,
 ) -> dict[str, Any] | None:
-    """Project-specific credential if there is one, else the org default."""
+    """Which account a session runs on, and its material.
+
+    In order: the account the session names, a project-specific credential,
+    the account the project names, the org's default, the newest. Every
+    candidate except the project-specific one has to belong to `org_id`, so
+    naming someone else's account resolves past it rather than using it.
+    """
     result = await conn.execute(
         text(
             """
-            select auth_mode, api_key_enc, oauth_token_enc, oauth_blob_enc
-            from private.harness_credentials
-            where harness = cast(:h as harness_kind)
-              and (project_id = :pid or (project_id is null and org_id = :org_id))
-            -- Project-specific first, then newest. The tiebreaker is belt and
-            -- braces now that a unique index rules out sibling org-wide rows.
-            order by project_id nulls last, updated_at desc
+            select hc.id, hc.label, hc.auth_mode, hc.api_key_enc, hc.oauth_token_enc,
+                   hc.oauth_blob_enc
+            from private.harness_credentials hc
+            where hc.harness = cast(:h as harness_kind)
+              and (hc.project_id = :pid or (hc.project_id is null and hc.org_id = :org_id))
+            order by
+              coalesce(hc.id = cast(:aid as uuid), false) desc,
+              (hc.project_id is not null) desc,
+              coalesce(hc.id = (select p.harness_credential_id from projects p
+                                where p.id = :pid), false) desc,
+              hc.is_default desc,
+              hc.updated_at desc
             limit 1
             """
         ),
-        {"h": harness, "pid": project_id, "org_id": org_id},
+        {"h": harness, "pid": project_id, "org_id": org_id, "aid": account_id},
     )
     row = result.first()
     if row is None:
         return None
     data = _row_to_dict(row)
     return {
+        "id": data["id"],
+        "label": data["label"],
         "auth_mode": data["auth_mode"],
         "api_key": decrypt(data["api_key_enc"]),
         "oauth_token": decrypt(data["oauth_token_enc"]),
@@ -1159,7 +1412,8 @@ async def get_session_config(
             """
             select cfg.claude_settings_json, cfg.claude_md, cfg.mcp_json,
                    coalesce(cfg.skills_json, '{}'::jsonb) as skills_json,
-                   coalesce(cfg.env_vars, '{}'::jsonb) as env_vars
+                   coalesce(cfg.env_vars, '{}'::jsonb) as env_vars,
+                   ps.harness_credential_id
             from project_sessions ps
             left join project_session_config cfg on cfg.session_id = ps.id
             where ps.project_id = :pid and ps.tmux_session = :ts
@@ -1567,7 +1821,8 @@ async def list_harness_credentials(
     result = await conn.execute(
         text(
             """
-            select id, org_id, project_id, harness, auth_mode, label, created_at
+            select id, org_id, project_id, harness, auth_mode, label, is_default,
+                   created_at
             from private.harness_credentials
             where org_id = any(:org_ids)
             order by created_at desc
@@ -1725,7 +1980,7 @@ async def first_harness_credential_privileged(
             from private.harness_credentials hc
             join org_members m on m.org_id = hc.org_id
             where m.user_id = cast(:user_id as uuid) and hc.project_id is null
-            order by hc.updated_at desc
+            order by hc.is_default desc, hc.updated_at desc
             limit 1
             """
         ),

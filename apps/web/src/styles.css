@@ -3625,3 +3625,37 @@ label.check.disabled .method-note { color: var(--text-faint); }
 .leftover-list li { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 2px 0; }
 .leftover-list li .hint { margin: 0; white-space: nowrap; }
 .leftover-list li span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+/* --- Claude accounts --------------------------------------------------- */
+.account-list { list-style: none; margin: 8px 0 12px; padding: 0; }
+.account-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding: 8px 0; border-top: 1px solid var(--border); }
+.account-list li:first-child { border-top: none; }
+.account-list-main { display: flex; align-items: baseline; gap: 8px; flex: 1; min-width: 0; flex-wrap: wrap; }
+.account-list-main .hint { margin: 0; }
+.account-list-actions { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.account-list li > .claude-signin { flex-basis: 100%; }
+.account-add { margin-top: 8px; }
+.account-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 0 0 12px; }
+.account-row .hint { margin: 0; }
+.account-select { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 0; }
+.account-select > span { display: inline; white-space: nowrap; margin: 0; }
+.account-select select { width: auto; max-width: 240px; }
+.account-switcher { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.account-switcher select { width: auto; max-width: 200px; font-size: 12px; padding: 3px 6px; }
+.account-switcher .hint { margin: 0; font-size: 12px; }
+.new-session select.account-choice { max-width: 220px; }
+button.link.danger { color: var(--red); }
+.account-switcher .row-menu-confirm, .account-list .row-menu-confirm { align-items: center; flex-wrap: wrap; }
+@media (max-width: 720px) {
+  .session-card { flex-wrap: wrap; }
+  .session-card .account-switcher { order: 10; flex-basis: 100%; }
+  .session-card .account-switcher select { flex: 1; max-width: none; }
+  .new-session { flex-wrap: wrap; }
+  .new-session input { flex-basis: 100%; max-width: none; }
+  .new-session select, .new-session select.account-choice { max-width: none; }
+}
+/* The topbar's own collapse point was set without this in it; below here the
+   session list is where an account is switched instead. */
+@media (max-width: 1300px) {
+  .topbar-actions .account-switcher { display: none; }
+}
