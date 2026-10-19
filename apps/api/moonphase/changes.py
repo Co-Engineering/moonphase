@@ -85,9 +85,29 @@ if [ -z "$BASE" ] || [ "$BASE" = "HEAD" ]; then
     git show-ref -q --verify "refs/heads/$b" && BASE="$b" && break
   done
 fi
+# The start ensure_worktree recorded for this branch, if it did. Otherwise
+# origin's copy of the base before the local one: the clone's local default
+# branch is never updated, so diffing from it counted everything that landed
+# upstream since the clone as this session's work.
+BASE_REF=""
+CURRENT=$(git symbolic-ref --short -q HEAD 2>/dev/null)
+if [ -n "$CURRENT" ]; then
+  BASE_REF=$(git config --get "branch.$CURRENT.moonphaseBase" 2>/dev/null)
+fi
+if [ -n "$BASE_REF" ] && git rev-parse -q --verify "$BASE_REF^{{commit}}" >/dev/null 2>&1; then
+  case "$BASE_REF" in
+    refs/heads/*) BASE="${{BASE_REF#refs/heads/}}" ;;
+    refs/remotes/origin/*) BASE="${{BASE_REF#refs/remotes/origin/}}" ;;
+    *) BASE=$(git rev-parse --short "$BASE_REF" 2>/dev/null) ;;
+  esac
+elif git show-ref -q --verify "refs/remotes/origin/$BASE"; then
+  BASE_REF="refs/remotes/origin/$BASE"
+else
+  BASE_REF="refs/heads/$BASE"
+fi
 # Compare against where this branch left the base, not against the base as it
 # is now: work someone else landed meanwhile is not this session's doing.
-REF=$(git merge-base HEAD "$BASE" 2>/dev/null)
+REF=$(git merge-base HEAD "$BASE_REF" 2>/dev/null)
 [ -n "$REF" ] || REF=$(git rev-list --max-parents=0 HEAD 2>/dev/null | tail -1)
 
 echo "{_SECTION}BRANCH"

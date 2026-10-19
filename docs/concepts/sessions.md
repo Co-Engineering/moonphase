@@ -108,6 +108,16 @@ merge, which is a problem git already solved. Closing a session removes its
 checkout and keeps its branch, because that branch may hold the only copy of
 something.
 
+A new session starts from origin's current tip of the branch you picked — or,
+with none picked, of the branch `/workspace` is on — fetched at that moment.
+`/workspace` is a shallow clone whose own copy of that branch is never updated
+after cloning, so starting from it put every session behind by whatever had
+landed since. Local commits origin does not have still win, since they may
+exist nowhere else, and an unreachable origin falls back to the local copy;
+either way the app says so. Where the branch started is recorded, and the
+Changes view diffs from there. A duplicate starts from the exact commit it was
+copied at, with no fetch.
+
 A session's home and workdir are fixed when it is created and recorded on the
 row. Moving a running session would point it at a directory its harness has
 never seen and orphan its real state, so only a restart — which recreates it

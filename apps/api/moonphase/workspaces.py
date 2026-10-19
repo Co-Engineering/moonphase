@@ -19,6 +19,8 @@ from __future__ import annotations
 import logging
 import re
 import shlex
+import uuid
+from typing import NamedTuple
 
 import asyncssh
 
@@ -49,6 +51,10 @@ BRANCH_PREFIX = "moonphase/"
 # is the check that closes that, and it is deliberately narrower than git's own
 # rules: the names it rejects are ones nobody has.
 _SAFE_BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$")
+
+# A start commit is a full object name and nothing shorter: anything else goes
+# through git's name lookup, where a tag or a branch can answer instead.
+_FULL_SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
 
 def is_safe_branch(name: str) -> bool:
@@ -116,15 +122,23 @@ async def _run(
 # workspace volume on purpose, same reasoning as the clone's own: the volume
 # outlives this and is what the agent works in, and a token sitting in it
 # would outlive the reason for it.
-_FETCH_CREDENTIALS = "/tmp/.moonphase-fetch-credentials"
+#
+# One file per call. A single shared path let two calls at once — a session
+# starting while the branch list loads — delete each other's credential
+# mid-fetch.
+_FETCH_CREDENTIALS_PREFIX = "/tmp/.moonphase-fetch-credentials-"
+
+
+def _fetch_credential_path() -> str:
+    return f"{_FETCH_CREDENTIALS_PREFIX}{uuid.uuid4().hex}"
 
 
 async def _write_fetch_credential(
-    conn: asyncssh.SSHClientConnection, container: str, token: str
+    conn: asyncssh.SSHClientConnection, container: str, path: str, token: str
 ) -> None:
     command = (
         f"docker exec -i -u dev {shlex.quote(container)} sh -c "
-        + shlex.quote(f"cat > {_FETCH_CREDENTIALS} && chmod 600 {_FETCH_CREDENTIALS}")
+        + shlex.quote(f"umask 077 && cat > {path}")
     )
     result = await ssh.run(
         conn,
@@ -136,23 +150,27 @@ async def _write_fetch_credential(
 
 
 async def _clear_fetch_credential(
-    conn: asyncssh.SSHClientConnection, container: str
+    conn: asyncssh.SSHClientConnection, container: str, path: str
 ) -> None:
-    await docker_remote.exec_capture(
-        conn, container, ["rm", "-f", _FETCH_CREDENTIALS], timeout=30
-    )
+    await docker_remote.exec_capture(conn, container, ["rm", "-f", path], timeout=30)
 
 
-def _git_env_flags(token: str | None) -> str:
+def _git_env_flags(credential_file: str | None) -> str:
     """`-c` flags that make a `git` invocation use the fetch credential, if any.
 
     Mirrors the clone's own: `core.askPass=` so a private repo fails fast
-    instead of hanging on a prompt nothing can answer, and the credential
-    helper only when there is a token to offer.
+    instead of hanging on a prompt nothing can answer, the credential helper
+    only when there is a token to offer, and GitHub's ssh addresses rewritten
+    to https — there is no key in the container, so an `origin` written as
+    `git@github.com:` could otherwise never be fetched at all.
     """
-    flags = "-c core.askPass="
-    if token:
-        flags += f" -c credential.helper={shlex.quote(f'store --file={_FETCH_CREDENTIALS}')}"
+    flags = (
+        "-c core.askPass="
+        " -c url.https://github.com/.insteadOf=git@github.com:"
+        " -c url.https://github.com/.insteadOf=ssh://git@github.com/"
+    )
+    if credential_file:
+        flags += f" -c {shlex.quote(f'credential.helper=store --file={credential_file}')}"
     return flags
 
 
@@ -187,6 +205,199 @@ fi
     result.check("Preparing the workspace repository")
 
 
+class Worktree(NamedTuple):
+    workdir: str
+    branch: str
+    # What `branch` was created from — a full ref or a commit SHA. None when a
+    # branch already on disk was picked up instead of created.
+    base: str | None
+    # Anything about where the session started that its owner should be told,
+    # in plain words: a fetch that failed, local commits that won over
+    # origin's, a requested start that could not be honoured.
+    note: str | None
+
+
+# Plain text rather than an f-string: every value arrives as a shell variable
+# assigned in a quoted header, so nothing in here is interpolated by Python.
+_WORKTREE_BODY = r"""
+set -e
+note() { printf 'MOONPHASE_NOTE=%s\n' "$*"; }
+has() { git show-ref --verify --quiet "$1"; }
+
+if [ -n "$START_COMMIT" ]; then
+  REQUESTED="commit $(printf '%.12s' "$START_COMMIT")"
+else
+  REQUESTED="$START_BRANCH"
+fi
+reused() {
+  if [ -n "$REQUESTED" ]; then
+    note "$BRANCH already existed, so this session carries on from it as it was" \
+      "rather than starting from $REQUESTED."
+  fi
+}
+
+mkdir -p "$(dirname "$WORKDIR")"
+cd "$REPO_ROOT"
+
+# Two sessions starting at once would otherwise fetch into the same refs and
+# edit the same worktree bookkeeping concurrently.
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$(git rev-parse --git-common-dir)/moonphase-worktree.lock"
+  if ! flock -w 100 9; then
+    echo "Timed out waiting for another session's checkout to be created." >&2
+    exit 1
+  fi
+fi
+
+# Already a worktree of this repository? Nothing to do.
+if git worktree list --porcelain | grep -qxF "worktree $WORKDIR"; then
+  reused
+  exit 0
+fi
+# A stale directory from an interrupted attempt would make `worktree add`
+# refuse; prune first, and only remove it if git does not know about it.
+git worktree prune
+if [ -d "$WORKDIR" ]; then
+  rmdir "$WORKDIR" 2>/dev/null || true
+fi
+# Never reset: it may hold the only copy of somebody's work.
+if has "refs/heads/$BRANCH"; then
+  reused
+  git worktree add "$WORKDIR" "$BRANCH"
+  exit 0
+fi
+
+X=""
+if [ -n "$START_COMMIT" ]; then
+  if ! git cat-file -e "$START_COMMIT^{commit}" 2>/dev/null; then
+    echo "Commit $START_COMMIT is not in this repository." >&2
+    exit 1
+  fi
+  START="$START_COMMIT"
+elif [ -n "$START_BRANCH" ]; then
+  X="$START_BRANCH"
+else
+  X=$(git symbolic-ref --short -q HEAD || true)
+  if [ -z "$X" ]; then
+    if ! START=$(git rev-parse --verify -q 'HEAD^{commit}'); then
+      echo "$REPO_ROOT has no commit to start from." >&2
+      exit 1
+    fi
+  fi
+fi
+
+if [ -n "$X" ]; then
+  # Full refnames only. A bare name goes through git's lookup order, where a
+  # tag of the same name answers before the branch — and a refname cannot be
+  # mistaken for an option, whatever the branch is called.
+  LOCAL="refs/heads/$X"
+  REMOTE="refs/remotes/origin/$X"
+  FETCH_FAILED=""
+  FETCH_DETAIL=""
+  if git remote get-url origin >/dev/null 2>&1; then
+    # Shallow only for a branch with no history here yet. A refresh has to
+    # join up with what is already here, or whether local is behind origin
+    # or ahead of it cannot be told.
+    DEPTH=""
+    if ! has "$LOCAL" && ! has "$REMOTE"; then
+      DEPTH="--depth=50"
+    fi
+    TIMEOUT=""
+    if command -v timeout >/dev/null 2>&1; then
+      TIMEOUT="timeout 60"
+    fi
+    if ERR=$(GIT_TERMINAL_PROMPT=0 $TIMEOUT git "${GIT_FLAGS[@]}" fetch --quiet --no-tags \
+        $DEPTH origin "+$LOCAL:$REMOTE" 2>&1 >/dev/null); then
+      :
+    else
+      rc=$?
+      if [ "$rc" = 124 ]; then
+        ERR="timed out after 60 seconds"
+      fi
+      ERR="${ERR:-git fetch exited $rc}"
+      # The first line for a note, all of it for an error.
+      FETCH_FAILED=$(printf '%s\n' "$ERR" \
+        | sed -n '/[^[:space:]]/{s/^fatal: //;p;q;}' | cut -c1-200)
+      FETCH_FAILED="${FETCH_FAILED:-git fetch failed}"
+      FETCH_DETAIL=$(printf '%s' "$ERR" | tr -s '\n\t ' ' ' | cut -c1-400)
+    fi
+  fi
+
+  if has "$REMOTE" && { ! has "$LOCAL" || git merge-base --is-ancestor "$LOCAL" "$REMOTE"; }; then
+    START="$REMOTE"
+  elif has "$LOCAL"; then
+    # Local commits origin does not have may be the only copy of them, so
+    # they win — but not silently.
+    START="$LOCAL"
+    if has "$REMOTE"; then
+      note "Your local $X has commits that are not on origin, so this session" \
+        "starts from the local copy rather than origin's."
+    fi
+  else
+    echo "No branch called '$X' was found locally or on origin.${FETCH_DETAIL:+ $FETCH_DETAIL}" >&2
+    exit 1
+  fi
+  if [ -n "$FETCH_FAILED" ]; then
+    note "Could not refresh $X from origin ($FETCH_FAILED), so this session starts" \
+      "from the copy already here, which may be behind."
+  fi
+fi
+
+git worktree add --no-track -b "$BRANCH" "$WORKDIR" "$START"
+# What the Changes view diffs against. Guessing later from whatever local
+# branch is called main attributed every upstream commit since the clone to
+# the session.
+git config "branch.$BRANCH.moonphaseBase" "$START"
+printf 'MOONPHASE_BASE=%s\n' "$START"
+"""
+
+
+def worktree_script(
+    workdir: str,
+    branch: str,
+    *,
+    repo_root: str = REPO_ROOT,
+    start_branch: str | None = None,
+    start_commit: str | None = None,
+    credential_file: str | None = None,
+) -> str:
+    """The shell script behind `ensure_worktree`, on its own so it can be run
+    against a real repository without a container."""
+    if start_branch and start_commit:
+        raise ValueError("A worktree starts from a branch or a commit, not both.")
+    # Checked here as well as at the edge: this is the function that builds
+    # the command line, so this is where the guarantee has to hold.
+    if start_branch and not is_safe_branch(start_branch):
+        raise SSHError(f"{start_branch!r} is not a usable branch name.")
+    if start_commit and not _FULL_SHA.fullmatch(start_commit):
+        raise SSHError(f"{start_commit!r} is not a full commit SHA.")
+    header = "\n".join(
+        [
+            f"REPO_ROOT={shlex.quote(repo_root)}",
+            f"WORKDIR={shlex.quote(workdir)}",
+            f"BRANCH={shlex.quote(branch)}",
+            f"START_BRANCH={shlex.quote(start_branch or '')}",
+            f"START_COMMIT={shlex.quote(start_commit or '')}",
+            f"GIT_FLAGS=({_git_env_flags(credential_file)})",
+        ]
+    )
+    return header + _WORKTREE_BODY
+
+
+def read_worktree_output(stdout: str) -> tuple[str | None, str | None]:
+    """(base, note) from what `worktree_script` printed, among git's own output."""
+    base: str | None = None
+    notes: list[str] = []
+    for line in stdout.splitlines():
+        if line.startswith("MOONPHASE_BASE="):
+            base = line.partition("=")[2].strip() or None
+        elif line.startswith("MOONPHASE_NOTE="):
+            text = line.partition("=")[2].strip()
+            if text:
+                notes.append(text)
+    return base, " ".join(notes) or None
+
+
 async def ensure_worktree(
     conn: asyncssh.SSHClientConnection,
     container: str,
@@ -194,93 +405,56 @@ async def ensure_worktree(
     *,
     author_name: str = "Moonphase",
     author_email: str = "moonphase@localhost",
-    start_point: str | None = None,
+    start_branch: str | None = None,
+    start_commit: str | None = None,
     token: str | None = None,
-) -> tuple[str, str]:
-    """Give `session` its own checkout. Returns (workdir, branch).
+) -> Worktree:
+    """Give `session` its own checkout.
 
     Idempotent, and deliberately tolerant of the two states a half-finished
     previous attempt can leave behind: a directory with no branch, and a branch
     with no directory.
 
-    `start_point` only matters the first time: once `moonphase/<session>` exists
-    it is checked out as-is, on the reasoning that a name reused on purpose
-    means picking up where that branch left off, not overwriting it with a
-    fresh start silently. Because the clone is shallow and single-branch, a
-    `start_point` that is not the repository's default branch usually is not on
-    disk yet — `token` is the caller's GitHub credential, so a private repo's
-    other branches can still be fetched.
+    Where it starts only matters the first time: once `moonphase/<session>`
+    exists it is checked out as-is, on the reasoning that a name reused on
+    purpose means picking up where that branch left off, not overwriting it
+    with a fresh start. The returned note says so if a start was asked for.
 
-    `start_point` may also be a raw commit SHA — the output of
-    `snapshot_worktree`, say. A SHA is always already local (every session's
-    worktree shares one object database), so it resolves without a fetch.
+    `start_branch` — or, left out, the branch `/workspace` is on — is
+    refreshed from origin first. The clone's own copy of its default branch is
+    never updated after cloning, so starting from it as it stood put every new
+    session behind by however much had landed since. The clone is also shallow
+    and single-branch, so most other branches are not on disk at all; `token`
+    is the caller's GitHub credential, so a private repo's can be fetched.
+
+    `start_commit` is a full commit SHA — the output of `snapshot_worktree`,
+    say. A SHA is always already local (every session's worktree shares one
+    object database), so it is used as it is, without a fetch.
     """
+    workdir = workdir_for(session)
+    branch = branch_for(session)
+    credential_file = _fetch_credential_path() if token and not start_commit else None
+    script = worktree_script(
+        workdir,
+        branch,
+        start_branch=start_branch,
+        start_commit=start_commit,
+        credential_file=credential_file,
+    )
+
     await ensure_repository(
         conn, container, author_name=author_name, author_email=author_email
     )
-
-    workdir = workdir_for(session)
-    branch = branch_for(session)
-    quoted_dir = shlex.quote(workdir)
-    quoted_branch = shlex.quote(branch)
-
-    start_clause = ""
-    if start_point:
-        # Checked here as well as at the edge: this is the function that builds
-        # the command line, so this is where the guarantee has to hold.
-        if not is_safe_branch(start_point):
-            raise SSHError(f"{start_point!r} is not a usable branch name.")
-        quoted_start = shlex.quote(start_point)
-        start_clause = f"""
-  if git cat-file -e {quoted_start}^{{commit}} 2>/dev/null; then
-    START_REF={quoted_start}
-  else
-    if ! git show-ref --verify --quiet refs/heads/{quoted_start} && \\
-       ! git show-ref --verify --quiet refs/remotes/origin/{quoted_start}; then
-      GIT_TERMINAL_PROMPT=0 git {_git_env_flags(token)} fetch --quiet --depth 50 \\
-        origin {quoted_start}:refs/remotes/origin/{quoted_start} 2>/dev/null || true
-    fi
-    if git show-ref --verify --quiet refs/heads/{quoted_start}; then
-      START_REF={quoted_start}
-    elif git show-ref --verify --quiet refs/remotes/origin/{quoted_start}; then
-      START_REF=origin/{quoted_start}
-    else
-      echo "No branch called {start_point!r} was found locally or on origin." >&2
-      exit 1
-    fi
-  fi
-"""
-
-    script = f"""
-set -e
-mkdir -p {shlex.quote(workdir.rsplit("/", 1)[0])}
-cd {REPO_ROOT}
-# Already a worktree of this repository? Nothing to do.
-if git worktree list --porcelain | grep -qx "worktree {workdir}"; then
-  exit 0
-fi
-# A stale directory from an interrupted attempt would make `worktree add`
-# refuse; prune first, and only remove it if git does not know about it.
-git worktree prune
-if [ -d {quoted_dir} ] && ! git worktree list --porcelain | grep -qx "worktree {workdir}"; then
-  rmdir {quoted_dir} 2>/dev/null || true
-fi
-if git show-ref --verify --quiet refs/heads/{quoted_branch}; then
-  git worktree add {quoted_dir} {quoted_branch}
-else
-{start_clause}
-  git worktree add -b {quoted_branch} {quoted_dir} ${{START_REF:-}}
-fi
-"""
-    if token:
-        await _write_fetch_credential(conn, container, token)
+    if credential_file and token:
+        await _write_fetch_credential(conn, container, credential_file, token)
     try:
         result = await _run(conn, container, script, timeout=180)
     finally:
-        if token:
-            await _clear_fetch_credential(conn, container)
+        if credential_file:
+            await _clear_fetch_credential(conn, container, credential_file)
     result.check(f"Creating a working directory for session {session!r}")
-    return workdir, branch
+    base, note = read_worktree_output(result.stdout)
+    return Worktree(workdir, branch, base, note)
 
 
 async def snapshot_worktree(
@@ -344,21 +518,22 @@ async def list_branches(
     Internal `moonphase/*` session branches are left out; they are checkouts of
     somebody's session, not places to start a new one from.
     """
+    credential_file = _fetch_credential_path() if token else None
     script = f"""
 cd {REPO_ROOT} 2>/dev/null || exit 1
 git rev-parse --abbrev-ref HEAD 2>/dev/null
 git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null \\
   | grep -v '^{BRANCH_PREFIX}' || true
-GIT_TERMINAL_PROMPT=0 git {_git_env_flags(token)} ls-remote --heads origin 2>/dev/null \\
+GIT_TERMINAL_PROMPT=0 git {_git_env_flags(credential_file)} ls-remote --heads origin 2>/dev/null \\
   | sed -E 's#.*refs/heads/##'
 """
-    if token:
-        await _write_fetch_credential(conn, container, token)
+    if credential_file and token:
+        await _write_fetch_credential(conn, container, credential_file, token)
     try:
         result = await _run(conn, container, script, timeout=30)
     finally:
-        if token:
-            await _clear_fetch_credential(conn, container)
+        if credential_file:
+            await _clear_fetch_credential(conn, container, credential_file)
     if not result.ok:
         return []
 

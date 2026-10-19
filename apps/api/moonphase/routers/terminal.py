@@ -362,8 +362,10 @@ async def project_terminal(
             )
             if not session_row:
                 # First attach for this person: give them a worktree before
-                # tmux tries to start in it.
-                workdir, _branch = await workspaces.ensure_worktree(
+                # tmux tries to start in it. With their GitHub credential, the
+                # same as any other session start, or a private repository's
+                # default branch cannot be refreshed before branching from it.
+                worktree = await workspaces.ensure_worktree(
                     conn_ssh,
                     ctx.container,
                     session_name,
@@ -371,8 +373,11 @@ async def project_terminal(
                     or (principal.email or "Moonphase"),
                     author_email=workspace_profile.git_user_email
                     or (principal.email or "moonphase@localhost"),
+                    token=workspace_profile.vcs_credential.token
+                    if workspace_profile.vcs_credential
+                    else None,
                 )
-                space = sessions.space_for(session_name, workdir)
+                space = sessions.space_for(session_name, worktree.workdir)
             await sessions.ensure_session(
                 conn_ssh,
                 ctx.container,

@@ -691,28 +691,30 @@ async def _prepare_space(
     name: str,
     profile: Any,
     *,
-    branch: str | None = None,
+    start_branch: str | None = None,
+    start_commit: str | None = None,
     conn_ssh: Any = None,
-) -> tuple[Any, str, str]:
-    """Give a session somewhere private to live. Returns (space, workdir, branch).
+) -> tuple[Any, workspaces.Worktree]:
+    """Give a session somewhere private to live. Returns (space, worktree).
 
-    `branch` is where a brand-new session's worktree should start from; it is
-    ignored if `name` already has a branch on disk, since resuming that is the
-    point. `conn_ssh` lets a caller that already started the container reuse
-    the connection rather than fetching it again.
+    `start_branch` or `start_commit` is where a brand-new session's worktree
+    should start from; it is ignored if `name` already has a branch on disk,
+    since resuming that is the point. `conn_ssh` lets a caller that already
+    started the container reuse the connection rather than fetching it again.
     """
     conn_ssh = conn_ssh or await _start_container(principal, ctx)
 
-    workdir, resolved_branch = await workspaces.ensure_worktree(
+    worktree = await workspaces.ensure_worktree(
         conn_ssh,
         ctx.container,
         name,
         author_name=profile.git_user_name or (principal.email or "Moonphase"),
         author_email=profile.git_user_email or (principal.email or "moonphase@localhost"),
-        start_point=branch,
+        start_branch=start_branch,
+        start_commit=start_commit,
         token=profile.vcs_credential.token if profile.vcs_credential else None,
     )
-    return sessions.space_for(name, workdir), workdir, resolved_branch
+    return sessions.space_for(name, worktree.workdir), worktree
 
 
 async def _profile_or_409(
@@ -864,8 +866,8 @@ async def create_session(
     profile = await _profile_or_409(principal, ctx, name, account_id)
 
     requested_branch = payload.branch if payload and payload.branch else None
-    space, workdir, branch = await _prepare_space(
-        principal, ctx, name, profile, branch=requested_branch, conn_ssh=conn_ssh
+    space, worktree = await _prepare_space(
+        principal, ctx, name, profile, start_branch=requested_branch, conn_ssh=conn_ssh
     )
 
     try:
@@ -888,9 +890,9 @@ async def create_session(
             tmux_session=name,
             state="running",
             user_id=principal.user_id,
-            workdir=workdir,
+            workdir=worktree.workdir,
             home_dir=space.home,
-            branch=branch,
+            branch=worktree.branch,
             transcript_path=harness_registry.get(ctx.harness).transcript_dir(space),
             mark_started=True,
         )
@@ -898,7 +900,9 @@ async def create_session(
         async with service_session() as conn:
             await queries.set_session_harness_account(conn, project_id, name, account_id)
         row = {**row, "harness_credential_id": account_id}
-    return SessionOut.model_validate({**row, "alive": True, "attached_clients": 0})
+    return SessionOut.model_validate(
+        {**row, "alive": True, "attached_clients": 0, "start_note": worktree.note}
+    )
 
 
 @router.post("/{project_id}/sessions/start", response_model=SessionOut)
@@ -957,15 +961,17 @@ async def start_session(
     # layout. That is also the upgrade path for sessions made before sessions
     # had owners, which still live in the container's shared home.
     existing = next((r for r in rows if str(r["tmux_session"]) == name), None)
+    start_note: str | None = None
     if existing is not None and not options.restart:
         space = SessionSpace(
             home=str(existing["home_dir"]), workdir=str(existing["workdir"])
         )
         workdir, branch = space.workdir, existing.get("branch")
     else:
-        space, workdir, branch = await _prepare_space(
+        space, worktree = await _prepare_space(
             principal, ctx, name, profile, conn_ssh=conn_ssh
         )
+        workdir, branch, start_note = worktree.workdir, worktree.branch, worktree.note
 
     try:
         await sessions.ensure_session(
@@ -995,7 +1001,7 @@ async def start_session(
             transcript_path=harness_registry.get(ctx.harness).transcript_dir(space),
             mark_started=True,
         )
-    return SessionOut.model_validate(row)
+    return SessionOut.model_validate({**row, "start_note": start_note})
 
 
 @router.delete(
@@ -1328,7 +1334,7 @@ async def duplicate_session(
 
     # Named from the source session, not the caller's email — and dodging a
     # leftover branch of the same name exactly like an unnamed create does,
-    # since ensure_worktree silently ignores start_point once that branch
+    # since ensure_worktree ignores its starting point once that branch
     # already exists on disk.
     also_avoid = await workspaces.existing_branch_names(conn_ssh, ctx.container)
     new_name = _unique_name(source_name, taken | also_avoid)
@@ -1348,8 +1354,8 @@ async def duplicate_session(
         author_email=profile.git_user_email or (principal.email or "moonphase@localhost"),
     )
 
-    space, workdir, branch = await _prepare_space(
-        principal, ctx, new_name, profile, branch=snapshot_sha, conn_ssh=conn_ssh
+    space, worktree = await _prepare_space(
+        principal, ctx, new_name, profile, start_commit=snapshot_sha, conn_ssh=conn_ssh
     )
 
     # HOME has to exist before anything lands in <home>/.claude/projects/...
@@ -1387,9 +1393,9 @@ async def duplicate_session(
             tmux_session=new_name,
             state="running",
             user_id=principal.user_id,
-            workdir=workdir,
+            workdir=worktree.workdir,
             home_dir=space.home,
-            branch=branch,
+            branch=worktree.branch,
             transcript_path=harness.transcript_dir(space),
             mark_started=True,
         )
@@ -1425,7 +1431,9 @@ async def duplicate_session(
                 conn, project_id, new_name, source_account
             )
         row = {**row, "harness_credential_id": source_account}
-    return SessionOut.model_validate({**row, "alive": True, "attached_clients": 0})
+    return SessionOut.model_validate(
+        {**row, "alive": True, "attached_clients": 0, "start_note": worktree.note}
+    )
 
 
 @router.post(

@@ -283,6 +283,9 @@ function Shell({ email }: { email: string }) {
     projectId: string
     session?: string
   } | null>(null)
+  // What the server said about where a new session's worktree started, if
+  // anything. Tied to its project so it does not follow you to another one.
+  const [startNote, setStartNote] = useState<{ projectId: string; note: string } | null>(null)
 
   // Servers are polled: bootstrap and Docker installs finish out of band, and
   // a stale "bootstrapping" chip is the most confusing thing the UI can show.
@@ -357,6 +360,7 @@ function Shell({ email }: { email: string }) {
   const duplicateSession = useCallback(
     (projectId: string, tmuxSession: string) => {
       void api.duplicateSession(projectId, tmuxSession).then((created) => {
+        setStartNote(created.start_note ? { projectId, note: created.start_note } : null)
         selectProject(projectId, created.tmux_session)
         reloadAll()
       })
@@ -739,6 +743,10 @@ function Shell({ email }: { email: string }) {
             session={selected?.kind === 'project' ? (selected.session ?? null) : null}
             sessions={(sessions.data ?? []).filter((s) => s.project_id === activeProject.id)}
             accounts={accounts.data ?? []}
+            startNote={startNote?.projectId === activeProject.id ? startNote.note : null}
+            onStartNote={(note) =>
+              setStartNote(note ? { projectId: activeProject.id, note } : null)
+            }
             onEnter={(name) => selectProject(activeProject.id, name)}
             onChanged={reloadAll}
             onToggleSidebar={toggleSidebar}
@@ -1217,6 +1225,8 @@ export function ProjectView({
   session,
   sessions,
   accounts = [],
+  startNote = null,
+  onStartNote,
   onEnter,
   onChanged,
   onToggleSidebar,
@@ -1229,6 +1239,9 @@ export function ProjectView({
   sessions: Session[]
   /** Your Claude accounts. Choosing between them only appears once there are two. */
   accounts?: HarnessAccount[]
+  /** What the server said about where the latest session here started, if anything. */
+  startNote?: string | null
+  onStartNote?: (note: string | null) => void
   onEnter: (name: string) => void
   onChanged: () => void
   onToggleSidebar: () => void
@@ -1240,10 +1253,10 @@ export function ProjectView({
   // Optional: blank names itself after you, then -2, -3. Naming is worth
   // offering once there is more than one to tell apart.
   const [newSession, setNewSession] = useState('')
-  // Blank means "wherever /workspace already is" — the behaviour before this
-  // existed. Fetched lazily, and only while there is somewhere to show it:
-  // it costs a round trip to the server, and nobody is picking a starting
-  // branch while they are already inside a session.
+  // Blank means the branch /workspace is on, refreshed from origin. Fetched
+  // lazily, and only while there is somewhere to show it: it costs a round
+  // trip to the server, and nobody is picking a starting branch while they
+  // are already inside a session.
   const [newBranch, setNewBranch] = useState('')
   // Blank means the project's account, which is what nearly everyone wants.
   const [newAccount, setNewAccount] = useState('')
@@ -1287,6 +1300,12 @@ export function ProjectView({
     } finally {
       setBusy(false)
     }
+  }
+
+  // Replaced on every start, so it never describes some other session.
+  const noteStart = (started: Session) => {
+    onStartNote?.(started.start_note ?? null)
+    return started
   }
 
   // Two conditions, and they are different questions. Project access decides
@@ -1450,7 +1469,11 @@ export function ProjectView({
           {drivable && (
             <button
               disabled={busy}
-              onClick={() => void act(() => api.startSession(project.id, true, session ?? undefined))}
+              onClick={() =>
+                void act(() =>
+                  api.startSession(project.id, true, session ?? undefined).then(noteStart),
+                )
+              }
               title="Kill this session and start the harness fresh"
             >
               Restart harness
@@ -1526,7 +1549,9 @@ export function ProjectView({
                       detail: 'Kills this session and starts the harness fresh.',
                       disabledReason: busy ? 'Busy…' : undefined,
                       onSelect: () =>
-                        void act(() => api.startSession(project.id, true, session ?? undefined)),
+                        void act(() =>
+                          api.startSession(project.id, true, session ?? undefined).then(noteStart),
+                        ),
                     },
                   ]
                 : []),
@@ -1555,6 +1580,16 @@ export function ProjectView({
       {error && (
         <div style={{ padding: '10px 16px 0' }}>
           <div className="banner error">{error}</div>
+        </div>
+      )}
+      {startNote && (
+        <div style={{ padding: '10px 16px 0' }}>
+          <div className="banner info start-note" role="status">
+            <span>{startNote}</span>
+            <button className="ghost" onClick={() => onStartNote?.(null)}>
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
       {project.status === 'running' && project.status_detail && (
@@ -1613,7 +1648,9 @@ export function ProjectView({
                         title="Reopen the conversation this session was having"
                         onClick={() =>
                           void act(async () => {
-                            await api.startSession(project.id, false, item.tmux_session, true)
+                            noteStart(
+                              await api.startSession(project.id, false, item.tmux_session, true),
+                            )
                             onEnter(item.tmux_session)
                           })
                         }
@@ -1722,11 +1759,13 @@ export function ProjectView({
                   disabled={busy}
                   onClick={() =>
                     void act(async () => {
-                      const created = await api.createSession(
-                        project.id,
-                        newSession.trim() || undefined,
-                        newBranch.trim() || undefined,
-                        newAccount || undefined,
+                      const created = noteStart(
+                        await api.createSession(
+                          project.id,
+                          newSession.trim() || undefined,
+                          newBranch.trim() || undefined,
+                          newAccount || undefined,
+                        ),
                       )
                       setNewSession('')
                       setNewBranch('')
@@ -1763,7 +1802,7 @@ export function ProjectView({
                   disabled={busy}
                   onClick={() =>
                     void act(async () => {
-                      const created = await api.createSession(project.id)
+                      const created = noteStart(await api.createSession(project.id))
                       onEnter(created.tmux_session)
                     })
                   }

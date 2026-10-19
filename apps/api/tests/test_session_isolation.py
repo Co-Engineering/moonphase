@@ -129,14 +129,14 @@ async def test_two_sessions_share_nothing_they_should_not(fake_server: str) -> N
 
         spaces: dict[str, SessionSpace] = {}
         for name, prof in people.items():
-            workdir, branch = await workspaces.ensure_worktree(
+            worktree = await workspaces.ensure_worktree(
                 conn, container, name,
                 author_name=prof.git_user_name or name,
                 author_email=prof.git_user_email or f"{name}@example.test",
             )
-            space = sessions.space_for(name, workdir)
+            space = sessions.space_for(name, worktree.workdir)
             spaces[name] = space
-            assert branch == f"moonphase/{name}"
+            assert worktree.branch == f"moonphase/{name}"
             await sessions.ensure_home(conn, container, space)
             await profile_mod.apply(conn, container, harness, prof, space)
         print("\n  two sessions provisioned in one container")
