@@ -221,6 +221,8 @@ export interface AccountUsage {
   fetched_at: string | null
   /** The last good reading, shown because the current one failed. */
   stale: boolean
+  /** After being told to slow down: when it will ask again. */
+  retry_at: string | null
 }
 
 /** Where a sign-in goes: an account to replace, or a name for a new one. */

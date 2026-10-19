@@ -146,3 +146,64 @@ export function SessionAccountSwitcher({
     </span>
   )
 }
+
+/**
+ * Choosing an account from a menu. The session list and the top bar are not
+ * always on screen — a session opened from the sidebar skips the list, and
+ * the top bar hides its buttons on a narrow window — so the sidebar's own
+ * menus open this instead.
+ */
+export function AccountDialog({
+  project,
+  session,
+  accounts,
+  onChanged,
+  onClose,
+}: {
+  project: Project
+  /** Present to move one session; absent to set the project's account. */
+  session?: Session
+  accounts: HarnessAccount[]
+  onChanged: () => void
+  onClose: () => void
+}) {
+  const title = session
+    ? `Claude account — ${session.display_name ?? session.tmux_session}`
+    : `Claude account — ${project.name}`
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="card modal" onClick={(e) => e.stopPropagation()}>
+        <div className="row-between">
+          <h2>{title}</h2>
+          <button className="ghost" onClick={onClose}>
+            Close
+          </button>
+        </div>
+        {accounts.length < 2 ? (
+          <p className="hint">
+            You have one Claude account, so everything runs on it. Add another under
+            Settings → Accounts to choose between them here.
+          </p>
+        ) : session ? (
+          <>
+            <p className="hint">
+              Switching restarts Claude in this session on the other account and resumes
+              the same conversation.
+            </p>
+            <SessionAccountSwitcher
+              project={project}
+              session={session}
+              accounts={accounts}
+              onSwitched={() => {
+                onChanged()
+                onClose()
+              }}
+            />
+          </>
+        ) : (
+          <ProjectAccountSelect project={project} accounts={accounts} onChanged={onChanged} />
+        )}
+      </div>
+    </div>
+  )
+}

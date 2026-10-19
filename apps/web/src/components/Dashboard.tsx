@@ -77,6 +77,11 @@ function AccountCard({ account }: { account: AccountUsage }) {
         <p className={account.status === 'api_key' ? 'hint' : 'hint dashboard-problem'}>
           {account.stale && 'Out of date — '}
           {account.detail}
+          {account.retry_at &&
+            ` Trying again at ${new Date(account.retry_at).toLocaleTimeString(undefined, {
+              hour: 'numeric',
+              minute: '2-digit',
+            })}.`}
         </p>
       )}
       {account.status === 'ok' && account.windows.length === 0 && (
