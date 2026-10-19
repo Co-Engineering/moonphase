@@ -309,6 +309,15 @@ class ClaudeCode(Harness):
     # OAuth first: it uses the user's existing Pro/Max subscription, which is
     # what most people actually want. API key is the fallback for teams.
     supported_auth_modes = (HarnessAuthMode.OAUTH, HarnessAuthMode.API_KEY)
+    managed_package = "@anthropic-ai/claude-code"
+    managed_binary = "claude"
+
+    def managed_env(self) -> dict[str, str]:
+        # Its own updater installs into npm's prefix, which the image points at
+        # the home volume: every running session retried it every half hour,
+        # and once one install was interrupted every retry failed — after
+        # downloading the release into that session's npm cache again.
+        return {"DISABLE_AUTOUPDATER": "1"}
 
     def launch_spec(
         self, *, resume: bool = False, credential: HarnessCredential | None = None

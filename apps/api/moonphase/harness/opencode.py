@@ -47,6 +47,14 @@ class OpenCode(Harness):
     # that can be driven over a relay the way `claude setup-token` can. So the
     # supported path here is a key.
     supported_auth_modes = (HarnessAuthMode.API_KEY,)
+    managed_package = "opencode-ai"
+    managed_binary = "opencode"
+
+    def managed_env(self) -> dict[str, str]:
+        # Checked against the shipped 1.18 binary: its updater returns early
+        # when this is "1" or "true", the same switch as `autoupdate: false`
+        # in its config — which is the user's file, not ours to rewrite.
+        return {"OPENCODE_DISABLE_AUTOUPDATE": "1"}
 
     def launch_spec(
         self, *, resume: bool = False, credential: HarnessCredential | None = None

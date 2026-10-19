@@ -309,6 +309,50 @@ async def exec_capture(
     return await ssh.run(conn, " ".join(shlex.quote(a) for a in args), timeout=timeout)
 
 
+async def exec_detached(
+    conn: asyncssh.SSHClientConnection,
+    container: str,
+    command: list[str],
+    *,
+    user: str = "dev",
+    timeout: float = 30.0,
+) -> None:
+    """Start a command inside the container and return without waiting for it.
+
+    `docker exec -d` hands the process to the container, so it outlives this
+    SSH channel and nothing here holds a channel open while it runs.
+    """
+    args = ["docker", "exec", "-d", "-u", user, container, *command]
+    result = await ssh.run(conn, " ".join(shlex.quote(a) for a in args), timeout=timeout)
+    result.check(f"Starting {command[0]} in {container}")
+
+
+async def write_file(
+    conn: asyncssh.SSHClientConnection,
+    container: str,
+    path: str,
+    contents: str,
+    *,
+    user: str = "dev",
+    mode: str = "600",
+    timeout: float = 60.0,
+) -> None:
+    """Write a file inside the container without it ever hitting the host disk.
+
+    The content goes over stdin of a `docker exec` running `cat`, so it is not
+    visible in the process list on the managed server the way `echo secret`
+    would be.
+    """
+    directory = shlex.quote(path.rsplit("/", 1)[0])
+    quoted = shlex.quote(path)
+    command = (
+        f"docker exec -i -u {shlex.quote(user)} {shlex.quote(container)} sh -c "
+        + shlex.quote(f"mkdir -p {directory} && cat > {quoted} && chmod {mode} {quoted}")
+    )
+    result = await ssh.run(conn, command, timeout=timeout, stdin=contents)
+    result.check(f"Writing {path} into {container}")
+
+
 async def copy_path(
     conn: asyncssh.SSHClientConnection,
     container: str,
