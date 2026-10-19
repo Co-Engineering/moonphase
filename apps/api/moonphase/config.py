@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     # Resolved per project from its chosen environment. The catalogue lives in
     # moonphase/environments.py; this only says where the images are published.
     moonphase_runtime_image_template: str = "moonphase/runtime-claude:{environment}"
+    # How often each running container checks npm for a newer Claude Code and
+    # OpenCode, in hours. An image is built once and kept, so this is the only
+    # way a long-lived project sees a new release. Zero disables it.
+    moonphase_harness_update_hours: float = 6.0
+    # npm dist-tag (or exact version) the harnesses are kept at. A package npm
+    # says has no such tag or version follows `latest` instead.
+    moonphase_harness_channel: str = "latest"
 
     # --- previews ----------------------------------------------------------
     # Interface the per-port preview listeners bind to. Loopback is right when

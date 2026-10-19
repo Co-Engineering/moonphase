@@ -308,6 +308,10 @@ class SessionOut(ORMModel):
     attached_clients: int = 0
     # True when it exists in tmux right now.
     alive: bool = False
+    # Set only on the response that created the worktree, when where it started
+    # is worth a word: origin could not be reached, local commits won over
+    # origin's, or the requested branch was not used. Not stored.
+    start_note: str | None = None
 
 
 class SessionStartIn(BaseModel):
@@ -327,8 +331,8 @@ class SessionCreateIn(BaseModel):
     # Optional: which branch the session's worktree should start from. Only
     # matters the first time a session by this name is created — a branch
     # already on disk from an earlier session of the same name is resumed as
-    # it is, not rebased onto this. Left out, it starts from whatever
-    # `/workspace` itself is on, same as before this existed.
+    # it is, not rebased onto this. Left out, it starts from the branch
+    # `/workspace` itself is on, refreshed from origin first.
     # Constrained rather than merely length-capped: this value reaches a git
     # command line, where an argument beginning with `-` is read as an option
     # no matter how it is quoted, and `--upload-pack=` runs a command. Must

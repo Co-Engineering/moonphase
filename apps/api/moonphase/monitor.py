@@ -23,7 +23,17 @@ from uuid import UUID
 
 from sqlalchemy import text
 
-from . import activity, docker_remote, push, queries, runtime, sessions, ssh, usage
+from . import (
+    activity,
+    docker_remote,
+    harness_updates,
+    push,
+    queries,
+    runtime,
+    sessions,
+    ssh,
+    usage,
+)
 from . import harness as harness_registry
 from .activity import ActivityState
 from .config import get_settings
@@ -67,6 +77,11 @@ RESOURCE_INTERVAL_SECONDS = 300.0
 # from filling back up between resource-usage readings.
 VOLUME_SWEEP_INTERVAL_SECONDS = 3600.0
 
+# The longest each running container goes between being asked to update its
+# harnesses. Cheap (one exec that usually exits at once); the container's own
+# stamp enforces MOONPHASE_HARNESS_UPDATE_HOURS.
+HARNESS_ASK_SECONDS = 3600
+
 # A volume Moonphase created for a project, matching the naming _container_name
 # in routers/projects.py has always used: mp-<slug>-<8 hex chars>-workspace/-home.
 # Matched by name rather than by the moonphase=1 label so volumes created by
@@ -96,6 +111,8 @@ class SessionMonitor:
         # last swept for orphaned volumes — both keyed by server id.
         self._resources_checked: dict[str, float] = {}
         self._volumes_checked: dict[str, float] = {}
+        # When each container was last asked to update its harnesses.
+        self._harnesses_checked: dict[str, float] = {}
 
     def start(self) -> None:
         settings = get_settings()
@@ -137,6 +154,10 @@ class SessionMonitor:
                 await self.sweep_volumes()
             except Exception as exc:  # noqa: BLE001
                 log.warning("volume sweep failed: %s", exc)
+            try:
+                await self.sweep_harnesses()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("harness update sweep failed: %s", exc)
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._stop.wait(), timeout=interval)
 
@@ -668,6 +689,80 @@ class SessionMonitor:
                     row["discovered_at"],
                 )
         return removed
+
+    async def sweep_harnesses(self) -> int:
+        """Ask every running container to bring its harnesses up to date.
+
+        Starting a session asks too, but that update lands after the session it
+        was started for has already launched, and a project whose sessions run
+        for weeks rarely starts one. Asking on a timer is what makes a restart
+        pick up a release that came out in the meantime. This only starts the
+        update; the container does the work, and skips it by itself if it
+        already ran within the interval.
+
+        Asked at least four times per interval, because a session starting in
+        a container also runs the update and resets its clock at any moment:
+        the next ask that finds the interval passed is then at most a quarter
+        of one late, where asking once per interval could be a whole one late.
+        """
+        hours = get_settings().moonphase_harness_update_hours
+        if hours <= 0:
+            return 0
+        ask_every = min(HARNESS_ASK_SECONDS, hours * 3600 / 4)
+        now = time.monotonic()
+        async with service_session() as conn:
+            servers = await queries.list_servers(conn)
+            projects = await queries.list_projects(conn)
+
+        online = {str(s["id"]): s for s in servers if s.get("status") == "online"}
+        due: dict[str, list[str]] = {}
+        for project in projects:
+            container = project.get("container_name")
+            server_id = str(project["server_id"])
+            if not container or server_id not in online or project.get("status") != "running":
+                continue
+            # Absent rather than 0.0: monotonic time counts from boot, so on a
+            # host up for less than the interval a 0.0 default would hold off
+            # the first update until it had been.
+            last = self._harnesses_checked.get(container)
+            if last is not None and now - last < ask_every:
+                continue
+            due.setdefault(server_id, []).append(container)
+
+        triggered = 0
+        for server_id, containers in due.items():
+            # Shares the activity sweep's back-off: an unreachable server
+            # would otherwise cost a full connect timeout per container.
+            if now < self._retry_after.get(server_id, 0.0):
+                continue
+            server = online[server_id]
+            try:
+                target = await self._target_for({"server_id": server["id"]})
+                if target is None:
+                    continue
+                conn_ssh = await ssh.pool.get(target)
+            except SSHError as exc:
+                # Only failing to connect says the server is unreachable.
+                self._back_off(server_id, str(server["name"]), exc)
+                continue
+            for container in containers:
+                # Before asking, so one that fails waits for the next ask
+                # rather than being retried on every pass.
+                self._harnesses_checked[container] = now
+                try:
+                    started = await harness_updates.trigger(conn_ssh, container)
+                except SSHError as exc:
+                    # A timeout, a full channel limit, docker refusing: about
+                    # this container or this moment, not the server, so no
+                    # back-off. Its other containers wait for the next pass
+                    # rather than queue behind the same trouble.
+                    log.info("harness sweep: %s on %s: %s", container, server["name"], exc)
+                    break
+                self._failures.pop(server_id, None)
+                self._retry_after.pop(server_id, None)
+                if started:
+                    triggered += 1
+        return triggered
 
     async def _reconcile_project(
         self, row: dict[str, Any], *, status: str, detail: str | None

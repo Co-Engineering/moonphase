@@ -18,7 +18,7 @@ from typing import Any
 
 import asyncssh
 
-from . import docker_remote, profile, ssh
+from . import docker_remote, harness_updates, profile, ssh
 from . import harness as harness_registry
 from .harness import Harness, HarnessCredential, SessionSpace
 from .ssh import SSHError
@@ -61,7 +61,12 @@ def launcher_path(session: str) -> str:
     return f"{MOONPHASE_DIR}/launch-{session}.sh"
 
 
-def _launcher_script(spec_command: list[str], space: SessionSpace) -> str:
+def _launcher_script(
+    spec_command: list[str],
+    space: SessionSpace,
+    harness: Harness | None = None,
+    env: dict[str, str] | None = None,
+) -> str:
     """Wrapper tmux actually owns.
 
     Sourcing the env file at launch (rather than baking credentials into
@@ -81,8 +86,24 @@ def _launcher_script(spec_command: list[str], space: SessionSpace) -> str:
     kills it, closes the pane, and destroys the tmux session the user was
     relying on surviving. With it, the harness owns its own process group and
     takes terminal signals alone.
+
+    The harness runs by absolute path: Moonphase's own up-to-date copy when
+    there is one (see harness_updates.py), else the image's. Resolved when the
+    session starts rather than when this is written, so an update that
+    finishes in between is picked up. `env` and the harness's `managed_env`
+    are exported after the env file, so nothing in a profile overrides them.
     """
-    argv = " ".join(shlex.quote(a) for a in spec_command)
+    exported = dict(env or {})
+    resolve = ""
+    if harness is not None:
+        exported.update(harness.managed_env())
+        resolve = harness_updates.resolve_snippet(harness, spec_command)
+    exports = "".join(f"export {k}={shlex.quote(v)}\n" for k, v in exported.items())
+    if resolve:
+        argv = " ".join(['"$harness_bin"', *(shlex.quote(a) for a in spec_command[1:])])
+        resolve += "\n"
+    else:
+        argv = " ".join(shlex.quote(a) for a in spec_command)
     home = shlex.quote(space.home)
     env_file = shlex.quote(space.env_file)
     workdir = shlex.quote(space.workdir)
@@ -94,8 +115,8 @@ export GIT_CONFIG_GLOBAL={home}/.gitconfig
 set -a
 [ -f {env_file} ] && . {env_file}
 set +a
-
-cd {workdir} 2>/dev/null || cd /workspace
+{exports}
+{resolve}cd {workdir} 2>/dev/null || cd /workspace
 
 set -m
 
@@ -124,22 +145,7 @@ async def _write_file(
     *,
     mode: str = "600",
 ) -> None:
-    """Write a file inside the container without it ever hitting the host disk.
-
-    The content goes over stdin of a `docker exec` running `cat`, so it is not
-    visible in the process list on the managed server the way `echo secret`
-    would be.
-    """
-    directory = shlex.quote(path.rsplit("/", 1)[0])
-    quoted = shlex.quote(path)
-    command = (
-        f"docker exec -i -u dev {shlex.quote(container)} sh -c "
-        + shlex.quote(
-            f"mkdir -p {directory} && cat > {quoted} && chmod {mode} {quoted}"
-        )
-    )
-    result = await ssh.run(conn, command, timeout=60, stdin=contents)
-    result.check(f"Writing {path} into {container}")
+    await docker_remote.write_file(conn, container, path, contents, mode=mode)
 
 
 async def write_upload(
@@ -420,7 +426,7 @@ async def ensure_session(
         conn,
         container,
         launcher_path(session),
-        _launcher_script(spec.command, space),
+        _launcher_script(spec.command, space, harness, spec.env),
         mode="700",
     )
 
@@ -465,6 +471,14 @@ async def ensure_session(
         timeout=30,
     )
     log.info("started tmux session %s in %s", session, container)
+
+    # Only on a fresh start, when a binary is actually chosen. The update runs
+    # detached, so this session starts on whatever is current now and the
+    # next one gets anything newer.
+    try:
+        await harness_updates.trigger(conn, container)
+    except Exception as exc:  # noqa: BLE001 — an update must never cost a session
+        log.warning("could not start a harness update in %s: %s", container, exc)
     return True
 
 

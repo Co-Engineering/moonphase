@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { render, screen, waitFor } from '@testing-library/react'
 import { fireEvent } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -238,5 +239,74 @@ describe('closing a session', () => {
       />,
     )
     expect(screen.queryByRole('button', { name: 'close' })).toBeNull()
+  })
+})
+
+/**
+ * A session starts from origin's tip of its branch, refreshed on the spot.
+ * When that could not happen as asked — origin unreachable, local commits
+ * that win over origin's, a requested branch ignored because the session's
+ * own already existed — the server says so once, in the create response, and
+ * it has to reach the person rather than vanish with the response.
+ */
+describe('where a new session started', () => {
+  const note =
+    'Could not refresh main from origin (could not resolve host), so this session starts ' +
+    'from the copy already here, which may be behind.'
+
+  function WithNotes() {
+    const [startNote, setStartNote] = useState<string | null>(null)
+    return (
+      <ProjectView
+        project={project}
+        session={null}
+        sessions={[session({})]}
+        startNote={startNote}
+        onStartNote={setStartNote}
+        onEnter={() => {}}
+        onChanged={() => {}}
+        onToggleSidebar={() => {}}
+        onShare={() => {}}
+        onRemoved={() => {}}
+      />
+    )
+  }
+
+  it('is shown as information, not as an error', async () => {
+    vi.spyOn(api, 'createSession').mockResolvedValue(
+      session({ tmux_session: 'olol-2', start_note: note }),
+    )
+    render(<WithNotes />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'New session' }))
+
+    const banner = (await screen.findByText(note)).closest('.banner')
+    expect(banner?.classList.contains('info')).toBe(true)
+    expect(banner?.classList.contains('error')).toBe(false)
+  })
+
+  it('can be dismissed', async () => {
+    vi.spyOn(api, 'createSession').mockResolvedValue(
+      session({ tmux_session: 'olol-2', start_note: note }),
+    )
+    render(<WithNotes />)
+    fireEvent.click(await screen.findByRole('button', { name: 'New session' }))
+    await screen.findByText(note)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+
+    expect(screen.queryByText(note)).toBeNull()
+  })
+
+  it('shows nothing when there was nothing to say', async () => {
+    const create = vi
+      .spyOn(api, 'createSession')
+      .mockResolvedValue(session({ tmux_session: 'olol-2' }))
+    render(<WithNotes />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'New session' }))
+
+    await waitFor(() => expect(create).toHaveBeenCalled())
+    expect(screen.queryByRole('status')).toBeNull()
   })
 })

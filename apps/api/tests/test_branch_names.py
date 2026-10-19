@@ -86,7 +86,7 @@ def test_the_command_builder_refuses_rather_than_trusting_its_caller() -> None:
                     "session",
                     author_name="a",
                     author_email="a@b.c",
-                    start_point="--upload-pack=touch /tmp/pwned",
+                    start_branch="--upload-pack=touch /tmp/pwned",
                 )
             # Nothing was run at all — it is refused before a command exists.
             ran.assert_not_awaited()

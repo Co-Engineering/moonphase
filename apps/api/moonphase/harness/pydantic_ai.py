@@ -45,6 +45,10 @@ class PydanticAI(Harness):
     # agent authenticates as whichever model provider it is pointed at, using
     # that provider's own environment variable.
     supported_auth_modes = (HarnessAuthMode.API_KEY,)
+    # Installed with `uv tool` at image build rather than from npm, so it is
+    # outside what harness_updates.py knows how to keep current.
+    managed_package = None
+    managed_binary = None
 
     def launch_spec(
         self, *, resume: bool = False, credential: HarnessCredential | None = None

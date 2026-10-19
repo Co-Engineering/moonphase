@@ -271,6 +271,12 @@ export interface Session {
   /** Devices currently viewing this session, live from tmux. */
   attached_clients: number
   alive: boolean
+  /**
+   * Only on the response that created its worktree, and only when where it
+   * started is worth saying: origin was unreachable, local commits won over
+   * origin's, or the requested branch was not used. Never stored.
+   */
+  start_note?: string | null
 }
 
 export interface HarnessInfo {
@@ -653,7 +659,8 @@ export const api = {
     }),
   /**
    * Omit the name and it is derived from you, which is the useful default.
-   * Omit the branch and the worktree starts from whatever `/workspace` is on.
+   * Omit the branch and the worktree starts from the branch `/workspace` is on,
+   * refreshed from origin first.
    */
   createSession: (projectId: string, name?: string, branch?: string, accountId?: string) =>
     request<Session>(`/api/projects/${projectId}/sessions`, {

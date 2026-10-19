@@ -520,6 +520,16 @@ pre {
   color: #a8d4ff;
 }
 
+.start-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.start-note span {
+  flex: 1;
+}
+
 .keyblock {
   background: var(--bg-input);
   border: 1px solid var(--border-strong);

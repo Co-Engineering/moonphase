@@ -72,7 +72,8 @@ log = logging.getLogger(__name__)
 # because the binary itself is the thing that is old. Bumping the version
 # forces one rebuild that picks up whatever "latest" resolves to today; it
 # does not prevent this from recurring the next time Anthropic ships a model
-# a server's cached image predates.
+# a server's cached image predates. harness_updates.py does: the image's copy
+# is now only the fallback until a container has installed its own.
 RECIPE_VERSION = "9"
 
 NODE_VERSION = "22.20.0"

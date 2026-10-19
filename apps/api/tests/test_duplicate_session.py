@@ -4,8 +4,8 @@ original.
 `workspaces.snapshot_worktree` captures a worktree's current state — staged,
 unstaged and untracked files — as a commit object, without moving the source
 session's HEAD, its index, or anything on disk. `ensure_worktree` then has to
-accept that commit's raw SHA as a `start_point`, which it could not do before:
-it only ever resolved `start_point` as a branch name.
+accept that commit's raw SHA as a `start_commit`, which it could not do
+before: it only ever resolved its starting point as a branch name.
 
 Runs against the same fake-server-plus-real-container topology as
 `test_session_isolation.py`, because both claims are about real git state
@@ -107,10 +107,12 @@ async def test_a_snapshot_seeds_a_new_worktree_without_touching_the_source(
             user="root", timeout=120,
         )
 
-        source_workdir, _ = await workspaces.ensure_worktree(
-            conn, container, "source",
-            author_name="Ada", author_email="ada@example.test",
-        )
+        source_workdir = (
+            await workspaces.ensure_worktree(
+                conn, container, "source",
+                author_name="Ada", author_email="ada@example.test",
+            )
+        ).workdir
 
         # A committed file, then dirty state on top of it: one staged edit,
         # one unstaged edit, and one file git has never seen.
@@ -159,14 +161,16 @@ async def test_a_snapshot_seeds_a_new_worktree_without_touching_the_source(
             "snapshotting moved the source session's HEAD"
         )
 
-        # The snapshot itself must be usable as a start_point — this is the
+        # The snapshot itself must be usable as a start_commit — this is the
         # ensure_worktree fix: it previously only accepted a branch name.
-        new_workdir, new_branch = await workspaces.ensure_worktree(
+        duplicate = await workspaces.ensure_worktree(
             conn, container, "duplicate",
             author_name="Ada", author_email="ada@example.test",
-            start_point=snapshot_sha,
+            start_commit=snapshot_sha,
         )
-        assert new_branch == "moonphase/duplicate"
+        new_workdir = duplicate.workdir
+        assert duplicate.branch == "moonphase/duplicate"
+        assert duplicate.base == snapshot_sha
 
         new_tracked = await docker_remote.exec_capture(
             conn, container, ["cat", f"{new_workdir}/tracked.txt"], timeout=30,
@@ -238,10 +242,12 @@ async def test_a_clean_worktree_snapshots_to_its_own_head(fake_server: str) -> N
             user="root", timeout=120,
         )
 
-        workdir, _ = await workspaces.ensure_worktree(
-            conn, container, "clean",
-            author_name="Ada", author_email="ada@example.test",
-        )
+        workdir = (
+            await workspaces.ensure_worktree(
+                conn, container, "clean",
+                author_name="Ada", author_email="ada@example.test",
+            )
+        ).workdir
         head = await docker_remote.exec_capture(
             conn, container, ["sh", "-c", f"cd {workdir} && git rev-parse HEAD"], timeout=30,
         )
