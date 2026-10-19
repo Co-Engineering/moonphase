@@ -223,6 +223,8 @@ export interface AccountUsage {
   stale: boolean
   /** After being told to slow down: when it will ask again. */
   retry_at: string | null
+  /** Which token the reading came from. */
+  source: 'stored' | 'session' | 'setup_token' | null
 }
 
 /** Where a sign-in goes: an account to replace, or a name for a new one. */

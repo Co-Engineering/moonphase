@@ -21,6 +21,7 @@ const usage = (over: Partial<AccountUsage>): AccountUsage => ({
   fetched_at: '2026-10-19T10:00:00Z',
   stale: false,
   retry_at: null,
+  source: 'stored',
   ...over,
 })
 

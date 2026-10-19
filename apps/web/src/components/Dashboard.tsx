@@ -90,6 +90,7 @@ function AccountCard({ account }: { account: AccountUsage }) {
       {account.fetched_at && (
         <p className="hint dashboard-updated">
           Updated {new Date(account.fetched_at).toLocaleTimeString()}
+          {account.source === 'session' && ' · read through one of your running sessions'}
         </p>
       )}
     </div>
