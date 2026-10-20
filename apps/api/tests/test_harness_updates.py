@@ -1350,3 +1350,36 @@ def test_the_launcher_waits_before_choosing_the_binary() -> None:
         {},
     )
     assert launcher.index("flock -s -w 300") < launcher.index("harness_bin=")
+
+
+class _RestartingSSH(_FakeSSH):
+    """Running until the restart kills it."""
+
+    async def run(self, conn, command, *, timeout: float = 60.0, stdin=None):
+        if "tmux kill-session" in command:
+            self.running = False
+        return await super().run(conn, command, timeout=timeout, stdin=stdin)
+
+
+async def test_a_restart_always_checks_for_the_latest(monkeypatch) -> None:
+    fake = _RestartingSSH(running=True)
+    monkeypatch.setattr(ssh, "run", fake.run)
+
+    await sessions.ensure_session(None, "mp-c", harness_kind="claude_code", restart=True)
+
+    start = next(c for c in fake.root_commands() if c.startswith("docker exec -d"))
+    assert start.endswith(" force"), start
+    started = [c for c, _ in fake.commands]
+    assert started.index(start) < next(
+        i for i, c in enumerate(started) if "tmux new-session" in c
+    ), "the check has to start before the session it is for"
+
+
+async def test_a_new_session_leaves_it_to_the_interval(monkeypatch) -> None:
+    fake = _FakeSSH(running=False)
+    monkeypatch.setattr(ssh, "run", fake.run)
+
+    await sessions.ensure_session(None, "mp-c", harness_kind="claude_code")
+
+    start = next(c for c in fake.root_commands() if c.startswith("docker exec -d"))
+    assert not start.endswith(" force")

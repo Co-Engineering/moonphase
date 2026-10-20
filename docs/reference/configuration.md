@@ -98,8 +98,11 @@ shell starts, so they otherwise find the image's copy as before. Moonphase's own
 `claude mcp list` and `claude mcp login` pick their binary the same way sessions do. Shells
 that are not login shells, such as a bare `docker exec`, still find the image's copy.
 
-**A running session keeps the version it started with.** It picks up a new one when it is
-restarted.
+**A running session keeps the version it started with.** Restarting it (**Restart
+harness**, or switching its Claude account) always asks npm for the newest release first,
+whatever the interval, and waits for it to install before Claude starts — so a restart is
+how a session gets up to date. When the container already has the newest, that check
+costs a second or two.
 
 Claude Code's and OpenCode's own auto-updaters are switched off in Moonphase sessions and
 its own `claude mcp` calls (`DISABLE_AUTOUPDATER=1`, `OPENCODE_DISABLE_AUTOUPDATE=1`), and

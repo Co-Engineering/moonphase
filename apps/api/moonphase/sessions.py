@@ -435,10 +435,11 @@ async def ensure_session(
     if already:
         return False
 
-    # Before the launch, which waits for it if it has anything to install:
-    # a restart is how someone picks up a new release.
+    # Before the launch, which waits for it if it has anything to install.
+    # A restart is how someone picks up a new release, so it always asks for
+    # the latest rather than trusting the last periodic check.
     try:
-        await harness_updates.trigger(conn, container)
+        await harness_updates.trigger(conn, container, check_now=restart)
     except Exception as exc:  # noqa: BLE001 — an update must never cost a session
         log.warning("could not start a harness update in %s: %s", container, exc)
 

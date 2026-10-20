@@ -183,8 +183,14 @@ def update_script() -> str:
     )
 
 
-async def trigger(conn: asyncssh.SSHClientConnection, container: str) -> bool:
+async def trigger(
+    conn: asyncssh.SSHClientConnection, container: str, *, check_now: bool = False
+) -> bool:
     """Write the script into the container and start it, without waiting.
+
+    `check_now` skips the once-per-interval gate, so the registry is asked
+    whatever the last check found; an up-to-date container still installs
+    nothing.
 
     Returns False when updates are switched off. Raises SSHError when the
     container could not be reached; callers decide how much that matters.
@@ -206,7 +212,12 @@ async def trigger(conn: asyncssh.SSHClientConnection, container: str) -> bool:
     await docker_remote.exec_detached(
         conn,
         container,
-        [SCRIPT_PATH, f"{hours:g}", settings.moonphase_harness_channel],
+        [
+            SCRIPT_PATH,
+            f"{hours:g}",
+            settings.moonphase_harness_channel,
+            *(["force"] if check_now else []),
+        ],
         user="root",
     )
     return True
