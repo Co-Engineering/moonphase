@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Usage, UsageStrip, compact, money, resetLabel, untilLabel } from '../Usage'
@@ -167,6 +168,42 @@ describe('SettingsEditor', () => {
     fireEvent.click(screen.getByText('+ Add rule'))
     // A rule with no tool yet is not written out as an empty string.
     expect(onChange).not.toHaveBeenCalledWith(expect.stringContaining('""'))
+  })
+
+  it('adds a rule row you can fill in, and writes it once it names a tool', () => {
+    const written: (string | null)[] = []
+    function Harness() {
+      const [value, setValue] = useState<string | null>(
+        '{"permissions":{"deny":["Read(.env)"]}}',
+      )
+      return (
+        <SettingsEditor
+          value={value}
+          onChange={(next) => {
+            written.push(next)
+            setValue(next)
+          }}
+        />
+      )
+    }
+    render(<Harness />)
+    expect(screen.getAllByPlaceholderText('Tool')).toHaveLength(1)
+
+    fireEvent.click(screen.getByText('+ Add rule'))
+
+    const tools = screen.getAllByPlaceholderText('Tool') as HTMLInputElement[]
+    expect(tools).toHaveLength(2)
+    fireEvent.change(tools[1], { target: { value: 'B' } })
+    fireEvent.change(screen.getAllByPlaceholderText('Tool')[1], { target: { value: 'Bash' } })
+    fireEvent.change(screen.getAllByPlaceholderText('pattern (optional)')[1], {
+      target: { value: 'az:*' },
+    })
+
+    // Still the second row: it did not jump ahead of the deny rule.
+    expect((screen.getAllByPlaceholderText('Tool')[1] as HTMLInputElement).value).toBe('Bash')
+    expect(JSON.parse(written.at(-1) as string)).toEqual({
+      permissions: { allow: ['Bash(az:*)'], deny: ['Read(.env)'] },
+    })
   })
 
   it('warns before permissions are bypassed', () => {
