@@ -1298,3 +1298,88 @@ async def test_one_container_failing_holds_up_only_its_server_and_only_this_pass
     await monitor.sweep_harnesses()
     assert attempts[3:] == ["c1", "c6"]
     assert backed_off == []
+
+
+# --- a restart waits for an update it just started ---------------------------
+
+
+def _wait(tmp_path: Path, monkeypatch, *, held: bool) -> tuple[float, str]:
+    if shutil.which("flock") is None:
+        pytest.skip("flock is not installed")
+    script = tmp_path / "moonphase-harness-update"
+    script.write_text("#!/bin/sh\n")
+    script.chmod(0o755)
+    state = tmp_path / "state"
+    state.mkdir()
+    lock = state / "harness-update.lock"
+    lock.write_text("")
+    monkeypatch.setattr(harness_updates, "SCRIPT_PATH", str(script))
+    monkeypatch.setattr(harness_updates, "STATE_DIR", str(state))
+    holder = None
+    if held:
+        holder = subprocess.Popen(["flock", str(lock), "sleep", "3"])
+        time.sleep(0.3)
+    started = time.monotonic()
+    out = subprocess.run(
+        ["sh", "-c", harness_updates.wait_snippet()],
+        capture_output=True, text=True, timeout=30,
+    ).stdout
+    elapsed = time.monotonic() - started
+    if holder is not None:
+        holder.wait()
+    return elapsed, out
+
+
+def test_a_restart_waits_for_an_update_in_progress(tmp_path: Path, monkeypatch) -> None:
+    elapsed, out = _wait(tmp_path, monkeypatch, held=True)
+    assert elapsed >= 2.5, "launched before the update finished"
+    assert "updating the harness" in out
+
+
+def test_with_no_update_running_the_restart_barely_waits(tmp_path: Path, monkeypatch) -> None:
+    elapsed, out = _wait(tmp_path, monkeypatch, held=False)
+    assert elapsed < 2.5
+    assert out == ""
+
+
+def test_the_launcher_waits_before_choosing_the_binary() -> None:
+    launcher = sessions._launcher_script(
+        registry.get("claude_code").launch_spec().command,
+        SessionSpace(home="/h", workdir="/w"),
+        registry.get("claude_code"),
+        {},
+    )
+    assert launcher.index("flock -s -w 300") < launcher.index("harness_bin=")
+
+
+class _RestartingSSH(_FakeSSH):
+    """Running until the restart kills it."""
+
+    async def run(self, conn, command, *, timeout: float = 60.0, stdin=None):
+        if "tmux kill-session" in command:
+            self.running = False
+        return await super().run(conn, command, timeout=timeout, stdin=stdin)
+
+
+async def test_a_restart_always_checks_for_the_latest(monkeypatch) -> None:
+    fake = _RestartingSSH(running=True)
+    monkeypatch.setattr(ssh, "run", fake.run)
+
+    await sessions.ensure_session(None, "mp-c", harness_kind="claude_code", restart=True)
+
+    start = next(c for c in fake.root_commands() if c.startswith("docker exec -d"))
+    assert start.endswith(" force"), start
+    started = [c for c, _ in fake.commands]
+    assert started.index(start) < next(
+        i for i, c in enumerate(started) if "tmux new-session" in c
+    ), "the check has to start before the session it is for"
+
+
+async def test_a_new_session_leaves_it_to_the_interval(monkeypatch) -> None:
+    fake = _FakeSSH(running=False)
+    monkeypatch.setattr(ssh, "run", fake.run)
+
+    await sessions.ensure_session(None, "mp-c", harness_kind="claude_code")
+
+    start = next(c for c in fake.root_commands() if c.startswith("docker exec -d"))
+    assert not start.endswith(" force")

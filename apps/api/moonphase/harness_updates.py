@@ -92,6 +92,26 @@ def binary_candidates(harness: Harness, command: list[str]) -> list[str]:
     return candidates
 
 
+def wait_snippet() -> str:
+    """sh that waits for an update already running in the container.
+
+    A new session starts the update just before it launches, so without this
+    a restart meant to pick up a release launched the old copy while the new
+    one was still installing. The pause before looking lets the update take
+    its lock; when nothing is due it gives the lock back at once.
+    """
+    lock = f"{STATE_DIR}/harness-update.lock"
+    return (
+        f"if [ -x {SCRIPT_PATH} ] && command -v flock >/dev/null 2>&1; then\n"
+        "    sleep 1\n"
+        f"    if [ -e {lock} ] && ! flock -n -s {lock} true 2>/dev/null; then\n"
+        "        printf '[moonphase] updating the harness before it starts...\\n'\n"
+        f"        flock -s -w 300 {lock} true 2>/dev/null || true\n"
+        "    fi\n"
+        "fi\n"
+    )
+
+
 def resolve_snippet(harness: Harness, command: list[str]) -> str:
     """sh that sets $harness_bin to what `command[0]` should run, or "".
 
@@ -163,8 +183,14 @@ def update_script() -> str:
     )
 
 
-async def trigger(conn: asyncssh.SSHClientConnection, container: str) -> bool:
+async def trigger(
+    conn: asyncssh.SSHClientConnection, container: str, *, check_now: bool = False
+) -> bool:
     """Write the script into the container and start it, without waiting.
+
+    `check_now` skips the once-per-interval gate, so the registry is asked
+    whatever the last check found; an up-to-date container still installs
+    nothing.
 
     Returns False when updates are switched off. Raises SSHError when the
     container could not be reached; callers decide how much that matters.
@@ -186,7 +212,12 @@ async def trigger(conn: asyncssh.SSHClientConnection, container: str) -> bool:
     await docker_remote.exec_detached(
         conn,
         container,
-        [SCRIPT_PATH, f"{hours:g}", settings.moonphase_harness_channel],
+        [
+            SCRIPT_PATH,
+            f"{hours:g}",
+            settings.moonphase_harness_channel,
+            *(["force"] if check_now else []),
+        ],
         user="root",
     )
     return True

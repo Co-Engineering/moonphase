@@ -98,6 +98,8 @@ def _launcher_script(
     if harness is not None:
         exported.update(harness.managed_env())
         resolve = harness_updates.resolve_snippet(harness, spec_command)
+        if resolve:
+            resolve = harness_updates.wait_snippet() + resolve
     exports = "".join(f"export {k}={shlex.quote(v)}\n" for k, v in exported.items())
     if resolve:
         argv = " ".join(['"$harness_bin"', *(shlex.quote(a) for a in spec_command[1:])])
@@ -433,6 +435,14 @@ async def ensure_session(
     if already:
         return False
 
+    # Before the launch, which waits for it if it has anything to install.
+    # A restart is how someone picks up a new release, so it always asks for
+    # the latest rather than trusting the last periodic check.
+    try:
+        await harness_updates.trigger(conn, container, check_now=restart)
+    except Exception as exc:  # noqa: BLE001 — an update must never cost a session
+        log.warning("could not start a harness update in %s: %s", container, exc)
+
     args = [
         "tmux",
         "new-session",
@@ -471,14 +481,6 @@ async def ensure_session(
         timeout=30,
     )
     log.info("started tmux session %s in %s", session, container)
-
-    # Only on a fresh start, when a binary is actually chosen. The update runs
-    # detached, so this session starts on whatever is current now and the
-    # next one gets anything newer.
-    try:
-        await harness_updates.trigger(conn, container)
-    except Exception as exc:  # noqa: BLE001 — an update must never cost a session
-        log.warning("could not start a harness update in %s: %s", container, exc)
     return True
 
 
