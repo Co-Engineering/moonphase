@@ -92,6 +92,26 @@ def binary_candidates(harness: Harness, command: list[str]) -> list[str]:
     return candidates
 
 
+def wait_snippet() -> str:
+    """sh that waits for an update already running in the container.
+
+    A new session starts the update just before it launches, so without this
+    a restart meant to pick up a release launched the old copy while the new
+    one was still installing. The pause before looking lets the update take
+    its lock; when nothing is due it gives the lock back at once.
+    """
+    lock = f"{STATE_DIR}/harness-update.lock"
+    return (
+        f"if [ -x {SCRIPT_PATH} ] && command -v flock >/dev/null 2>&1; then\n"
+        "    sleep 1\n"
+        f"    if [ -e {lock} ] && ! flock -n -s {lock} true 2>/dev/null; then\n"
+        "        printf '[moonphase] updating the harness before it starts...\\n'\n"
+        f"        flock -s -w 300 {lock} true 2>/dev/null || true\n"
+        "    fi\n"
+        "fi\n"
+    )
+
+
 def resolve_snippet(harness: Harness, command: list[str]) -> str:
     """sh that sets $harness_bin to what `command[0]` should run, or "".
 
