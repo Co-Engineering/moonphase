@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { McpHealth, McpOAuthConnectionInfo } from '../lib/api'
 
 /**
@@ -141,10 +141,25 @@ interface SettingsProps {
 export function SettingsEditor({ value, onChange }: SettingsProps) {
   const [raw, setRaw] = useState(false)
   const doc = useMemo(() => parseDoc(value), [value])
-  const rules = useMemo(() => rulesFrom(doc), [doc])
+  // The rows as shown, kept here rather than re-read from the document on
+  // every keystroke: a row with no tool yet cannot be written to it (so a new
+  // rule vanished as it was added), and the document groups rules by
+  // decision (so a row could jump away mid-typing).
+  const [rules, setRules] = useState<Rule[]>(() => rulesFrom(doc))
+  const written = useRef(value)
+  useEffect(() => {
+    if (value !== written.current) {
+      written.current = value
+      setRules(rulesFrom(parseDoc(value)))
+    }
+  }, [value])
   const permissions = (doc.permissions ?? {}) as Doc
 
-  const update = (next: Doc) => onChange(serializeDoc(next))
+  const update = (next: Doc) => {
+    const serialized = serializeDoc(next)
+    written.current = serialized
+    onChange(serialized)
+  }
   const setPermission = (key: string, next: unknown) => {
     const merged = { ...permissions }
     if (next === '' || next === null || next === undefined) delete merged[key]
@@ -204,7 +219,15 @@ export function SettingsEditor({ value, onChange }: SettingsProps) {
         tool; a pattern narrows it — <code>npm run test:*</code> under Bash allows
         those commands and nothing else.
       </p>
-      <RuleList rules={rules} onChange={(next) => update(rulesInto(doc, next))} />
+      <RuleList
+        rules={rules}
+        onChange={(next) => {
+          setRules(next)
+          const serialized = serializeDoc(rulesInto(doc, next))
+          written.current = serialized
+          onChange(serialized)
+        }}
+      />
 
       <h4>Model</h4>
       <label>
