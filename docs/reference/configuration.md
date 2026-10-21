@@ -65,29 +65,49 @@ same-origin and needs no entry.
 | Variable                          | Default  | Notes |
 | --------------------------------- | -------- | ----- |
 | `MOONPHASE_HARNESS_UPDATE_HOURS`  | `6`      | Hours between update checks per container, counted from when the last check started. `0` disables updates |
-| `MOONPHASE_HARNESS_CHANNEL`       | `latest` | npm dist-tag or exact version Claude Code and OpenCode are kept at. It applies to both, so a package npm says has no such tag or version follows `latest` instead |
+| `MOONPHASE_HARNESS_CHANNEL`       | `latest` | npm dist-tag or exact version Claude Code and OpenCode are kept at. It applies to both, so a package npm says has no such tag or version follows `latest` instead. Antigravity is not on npm and has only `latest` — see below |
 
-An environment image is built once per server and then reused, so the Claude Code and
-OpenCode inside it stay at whatever version was current on the day it was built. Moonphase
-keeps them current itself instead: each project container gets its own install of each
-under `/opt/moonphase/harness/<package>/<version>`, and sessions launch whichever version
-the `current` link there points at, falling back to the image's copy until the first update
-has finished, or whenever `current` is missing or does not run.
+An environment image is built once per server and then reused, so the Claude Code,
+OpenCode and Antigravity inside it stay at whatever version was current on the day it was
+built. Moonphase keeps them current itself instead: each project container gets its own
+install of each under `/opt/moonphase/harness/<package>/<version>` (`antigravity` for
+`agy`), and sessions launch whichever version the `current` link there points at, falling
+back to the image's copy until the first update has finished, or whenever `current` is
+missing or does not run.
 
 An update is started, in the background, whenever a session starts, and the monitor asks
 every running project's container every quarter of an interval, or every hour if that is
 sooner. The container only acts on an ask once the interval has passed since its last
 update started, so updates come at most about a quarter of an interval later than the
-setting, however a session start shifted them. An update asks npm for the version the channel names, installs it only
-if it is new, and switches `current` over only once the new binary has been run
-successfully — a failed or broken release leaves the working one in place. Nothing
+setting, however a session start shifted them. An update asks npm for the version the
+channel names — or, for Antigravity, Google's release manifest for the current one —
+installs it only if it is new, and switches `current` over only once the new binary has
+been run successfully — a failed or broken release leaves the working one in place. Nothing
 `current` or `previous` points at is ever removed: if the installed copy of the current
 version stops running, it is reinstalled beside it, as `<version>.r<timestamp>`. Older
 versions are removed once nothing is running them. The outcome is recorded in
 `/var/lib/moonphase/harness-update.json` inside the container, including any package that
 fell back to `latest` because the channel names a tag or version it does not have
-(`"fallback_from"`) — pinning Claude Code to `2.1.290`, say, leaves OpenCode on `latest`
-rather than unable to update at all.
+(`"fallback_from"`) — pinning Claude Code to `2.1.290`, say, leaves OpenCode and
+Antigravity on `latest` rather than unable to update at all.
+
+**Antigravity comes from a release manifest, not npm.** `agy` is a native binary, and
+Moonphase reads the same manifest Google's own installer does,
+`https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_<amd64|arm64>.json`,
+which gives the version, a tarball and its SHA-512; a download that does not match that
+SHA-512 is not installed. The manifest only ever names the current release, so `latest`
+is the only channel `agy` has: with `MOONPHASE_HARNESS_CHANNEL` pinned to anything but
+the version the manifest names right now, it follows `latest`, and `harness-update.json`
+records `"fallback_from"` for it under `antigravity`, as it would for an npm package with
+no such tag. The npm packages called `agy` and `antigravity-cli` are
+unrelated placeholders, not Google's.
+
+A container only fetches `agy` once one of its sessions has been set up to run
+Antigravity (its `HOME` has a `.gemini` directory, which Moonphase writes just before
+that session's first start asks for an update), or once Moonphase already keeps a copy
+there. Until then `harness-update.json` records `"result": "unused"` for `antigravity`,
+which does not make the run a failure, and the image's own copy is the only one — so a
+server whose projects only run Claude Code never downloads a release it will not use.
 
 The image's own copies in `/usr/local/bin` are never changed; they stay the fallback, and
 root's own `npm` keeps working on them. Login shells in the container — terminal windows,
@@ -99,17 +119,35 @@ shell starts, so they otherwise find the image's copy as before. Moonphase's own
 that are not login shells, such as a bare `docker exec`, still find the image's copy.
 
 **A running session keeps the version it started with.** Restarting it (**Restart
-harness**, or switching its Claude account) always asks npm for the newest release first,
-whatever the interval, and waits for it to install before Claude starts — so a restart is
-how a session gets up to date. When the container already has the newest, that check
-costs a second or two.
+harness**, or switching its account) always asks for the newest release first — npm, or
+the manifest for `agy` — whatever the interval, and waits for it to install before the
+harness starts, so a restart is how a session gets up to date. When the container already
+has the newest, that check costs a second or two.
 
-Claude Code's and OpenCode's own auto-updaters are switched off in Moonphase sessions and
-its own `claude mcp` calls (`DISABLE_AUTOUPDATER=1`, `OPENCODE_DISABLE_AUTOUPDATE=1`), and
-in login shells in the container through `/etc/profile.d/moonphase-harness.sh`, because
-Moonphase manages the version. They installed into the shared home volume, retried every
-half hour from every session, and filled each session's npm cache with downloads; every
-update also removes what they left behind there, and any session npm cache over 1 GB.
+The harnesses' own auto-updaters are switched off in Moonphase sessions and its own
+`claude mcp` calls (`DISABLE_AUTOUPDATER=1` for Claude Code,
+`OPENCODE_DISABLE_AUTOUPDATE=1` for OpenCode, `AGY_CLI_DISABLE_AUTO_UPDATE=true` for
+Antigravity), and in login shells in the container through
+`/etc/profile.d/moonphase-harness.sh`, because Moonphase manages the version. Claude
+Code's and OpenCode's installed into the shared home volume, retried every half hour from
+every session, and filled each session's npm cache with downloads; every update also
+removes what they left behind there, and any session npm cache over 1 GB.
+
+`agy`'s switch takes only the literal value `true` — `1`, which the other two take, is
+ignored. Without it, `agy` starts a background updater on every run, even on its sign-in
+screen, which replaces the binary it was started from. In a Moonphase container that
+updater finds it cannot write there and stops, because every copy of `agy` belongs to
+root; the variable makes that a second guard rather than the only one. `agy update`,
+typed in a session, ignores the variable and fails the same harmless way.
+
+The environment image installs `agy` itself, from the same manifest and checked against
+the same SHA-512, as `/usr/local/bin/agy`, and sets `AGY_CLI_DISABLE_AUTO_UPDATE=true` for
+everything run in the container. It does not run Google's `install.sh`, which installs
+into a home directory and edits shell profiles; the binary needs no setup step. `agy`
+needs glibc 2.26 or newer — Debian 10 and Ubuntu 18.04 onwards, so every built-in
+environment. An environment image built before Antigravity was added has no `agy`; it is
+rebuilt the next time it is used, and a project's container moves onto the new image the
+next time it starts, keeping both volumes.
 
 Setting the interval to `0` leaves sessions on the newest version Moonphase has already
 installed, or on the image's copy if it never installed one. The harnesses' own updaters

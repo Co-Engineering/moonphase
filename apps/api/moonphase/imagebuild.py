@@ -26,6 +26,7 @@ import shlex
 import asyncssh
 
 from . import ssh
+from .harness.antigravity import MANIFEST_BASE as AGY_MANIFEST_BASE
 from .ssh import SSHError
 
 log = logging.getLogger(__name__)
@@ -74,7 +75,12 @@ log = logging.getLogger(__name__)
 # does not prevent this from recurring the next time Anthropic ships a model
 # a server's cached image predates. harness_updates.py does: the image's copy
 # is now only the fallback until a container has installed its own.
-RECIPE_VERSION = "9"
+#
+# v10 added Google's Antigravity CLI: an image built before it has no `agy`,
+# and a project set to that harness would launch nothing — v4's reason again.
+# It also switches agy's own updater off for the whole container, which no
+# older image does either. Every image grows by agy's 222MB binary.
+RECIPE_VERSION = "10"
 
 NODE_VERSION = "22.20.0"
 
@@ -261,6 +267,44 @@ RUN env UV_TOOL_BIN_DIR=/usr/local/bin UV_TOOL_DIR=/opt/uv-tools \
     uv tool install clai --with "pydantic-ai-harness[anthropic,openai]" \
     && chmod -R a+rX /opt/uv-tools \
     && clai --version
+
+# Google's Antigravity CLI, `agy`: one native binary, not an npm package — the
+# `agy` and `antigravity-cli` packages there are unrelated placeholders.
+#
+# Fetched the way Google's own installer fetches it: the platform's release
+# manifest names the current version, a tarball and its SHA-512, and the
+# tarball's one member, `antigravity`, is the binary. Not by running that
+# installer, though. As root it would stage under /root, install into
+# /root/.local/bin, and finish with `agy install`, which only edits shell
+# profiles — root's here — and which the binary does not need to run.
+#
+# Root-owned in /usr/local/bin like every harness here, so `dev` cannot write
+# it: agy's updater replaces its own binary in place and gives up when it
+# cannot, a second guard behind the ENV switch below. The check that it runs
+# gets the switch and a throwaway HOME too. 1.4.3's `--version` neither starts
+# the updater nor writes a file, checked against the binary; a later release
+# doing either would still leave nothing of root's in the image.
+RUN set -eux; \\
+    arch="$(dpkg --print-architecture)"; \\
+    case "$arch" in \\
+      amd64|arm64) ;; \\
+      *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \\
+    esac; \\
+    tmp="$(mktemp -d)"; \\
+    curl -fsSL --proto '=https' --proto-redir '=https' --retry 3 \\
+      "{AGY_MANIFEST_BASE}/linux_${{arch}}.json" -o "$tmp/manifest.json"; \\
+    url="$(jq -er .url "$tmp/manifest.json")"; \\
+    sha512="$(jq -er .sha512 "$tmp/manifest.json")"; \\
+    case "$url" in \\
+      https://?*) ;; \\
+      *) echo "agy: the manifest names no https download" >&2; exit 1 ;; \\
+    esac; \\
+    curl -fsSL --proto '=https' --proto-redir '=https' --retry 3 "$url" -o "$tmp/agy.tar.gz"; \\
+    (cd "$tmp" && echo "$sha512  agy.tar.gz" | sha512sum -c -); \\
+    tar -xzf "$tmp/agy.tar.gz" -C "$tmp" --no-same-owner antigravity; \\
+    install -m 0755 "$tmp/antigravity" /usr/local/bin/agy; \\
+    AGY_CLI_DISABLE_AUTO_UPDATE=true HOME="$tmp" agy --version; \\
+    rm -rf "$tmp"
 {extra_step}
 # Non-root by default, at a fixed uid so the API can chown the named volumes.
 # Some bases ship their own uid 1000 user; 1001 avoids collisions either way.
@@ -287,6 +331,12 @@ WORKDIR /workspace
 
 ENV npm_config_prefix=/home/dev/.npm-global
 ENV PATH=/home/dev/.npm-global/bin:/home/dev/.local/bin:$PATH
+# agy's own updater off for every process in the container, not only for the
+# sessions Moonphase launches: tmux windows, the shell a pane drops to, a bare
+# `docker exec`, and every container whose updates are switched off, which
+# never gets the profile harness_updates.py writes. Exactly "true": agy 1.4.3
+# ignores the "1" the other harnesses take.
+ENV AGY_CLI_DISABLE_AUTO_UPDATE=true
 
 ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
 CMD ["sleep", "infinity"]

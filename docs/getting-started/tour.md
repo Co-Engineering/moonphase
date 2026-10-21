@@ -42,6 +42,9 @@ one project is the ordinary way to work: each gets its own home, its own git
 worktree and its own branch, so one can refactor while another chases a bug.
 Closing one keeps its branch.
 
+Each project runs one harness, chosen when it is created: Claude Code, or
+[Antigravity](../guides/antigravity.md) once it is connected.
+
 ## Inside a session
 
 ### Feed
@@ -105,7 +108,7 @@ on how you pay: a subscription gets its limit window, an API key gets the bill.
 
 | Tab               | What is in it                                                     |
 | ----------------- | ----------------------------------------------------------------- |
-| **Accounts**      | Connect Claude and GitHub once, git identity alongside it — every project uses it |
+| **Accounts**      | Connect Claude, [Antigravity](../guides/antigravity.md) and GitHub once, git identity alongside it — every project uses it |
 | **Claude**        | Permissions, MCP servers and a global `CLAUDE.md` — as forms       |
 | **Workspace**     | Environment variables                                              |
 | **Environments**  | Base images and setup commands, built on the server               |

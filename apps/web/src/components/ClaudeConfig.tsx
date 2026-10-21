@@ -918,6 +918,7 @@ export function ClaudeConfigFields({
   onCheckMcp,
   mcpConnections,
   showEnvVars = true,
+  claudeSettings = true,
 }: {
   value: ClaudeConfigValue
   onChange: (next: ClaudeConfigValue) => void
@@ -934,13 +935,22 @@ export function ClaudeConfigFields({
    * turns this off rather than the tab meaning something different there.
    */
   showEnvVars?: boolean
+  /**
+   * Whether to offer Claude Code's own settings.json (permissions and
+   * behaviour). Off for another harness's project or session, which never
+   * reads it; the rest of the fields are stored either way, and the
+   * instructions tab drops a file name that is Claude's.
+   */
+  claudeSettings?: boolean
 }) {
-  const [section, setSection] = useState<ClaudeConfigSection>('settings')
+  const [section, setSection] = useState<ClaudeConfigSection>(claudeSettings ? 'settings' : 'mcp')
 
   const tabs: [ClaudeConfigSection, string][] = [
-    ['settings', 'Permissions & behaviour'],
+    ...(claudeSettings
+      ? ([['settings', 'Permissions & behaviour']] as [ClaudeConfigSection, string][])
+      : []),
     ['mcp', 'MCP servers'],
-    ['md', 'CLAUDE.md'],
+    ['md', claudeSettings ? 'CLAUDE.md' : 'Instructions'],
     ['skills', 'Skills'],
     ...(showEnvVars ? ([['env', 'Environment variables']] as [ClaudeConfigSection, string][]) : []),
   ]
@@ -961,7 +971,7 @@ export function ClaudeConfigFields({
         ))}
       </div>
 
-      {section === 'settings' && (
+      {section === 'settings' && claudeSettings && (
         <SettingsEditor
           value={value.claude_settings_json}
           onChange={(next) => onChange({ ...value, claude_settings_json: next })}

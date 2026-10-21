@@ -1,14 +1,26 @@
 """Relayed interactive harness sign-in.
 
-Claude Code's sign-in is an interactive PKCE flow: it prints an authorization
-URL, waits for the user to approve in a browser, then reads a code back from
-its own stdin. That is fine on a laptop and useless on a server you never shell
-into.
+Every harness that can be signed into interactively does it the same way: an
+OAuth flow that prints an authorization URL, waits for the user to approve in a
+browser, then reads a code back that they paste into the terminal. Claude
+Code's `claude setup-token` is one; Antigravity's TUI, which signs in when it
+finds no credential (its redirect lands on a page of Google's that shows the
+code to copy), is another. That is fine on a laptop and useless on a server
+you never shell into.
 
 This module drives that flow on the user's behalf. It runs the command on a PTY
 inside a throwaway container, scrapes the URL out of the pane, hands it to the
 UI, accepts the code the user pastes back, types it into the same PTY, and
 harvests whatever credential the flow produced.
+
+Nothing here knows which harness it is driving. What differs between them is
+asked of the harness: a screen or two to get past before the URL appears
+(`login_preamble` — Antigravity opens on a picker of sign-in methods), how to
+read the URL out of the pane (`login_url` — agy indents every line it wraps,
+which a plain rejoin would leave inside the URL), what a rejected code looks
+like (`login_failure_patterns`) and which files hold the result
+(`credential_paths`). Claude Code takes the defaults for the first three,
+which are what this module did before there was a second harness to sign in.
 
 Three things are deliberate:
 
@@ -46,6 +58,13 @@ log = logging.getLogger(__name__)
 # Long enough to find your phone and approve, and to outlive the exchange.
 SESSION_TTL_SECONDS = 900
 CONTAINER_PREFIX = "mp-login-"
+
+# How often the pane is read while waiting for the sign-in link, and how long
+# that wait may go without anything happening. "Anything" includes getting
+# past a screen in front of the link (see `_wait_for_url`), so a harness that
+# took most of a minute to draw its picker is not left seconds for the URL.
+URL_POLL_SECONDS = 1.5
+URL_WAIT_SECONDS = 60.0
 
 # States: starting -> awaiting_code -> verifying -> complete | error
 State = str
@@ -297,27 +316,97 @@ async def _prepare(
             return
 
         session.detail = "Waiting for the sign-in link."
-        pattern = re.compile(harness.login_url_pattern() or r"https://\S+")
-        deadline = time.monotonic() + 60
-        while time.monotonic() < deadline:
-            await asyncio.sleep(1.5)
-            session.pane = await capture(conn, container)
-            # The pane hard-wraps long URLs, so rejoin before matching.
-            match = pattern.search(session.pane.replace("\n", ""))
-            if match:
-                session.url = match.group(0).rstrip(")]},.")
-                session.state = "awaiting_code"
-                log.info("login %s: authorization url ready", session_id)
-                return
+        if await _wait_for_url(conn, session, harness):
+            session.state = "awaiting_code"
+            log.info("login %s: authorization url ready", session_id)
+            return
 
         session.state = "error"
-        session.detail = "The harness did not produce an authorization URL in time."
+        # The pane goes out with an error, so the person can see what the
+        # harness was showing instead — a picker nobody answered, a message
+        # about the network — rather than only being told it took too long.
+        session.detail = (
+            f"{harness.display_name} did not show a sign-in link in time. The "
+            "terminal output below shows where it stopped."
+        )
         await cleanup(conn, session)
         return
     except Exception as exc:  # noqa: BLE001 — the session is the only report
         log.warning("login %s failed while preparing: %s", session.id, exc)
         session.state = "error"
         session.detail = str(exc)[:300]
+
+
+async def _wait_for_url(
+    conn: asyncssh.SSHClientConnection, session: LoginSession, harness: Harness
+) -> bool:
+    """Watch the pane until the harness prints its sign-in URL.
+
+    Sets `session.url` and returns True when it does; False when nothing has
+    happened for `URL_WAIT_SECONDS`. On the way it gets past whatever the
+    harness puts in front of the URL (`login_preamble`): one key per screen,
+    in order, each sent once.
+
+    Once, and only when its screen has been up for a whole poll, because a key
+    sent at the wrong moment is not delivered late — it is gone. Checked
+    against the shipped agy 1.4.3: an Enter sent before it has drawn anything
+    is lost, and agy sits on its picker as if nothing had been pressed; a
+    relay that had spent its one Enter there would wait out the minute. agy
+    does take the key from its very first frame, so for it the second
+    sighting costs one poll. It is there because nothing promises that every
+    harness, or a later agy, starts reading the keyboard before it paints.
+    Nor is a key sent again in case the first went astray: a screen that is
+    merely slow to change is more likely than a lost key, and the repeat would
+    land on whatever comes next. On agy that happens to be harmless — an
+    Enter on its empty code field does nothing — but it is not something to
+    count on in general.
+
+    The URL is looked for before the preamble on every poll, so a harness that
+    one day goes straight to it simply never has its keys sent.
+    """
+    steps = list(harness.login_preamble())
+    # Whether the next step's screen was already showing on the previous poll.
+    showing = False
+    deadline = time.monotonic() + URL_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        await asyncio.sleep(URL_POLL_SECONDS)
+        session.pane = await capture(conn, session.container)
+
+        url = harness.login_url(session.pane)
+        if url:
+            session.url = url
+            return True
+
+        if not steps or not re.search(steps[0][0], session.pane):
+            showing = False
+            continue
+        if not showing:
+            showing = True
+            continue
+
+        key = steps[0][1]
+        sent = await docker_remote.exec_capture(
+            conn, session.container, ["tmux", "send-keys", "-t", "login", key], timeout=30
+        )
+        if not sent.ok:
+            # Not delivered, so not yet sent: the next poll tries again if the
+            # screen is still there. tmux refusing usually means the command
+            # has exited, which the deadline will report with the pane.
+            log.warning(
+                "login %s: could not send %s: %s",
+                session.id, key, (sent.stderr or sent.stdout).strip()[:200],
+            )
+            continue
+        log.info("login %s: sent %s to get past %r", session.id, key, steps[0][0])
+        steps.pop(0)
+        showing = False
+        # Getting past a screen is progress, so the wait starts again from
+        # here: the deadline is for a harness that has stopped moving, not a
+        # budget for the whole sign-in. It cannot run on for ever — there are
+        # only so many steps, and each is taken once.
+        deadline = time.monotonic() + URL_WAIT_SECONDS
+
+    return False
 
 
 async def submit_code(
@@ -359,7 +448,7 @@ async def advance(
     session.pane = await capture(conn, session.container)
 
     # 1. A credentials file is the strongest signal: the harness persisted it.
-    for path in getattr(harness, "credential_paths", lambda: [])():
+    for path in harness.credential_paths():
         result = await docker_remote.exec_capture(
             conn, session.container,
             ["sh", "-c", f"cat {shlex.quote(path)} 2>/dev/null"],
@@ -398,19 +487,24 @@ async def advance(
         await cleanup(conn, session)
         return session
 
-    lowered = session.pane.lower()
-    if any(word in lowered for word in ("invalid code", "expired", "authentication failed")):
+    # Checked only once nothing was harvested, so a success whose screen
+    # happens to contain one of these words is still a success. What a
+    # rejection looks like is the harness's to say: Claude Code's phrases
+    # (the defaults) appear nowhere in agy's "token exchange failed", and the
+    # bare word "expired" is too loose to impose on a harness that does not
+    # print it.
+    if _rejected(session.pane, harness):
         session.state = "error"
-        session.detail = "The harness rejected that code. Start again."
+        session.detail = f"{harness.display_name} rejected that code. Start again."
         await cleanup(conn, session)
         return session
 
     if authenticated:
         session.state = "error"
         session.detail = (
-            "The harness signed in but did not expose a credential Moonphase can "
-            "copy to other containers. Use an API key instead, and please report "
-            "the terminal output below."
+            f"{harness.display_name} signed in but did not expose a credential "
+            "Moonphase can copy to other containers. Use an API key instead, and "
+            "please report the terminal output below."
         )
         await cleanup(conn, session)
         return session
@@ -424,6 +518,14 @@ async def advance(
         await cleanup(conn, session)
 
     return session
+
+
+def _rejected(pane: str, harness: Harness) -> bool:
+    """Whether the pane shows the harness turning the pasted code down."""
+    return any(
+        re.search(pattern, pane, re.IGNORECASE)
+        for pattern in harness.login_failure_patterns()
+    )
 
 
 async def capture(conn: asyncssh.SSHClientConnection, container: str) -> str:

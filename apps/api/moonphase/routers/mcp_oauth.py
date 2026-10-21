@@ -11,6 +11,9 @@ actually ran through (see mcp_oauth_credentials), so "Connect" offered from a
 project's or the org's own Configure screen — where there is no one specific
 session in hand — auto-picks any one of the caller's own running sessions to
 carry it, the same way signing in to Claude auto-picks any online server.
+
+Claude Code only: the relay is `claude mcp login` and the check `claude mcp
+list`, so a session of any other harness is neither picked nor accepted.
 """
 
 from __future__ import annotations
@@ -90,25 +93,44 @@ def _out(session: mcp_login.McpLoginSession) -> McpOAuthOut:
     )
 
 
+def _runs_claude_code(row: dict[str, Any]) -> bool:
+    # Every row from the database names its harness (the column is not
+    # null); a hand-built one that does not is taken as Claude Code, which is
+    # what a project runs when it names none.
+    return str(row.get("harness") or HarnessKind.CLAUDE_CODE) == HarnessKind.CLAUDE_CODE
+
+
 def _own_running_session(
     rows: list[dict[str, Any]], *, where: str
 ) -> dict[str, Any]:
-    """The caller's own running session among candidate rows, or a clear 409.
+    """The caller's own running Claude Code session among candidate rows, or a
+    clear 409.
 
     Any one will do — the credential that comes out the other end is org-wide
     regardless of which session carried the relay — so the first is as good
-    as any.
+    as any. But only a Claude Code one: both the relay (`claude mcp login`)
+    and the check (`claude mcp list`) run Claude Code's own CLI inside the
+    session. Picking any running session was harmless while every session was
+    a Claude one; with Antigravity sessions about, the first of yours could be
+    one, and the relay would fail in it — or be refused — while a Claude
+    session that would have worked sat next to it.
     """
-    mine = [
+    running = [
         r for r in rows if r.get("is_mine") and str(r.get("state")) == "running"
     ]
+    mine = [r for r in running if _runs_claude_code(r)]
     if not mine:
         raise HTTPException(
             status_code=409,
             detail=(
                 "Connecting a server relays OAuth through one of your own "
-                f"running sessions{where}, so it needs one. Start a session "
-                "first, or connect from that session's own Configure dialog."
+                f"running Claude Code sessions{where}, so it needs one. Start a "
+                "session first, or connect from that session's own Configure "
+                "dialog."
+                if not running
+                else "Connecting a server relays OAuth through Claude Code, and "
+                f"none of your running sessions{where} is a Claude Code one. "
+                "Start a Claude Code session first."
             ),
         )
     return mine[0]
@@ -136,6 +158,19 @@ async def _start(
             status_code=403,
             detail="This is someone else's session; only they can connect an "
             "MCP server through it.",
+        )
+
+    # The relay is `claude mcp login`, and what it captures is Claude Code's
+    # own credentials file — there is nothing to run it with in another
+    # harness's session. Refused here, as `_check` refuses, before the session
+    # is touched: otherwise an Antigravity session would have `claude mcp
+    # login` run in a HOME where no Claude Code configuration names the
+    # server, and fail with Claude's complaint rather than this one.
+    if ctx.harness != HarnessKind.CLAUDE_CODE:
+        raise HTTPException(
+            status_code=409,
+            detail="Connecting MCP servers through OAuth is only available for "
+            "Claude Code.",
         )
 
     profile = await runtime.load_session_profile(

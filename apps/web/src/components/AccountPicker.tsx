@@ -1,8 +1,22 @@
 import { useState } from 'react'
-import { api, type HarnessAccount, type Project, type Session } from '../lib/api'
+import {
+  api,
+  type HarnessAccount,
+  type HarnessInfo,
+  type HarnessKind,
+  type Project,
+  type Session,
+} from '../lib/api'
+import { harnessCopy } from '../lib/harness'
 
-export function accountName(account: HarnessAccount): string {
-  return account.label || (account.auth_mode === 'oauth' ? 'Claude subscription' : 'API key')
+/**
+ * What to call an account. An unnamed Antigravity sign-in is a Google
+ * account, not a "Claude subscription", so this needs to know whose it is —
+ * an account row does not say, the list it came from does.
+ */
+export function accountName(account: HarnessAccount, harness?: HarnessKind | string): string {
+  const copy = harnessCopy(harness)
+  return account.label || (account.auth_mode === 'oauth' ? copy.oauthAccount : copy.keyAccount)
 }
 
 function byId(accounts: HarnessAccount[], id: string | null): HarnessAccount | undefined {
@@ -25,6 +39,7 @@ export function ProjectAccountSelect({
   onChanged,
 }: {
   project: Project
+  /** The project's own harness's accounts — never another harness's. */
   accounts: HarnessAccount[]
   onChanged: () => void
 }) {
@@ -55,11 +70,11 @@ export function ProjectAccountSelect({
           onChange={(e) => void choose(e.target.value)}
         >
           <option value="">
-            {fallback ? `Your default (${accountName(fallback)})` : 'Your default'}
+            {fallback ? `Your default (${accountName(fallback, project.harness)})` : 'Your default'}
           </option>
           {accounts.map((a) => (
             <option key={a.id} value={a.id}>
-              {accountName(a)}
+              {accountName(a, project.harness)}
             </option>
           ))}
         </select>
@@ -71,21 +86,27 @@ export function ProjectAccountSelect({
 }
 
 /**
- * Move one of your sessions to another account. Claude reads its login only
- * when it starts, so this restarts it — and asks first, because the agent
- * stops mid-thought, even though the conversation resumes.
+ * Move one of your sessions to another account. The agent reads its login
+ * only when it starts, so this restarts it — and asks first, because the
+ * agent stops mid-thought, even though the conversation resumes.
  */
 export function SessionAccountSwitcher({
   project,
   session,
   accounts,
+  harnesses,
   onSwitched,
 }: {
   project: Project
   session: Session
+  /** The project's own harness's accounts — never another harness's. */
   accounts: HarnessAccount[]
+  /** For the harness's display name; the built-in one is used until it loads. */
+  harnesses?: HarnessInfo[] | null
   onSwitched: () => void
 }) {
+  const copy = harnessCopy(project.harness, harnesses)
+  const name = (account: HarnessAccount) => accountName(account, project.harness)
   const [pending, setPending] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -111,8 +132,8 @@ export function SessionAccountSwitcher({
   return (
     <span className="account-switcher">
       <select
-        aria-label="Claude account"
-        title="Which of your Claude accounts this session runs on"
+        aria-label={copy.account}
+        title={`Which of your ${copy.agent} accounts this session runs on`}
         value={pending ?? session.harness_credential_id ?? ''}
         disabled={busy}
         onChange={(e) =>
@@ -120,18 +141,18 @@ export function SessionAccountSwitcher({
         }
       >
         <option value="">
-          {projectDefault ? `${accountName(projectDefault)} (project's)` : "Project's account"}
+          {projectDefault ? `${name(projectDefault)} (project's)` : "Project's account"}
         </option>
         {accounts.map((a) => (
           <option key={a.id} value={a.id}>
-            {accountName(a)}
+            {name(a)}
           </option>
         ))}
       </select>
       {pending !== null && (
         <span className="row-menu-confirm">
           <span className="hint">
-            Restart on {target ? accountName(target) : 'that account'}? The conversation
+            Restart on {target ? name(target) : 'that account'}? The conversation
             resumes.
           </span>
           <button className="primary" disabled={busy} onClick={() => void confirm()}>
@@ -157,19 +178,24 @@ export function AccountDialog({
   project,
   session,
   accounts,
+  harnesses,
   onChanged,
   onClose,
 }: {
   project: Project
   /** Present to move one session; absent to set the project's account. */
   session?: Session
+  /** The project's own harness's accounts — never another harness's. */
   accounts: HarnessAccount[]
+  /** For the harness's display name; the built-in one is used until it loads. */
+  harnesses?: HarnessInfo[] | null
   onChanged: () => void
   onClose: () => void
 }) {
+  const copy = harnessCopy(project.harness, harnesses)
   const title = session
-    ? `Claude account — ${session.display_name ?? session.tmux_session}`
-    : `Claude account — ${project.name}`
+    ? `${copy.account} — ${session.display_name ?? session.tmux_session}`
+    : `${copy.account} — ${project.name}`
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="card modal" onClick={(e) => e.stopPropagation()}>
@@ -181,19 +207,20 @@ export function AccountDialog({
         </div>
         {accounts.length < 2 ? (
           <p className="hint">
-            You have one Claude account, so everything runs on it. Add another under
+            You have one {copy.account}, so everything runs on it. Add another under
             Settings → Accounts to choose between them here.
           </p>
         ) : session ? (
           <>
             <p className="hint">
-              Switching restarts Claude in this session on the other account and resumes
+              Switching restarts {copy.agent} in this session on the other account and resumes
               the same conversation.
             </p>
             <SessionAccountSwitcher
               project={project}
               session={session}
               accounts={accounts}
+              harnesses={harnesses}
               onSwitched={() => {
                 onChanged()
                 onClose()

@@ -1199,17 +1199,23 @@ async def switch_session_account(
             conn, project_id, session_name, payload.account_id
         )
 
-    try:
-        conn_ssh = await ssh.pool.get(ctx.target)
-        await docker_remote.exec_capture(
-            conn_ssh,
-            ctx.container,
-            ["sh", "-c", _FORGET_SIGNED_IN_ACCOUNT],
-            env={"HOME": str(row["home_dir"])},
-            timeout=30,
-        )
-    except SSHError as exc:
-        log.warning("could not clear the cached account for %s: %s", session_name, exc)
+    # Claude Code's cache, so only in a Claude Code session; anywhere else it
+    # is an SSH round trip to edit a file that is not there. Antigravity keeps
+    # its sign-in in one token file, which the restart below rewrites for the
+    # new account (or empties, for an API key). Whether it also remembers the
+    # account somewhere else could not be checked without a real sign-in.
+    if ctx.harness == harness_registry.HarnessKind.CLAUDE_CODE:
+        try:
+            conn_ssh = await ssh.pool.get(ctx.target)
+            await docker_remote.exec_capture(
+                conn_ssh,
+                ctx.container,
+                ["sh", "-c", _FORGET_SIGNED_IN_ACCOUNT],
+                env={"HOME": str(row["home_dir"])},
+                timeout=30,
+            )
+        except SSHError as exc:
+            log.warning("could not clear the cached account for %s: %s", session_name, exc)
 
     return await start_session(
         project_id,

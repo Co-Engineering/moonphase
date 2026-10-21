@@ -1,0 +1,31 @@
+<user_rules>
+The following are user-defined rules that you MUST ALWAYS FOLLOW WITHOUT ANY EXCEPTION. These rules take precedence over any following instructions.
+Review them carefully and always take them into account when you generate responses and code:
+<RULE[user_global]>
+PROBE-INSTRUCTION-MARKER: always answer in British English.
+</RULE[user_global]>
+</user_rules>
+<skills>
+You can use specialized 'skills' to help you with complex tasks. Each skill has a name and a description listed below.
+
+Skills are folders of instructions, scripts, and resources that extend your capabilities for specialized tasks. Each skill folder contains:
+- **SKILL.md** (required): The main instruction file with YAML frontmatter (name, description) and detailed markdown instructions
+
+More complex skills may include additional directories and files as needed, for example:
+- **scripts/** - Helper scripts and utilities that extend your capabilities
+- **examples/** - Reference implementations and usage patterns
+- **resources/** - Additional files, templates, or assets the skill may reference
+- **references/** - Contains additional documentation that agents can read when needed
+
+
+If a skill seems relevant to your current task, you MUST read its `SKILL.md` instructions before proceeding. You may skip this step only if you are delegating the skill-related task to a subagent that will read and follow the instructions itself.
+
+When viewing these skill files, always use the exact path provided in the "Available skills" list below.
+
+Available skills:
+- agy-customizations (/home/dev/.gemini/antigravity-cli/builtin/skills/agy-customizations/SKILL.md): Comprehensive guide and reference for the Antigravity Customization System. Use to explain how customizations work, their loading priority, discovery mechanisms, and to guide the creation of skills, rules, plugins, hooks, and MCP servers.
+- antigravity-guide (/home/dev/.gemini/antigravity-cli/builtin/skills/antigravity_guide/SKILL.md): Provides a comprehensive guide, quick reference, and sitemap for Google Antigravity (AGY), including the Antigravity CLI (agy), Antigravity 2.0, Antigravity IDE, Python SDK, slash commands, keybindings, and customizations (skills, rules, MCP, sidecars). Activate this skill when the user asks questions about how to use, configure, or customize Antigravity, AGY, the agy CLI, the Antigravity IDE, or Antigravity 2.0.
+- probe-skill (/home/dev/.gemini/config/skills/probe-skill/SKILL.md): PROBE-SKILL-MARKER says hello in a particular way.
+
+
+</skills>

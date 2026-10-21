@@ -173,12 +173,12 @@ preview work against an instance running somewhere else — see
 | Method | Path | Purpose |
 | ------ | ---- | ------- |
 | `GET`, `PUT` | `/api/profile` | Claude settings, MCP, CLAUDE.md, skills, env vars, git identity |
-| `POST` | `/api/profile/harness/api-key` | Store an API key |
-| `POST` | `/api/profile/harness/login/start` | Begin subscription sign-in. `label` adds an account, `account_id` signs one in again; neither replaces the default |
+| `POST` | `/api/profile/harness/api-key` | Store an API key. `harness` in the body says which agent it is for |
+| `POST` | `/api/profile/harness/login/start` | Begin subscription sign-in for the body's `harness`. `label` adds an account, `account_id` signs one in again; neither replaces the default |
 | `GET` | `/api/profile/harness/login/{session_id}` | Poll it |
 | `POST` | `/api/profile/harness/login/code` | Submit the code |
-| `DELETE` | `/api/profile/harness` | Disconnect every account |
-| `GET` | `/api/profile/harness/accounts` | Your accounts, default first |
+| `DELETE` | `/api/profile/harness?harness=` | Disconnect every account on that harness |
+| `GET` | `/api/profile/harness/accounts?harness=` | Your accounts on that harness, default first |
 | `PATCH` | `/api/profile/harness/accounts/{id}` | Rename, or make it the default |
 | `DELETE` | `/api/profile/harness/accounts/{id}` | Remove one; what used it falls back to the default |
 | `POST` | `/api/profile/github/device/start` | Begin GitHub device flow |
@@ -189,6 +189,14 @@ preview work against an instance running somewhere else — see
 | `DELETE` | `/api/environments/{key}` | Remove |
 | `GET` | `/api/harnesses` | Which harnesses are available and configured |
 | `GET` | `/api/organizations` | Your organizations |
+
+Accounts belong to one harness. The four routes that create, list or remove them take a
+`harness` — `claude_code`, `antigravity`, and so on — in the body for the two `POST`s and
+in the query string for the rest, and all four default to `claude_code`, which is what
+every client sent before there was a second harness to connect. Polling a sign-in,
+submitting its code, and renaming or removing one account take none: the sign-in or the
+account already knows whose it is. For Antigravity, `api-key` takes a Gemini API key and
+the sign-in is a Google account — see [Antigravity](../guides/antigravity.md#connect-it).
 
 ## The instance
 

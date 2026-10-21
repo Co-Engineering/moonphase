@@ -1,0 +1,70 @@
+{
+  "ask_question": [
+    "questions"
+  ],
+  "define_subagent": [
+    "Description",
+    "EnableMCPTools",
+    "EnableSubagentTools",
+    "EnableWriteTools",
+    "Name",
+    "SystemPrompt"
+  ],
+  "edit_file": [
+    "ArtifactMetadata",
+    "Path",
+    "Replacement",
+    "Target"
+  ],
+  "invoke_subagent": [
+    "Model",
+    "Prompt",
+    "Role",
+    "TypeName",
+    "Workspace"
+  ],
+  "manage_subagents": [
+    "Action",
+    "ConversationIds"
+  ],
+  "manage_task": [
+    "Action",
+    "Input",
+    "TaskId"
+  ],
+  "read_file": [
+    "ByteOffset",
+    "EndLine",
+    "Path",
+    "StartLine"
+  ],
+  "run_command": [
+    "CommandLine",
+    "IsDaemon",
+    "WaitMsBeforeAsync",
+    "toolSummary"
+  ],
+  "schedule": [
+    "CronExpression",
+    "DurationSeconds",
+    "IsDaemon",
+    "MaxIterations",
+    "Prompt",
+    "TimerCondition"
+  ],
+  "search_web": [
+    "domain",
+    "query"
+  ],
+  "send_message": [
+    "Message",
+    "Recipient"
+  ],
+  "write_file": [
+    "Append",
+    "ArtifactMetadata",
+    "Content",
+    "Overwrite",
+    "Path"
+  ]
+}

@@ -1964,14 +1964,20 @@ async def usage_buckets(
 
 
 async def first_harness_credential_privileged(
-    conn: AsyncConnection, user_id: str
+    conn: AsyncConnection, user_id: str, *, harness: str = "claude_code"
 ) -> str | None:
-    """How this person pays, which decides which usage number leads.
+    """How this person pays for one harness, which decides which usage number
+    leads.
 
     Read from the credential they actually connected rather than asked for as
     a preference: someone on a subscription cares how much of the window has
     gone, someone on an API key cares what it cost, and neither should have to
     tell us which they are.
+
+    For one harness, because each is paid for separately. Across all of them,
+    a Gemini API key added for Antigravity a minute ago would outrank a Claude
+    subscription (the newest default wins) and turn Claude's usage page into a
+    bill for a plan that has no bill.
     """
     result = await conn.execute(
         text(
@@ -1980,11 +1986,12 @@ async def first_harness_credential_privileged(
             from private.harness_credentials hc
             join org_members m on m.org_id = hc.org_id
             where m.user_id = cast(:user_id as uuid) and hc.project_id is null
+              and hc.harness = cast(:h as harness_kind)
             order by hc.is_default desc, hc.updated_at desc
             limit 1
             """
         ),
-        {"user_id": user_id},
+        {"user_id": user_id, "h": harness},
     )
     row = result.first()
     return str(row[0]) if row else None

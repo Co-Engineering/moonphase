@@ -7,7 +7,8 @@ window to its most recent client. Reading the transcript sidesteps both: the
 phone observes without attaching, and writes back through `tmux send-keys`, so
 the one session stays the single source of truth.
 
-Tailing is by byte offset into the newest transcript file. Offsets rather than
+Tailing is by byte offset into the live transcript file — the one the harness
+says it is writing now (`Harness.live_transcript_script`). Offsets rather than
 line counts because the file is appended to continuously, and a cursor that
 survives is what makes polling cheap: each request ships only what is new.
 """
@@ -17,6 +18,7 @@ from __future__ import annotations
 import difflib
 import json
 import logging
+import posixpath
 import shlex
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -127,7 +129,16 @@ def build_diff(before: str, after: str) -> tuple[list[DiffLine], int, int, bool]
 
 @dataclass
 class Cursor:
-    """Where we last read to. Serialised as `<filename>:<byte offset>`."""
+    """Where we last read to. Serialised as `<file>:<byte offset>`.
+
+    `filename` is the file's identity (`file_identity`): its path relative to
+    the harness's transcript directory. For a harness that writes one flat
+    `<id>.jsonl` per conversation that is exactly the file's name, which is
+    what this field held before nested transcripts existed — so a cursor a
+    client is holding across a deploy still continues where it was rather
+    than replaying the tail. It is a path for one that nests them, and may
+    contain `/` (and even `:`; decoding splits on the last one).
+    """
 
     filename: str = ""
     offset: int = 0
@@ -154,21 +165,55 @@ class TranscriptPage:
     available: bool = True
 
 
-async def _newest_file(
-    conn: asyncssh.SSHClientConnection, container: str, directory: str
-) -> str | None:
-    """The transcript for the harness's current run.
+def file_identity(directory: str, path: str) -> str:
+    """Which transcript `path` is, as the cursor and the parser know it.
 
-    A harness starts a new file per session, so the newest is the live one;
-    older files are previous conversations in the same workspace.
+    The path relative to the harness's transcript directory. A basename alone
+    used to be enough, because Claude Code names each conversation's file by
+    its own uuid; Antigravity names every one of them
+    `transcript_full.jsonl` and tells them apart by the directory above. By
+    name alone a new conversation would look like the old one carrying on:
+    the REST read would apply the old file's offset to the new one — starting
+    mid-line and dropping everything before it — and the socket would go on
+    tailing the old file for as long as it existed, since `tail -f` on a file
+    that is still there never exits. The relative path is still exactly the
+    basename for a flat directory, so nothing changes for Claude Code.
+
+    A path outside the directory is not expected — every harness's live
+    transcript lives under its own `transcript_dir` — but if one turns up it
+    is identified by its whole path rather than by a name it may share.
+    """
+    root = posixpath.normpath(directory)
+    full = posixpath.normpath(path)
+    prefix = root.rstrip("/") + "/"
+    if full.startswith(prefix) and len(full) > len(prefix):
+        return full[len(prefix):]
+    return full
+
+
+async def live_file(
+    conn: asyncssh.SSHClientConnection,
+    container: str,
+    harness: Harness,
+    space: SessionSpace,
+) -> str | None:
+    """The path of the transcript the harness is writing now, or None.
+
+    Asked of the harness rather than assumed. For a harness writing a flat
+    file per conversation it is the newest one (the base class's default);
+    Antigravity nests one directory per conversation and records which is
+    current itself, and a "newest file" there could be a sub-agent's or
+    another worktree's conversation. Shared by the REST read and the feed
+    socket, so the two can never disagree about which file is live.
     """
     result = await docker_remote.exec_capture(
         conn,
         container,
-        ["sh", "-c", f"ls -1t {shlex.quote(directory)}/*.jsonl 2>/dev/null | head -1"],
+        ["sh", "-c", harness.live_transcript_script(space)],
         timeout=30,
     )
-    path = result.stdout.strip()
+    # One path. Anything after the first line is not part of it.
+    path = next(iter(result.stdout.strip().splitlines()), "").strip()
     return path or None
 
 
@@ -215,12 +260,12 @@ async def read(
     The space matters: each session writes its transcript under its own HOME,
     so reading the wrong one shows you somebody else's conversation.
     """
-    directory = harness.transcript_dir(space or SessionSpace())
-    path = await _newest_file(conn, container, directory)
+    space = space or SessionSpace()
+    path = await live_file(conn, container, harness, space)
     if path is None:
         return TranscriptPage(available=False)
 
-    filename = path.rsplit("/", 1)[-1]
+    identity = file_identity(harness.transcript_dir(space), path)
     position = Cursor.decode(cursor)
 
     size_result = await docker_remote.exec_capture(
@@ -233,7 +278,9 @@ async def read(
     except ValueError:
         size = 0
 
-    fresh = position.filename != filename
+    # A different file is a different conversation, even when it has the same
+    # name as the last one (see `file_identity`).
+    fresh = position.filename != identity
     # A file that shrank was rotated or replaced; re-reading from where we were
     # would decode the middle of a line.
     if position.offset > size:
@@ -276,7 +323,7 @@ async def read(
             record = json.loads(stripped)
         except json.JSONDecodeError:
             continue
-        events.extend(harness.parse_transcript_record(record))
+        events.extend(harness.parse_transcript_record(record, source=identity))
 
     if not fresh:
         new_offset = position.offset + consumed
@@ -292,5 +339,5 @@ async def read(
             new_offset = await _skip_one_line(conn, container, path, position.offset)
 
     return TranscriptPage(
-        events=events, cursor=Cursor(filename=filename, offset=new_offset).encode()
+        events=events, cursor=Cursor(filename=identity, offset=new_offset).encode()
     )

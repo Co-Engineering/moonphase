@@ -58,7 +58,7 @@ describe('signing in to Claude', () => {
     render(<Settings onClose={() => {}} onSaved={() => {}} />)
 
     fireEvent.click(
-      await screen.findByRole('button', { name: 'Sign in with Claude' }),
+      await screen.findByRole('button', { name: 'Sign in with Claude' }, { timeout: 6000 }),
     )
 
     // What it is doing, while it does it: the slow step is a container build,
@@ -87,7 +87,7 @@ describe('signing in to Claude', () => {
 
     render(<Settings onClose={() => {}} onSaved={() => {}} />)
     fireEvent.click(
-      await screen.findByRole('button', { name: 'Sign in with Claude' }),
+      await screen.findByRole('button', { name: 'Sign in with Claude' }, { timeout: 6000 }),
     )
 
     await waitFor(

@@ -1,0 +1,36 @@
+
+
+      ▄▀▀▄
+     ▀▀▀▀▀▀
+    ▀▀▀▀▀▀▀▀
+   ▄▀▀    ▀▀▄
+  ▄▀▀      ▀▀▄
+
+  Antigravity CLI 1.4.3
+  Gemini API key
+  Gemini 3.1 Pro (Low)
+  /workspace
+
+────────────────────────────────────────────────────────────
+> touch please
+
+● Ran (touch probe-file.txt) (ctrl+o to expand)
+
+  Touched.
+
+────────────────────────────────────────────────────────────
+> ask please
+
+? Which colour should the banner be?
+> (Recommended) Blue
+
+  Noted.
+
+────────────────────────────────────────────────────────────
+> slow please
+⢿  Considering the request carefully....
+────────────────────────────────────────────────────────────────────────────────
+>
+────────────────────────────────────────────────────────────────────────────────
+esc to cancel                                               Gemini 3.1 Pro · low
+

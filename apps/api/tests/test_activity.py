@@ -16,9 +16,11 @@ from moonphase.activity import (
     PANE_TAIL_LINES,
     ActivitySignals,
     ActivityState,
+    agent_name,
     classify,
     notification_for,
 )
+from moonphase.harness import available
 from moonphase.harness import get as get_harness
 
 CLAUDE = get_harness("claude_code").activity_signals()
@@ -194,3 +196,48 @@ def test_does_not_notify_on_repeated_idle() -> None:
 def test_does_not_notify_when_a_container_stops() -> None:
     """Stopping a project is something the user just did on purpose."""
     assert notification_for(ActivityState.WORKING, ActivityState.STOPPED, None, "api") is None
+
+
+def test_claude_codes_notifications_read_exactly_as_they_always_have() -> None:
+    """Reworded under everyone who already gets them, they would look like a
+    different app's."""
+    for claude in [get_harness("claude_code"), None]:
+        assert agent_name(claude) == "Claude"
+        assert notification_for(
+            ActivityState.WORKING, ActivityState.AWAITING_INPUT, None, "api", claude
+        ) == ("api needs you", "Claude is waiting for an answer.")
+        assert notification_for(
+            ActivityState.WORKING, ActivityState.IDLE, None, "api", claude
+        ) == ("api finished", "Claude stopped working.")
+
+
+def test_every_other_harness_is_named_in_its_own_notifications() -> None:
+    """Saying "Claude is waiting" about an Antigravity session sends someone
+    looking for the wrong thing."""
+    others = [h for h in available() if str(h.kind) != "claude_code"]
+    assert others
+    for harness in others:
+        name = harness.display_name
+        assert agent_name(harness) == name
+        assert notification_for(
+            ActivityState.WORKING, ActivityState.AWAITING_INPUT, None, "api", harness
+        ) == ("api needs you", f"{name} is waiting for an answer.")
+        assert notification_for(
+            ActivityState.WORKING, ActivityState.IDLE, None, "api", harness
+        ) == ("api finished", f"{name} stopped working.")
+
+    assert notification_for(
+        ActivityState.WORKING, ActivityState.IDLE, None, "api", get_harness("antigravity")
+    ) == ("api finished", "Antigravity stopped working.")
+
+
+def test_the_question_itself_still_beats_the_agents_name() -> None:
+    """What is being asked is the useful part; the name is only the fallback
+    when the question could not be read."""
+    assert notification_for(
+        ActivityState.WORKING,
+        ActivityState.AWAITING_INPUT,
+        "Run this command?",
+        "api",
+        get_harness("antigravity"),
+    ) == ("api needs you", "Run this command?")

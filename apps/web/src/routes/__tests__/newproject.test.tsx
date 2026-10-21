@@ -98,3 +98,91 @@ describe('a failed creation', () => {
     expect(deleted).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * A second harness is offered once it is connected, and only then.
+ *
+ * The form is data-driven — it lists what `/api/harnesses` calls usable — but
+ * nothing ever exercised more than one entry, and the choice is the whole
+ * point: picking Antigravity has to make an Antigravity project, not a
+ * Claude Code one that happens to have been the first option.
+ */
+describe('choosing a harness', () => {
+  const info = (kind: string, display_name: string, configured: boolean) => ({
+    kind,
+    display_name,
+    supported_auth_modes: ['oauth', 'api_key'],
+    available: true,
+    configured,
+    login_supported: true,
+  })
+
+  const formWith = (list: ReturnType<typeof info>[]) =>
+    render(
+      <NewProject
+        servers={servers}
+        harnesses={list}
+        environments={environments}
+        onClose={() => {}}
+        onCreated={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    )
+
+  it('offers Antigravity once it is signed in, and creates the project on it', async () => {
+    const created = vi
+      .spyOn(api, 'createProject')
+      .mockResolvedValue({ id: 'proj-1', status: 'running', status_detail: null } as never)
+    formWith([info('claude_code', 'Claude Code', true), info('antigravity', 'Antigravity', true)])
+
+    const select = screen.getByLabelText<HTMLSelectElement>('Harness')
+    expect([...select.options].map((o) => o.textContent)).toEqual(['Claude Code', 'Antigravity'])
+    // Claude Code stays the default, as it always was.
+    expect(select.value).toBe('claude_code')
+
+    fireEvent.change(select, { target: { value: 'antigravity' } })
+    fireEvent.change(screen.getByLabelText(/project name/i), { target: { value: 'gravity' } })
+    fireEvent.click(screen.getByRole('button', { name: /create project/i }))
+
+    await waitFor(() =>
+      expect(created).toHaveBeenCalledWith(expect.objectContaining({ harness: 'antigravity' })),
+    )
+  })
+
+  it('does not offer it before it is signed in', () => {
+    formWith([info('claude_code', 'Claude Code', true), info('antigravity', 'Antigravity', false)])
+
+    const select = screen.getByLabelText<HTMLSelectElement>('Harness')
+    expect([...select.options].map((o) => o.textContent)).toEqual(['Claude Code'])
+  })
+
+  it('sends the harness the form shows when the list arrives after it opened', async () => {
+    const created = vi
+      .spyOn(api, 'createProject')
+      .mockResolvedValue({ id: 'proj-1', status: 'running', status_detail: null } as never)
+    // Opened before the list had answered, then given one with only
+    // Antigravity connected: what is on screen is what has to be sent.
+    const view = formWith([info('claude_code', 'Claude Code', true)])
+    view.rerender(
+      <NewProject
+        servers={servers}
+        harnesses={[
+          info('claude_code', 'Claude Code', false),
+          info('antigravity', 'Antigravity', true),
+        ]}
+        environments={environments}
+        onClose={() => {}}
+        onCreated={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    )
+
+    expect(screen.getByLabelText<HTMLSelectElement>('Harness').value).toBe('antigravity')
+    fireEvent.change(screen.getByLabelText(/project name/i), { target: { value: 'gravity' } })
+    fireEvent.click(screen.getByRole('button', { name: /create project/i }))
+
+    await waitFor(() =>
+      expect(created).toHaveBeenCalledWith(expect.objectContaining({ harness: 'antigravity' })),
+    )
+  })
+})

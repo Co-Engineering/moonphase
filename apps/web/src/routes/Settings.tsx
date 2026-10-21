@@ -18,6 +18,8 @@ import {
   type AccountTarget,
   type GitHubDevice,
   type HarnessAccount,
+  type HarnessInfo,
+  type HarnessKind,
   type HarnessLogin,
   type McpOAuthConnectionInfo,
   type PushStatus,
@@ -26,6 +28,7 @@ import {
 import { copyText } from '../lib/clipboard'
 import { useResource } from '../lib/useResource'
 import { accountName } from '../components/AccountPicker'
+import { harnessCopy } from '../lib/harness'
 import { playAlertSound, soundChoiceLabel, SOUND_CHOICES, type SoundChoice } from '../lib/sound'
 import { useSoundAlertPreference } from '../lib/soundAlertPreference'
 
@@ -158,6 +161,19 @@ type Runner = (fn: () => Promise<unknown>, message?: string) => Promise<void>
 
 // --- accounts ---------------------------------------------------------------
 
+/**
+ * Which harnesses get an account card, beyond Claude's.
+ *
+ * Only Claude Code could be connected from here once, so no other harness
+ * ever became `configured`, and New project only offers configured ones —
+ * a harness could be installed, registered and listed, and still impossible
+ * to pick. Each one here has a sign-in and a key the card knows how to word
+ * (see `harnessCopy`). OpenCode and Pydantic AI are not here yet: they take
+ * a provider's API key, and which provider is a question this card does not
+ * ask.
+ */
+const OTHER_ACCOUNT_CARDS: HarnessKind[] = ['antigravity']
+
 function AccountsTab({
   profile,
   busy,
@@ -167,24 +183,100 @@ function AccountsTab({
   busy: boolean
   run: Runner
 }) {
+  // What each harness supports, and whether this instance runs it at all. A
+  // card for a harness the backend does not list would sign in to something
+  // no project can use.
+  const harnesses = useResource<HarnessInfo[]>(() => api.harnesses(), [])
+  const info = (kind: HarnessKind) => harnesses.data?.find((h) => h.kind === kind)
   return (
     <>
-      <ClaudeAccount profile={profile} busy={busy} run={run} />
+      {/* Always shown, listed or not: it is the one every instance has, and
+          an older backend's answer — or none yet — must not hide it. */}
+      <HarnessAccountCard
+        harness="claude_code"
+        info={info('claude_code')}
+        harnesses={harnesses.data}
+        busy={busy}
+        run={run}
+      />
+      {OTHER_ACCOUNT_CARDS.map((kind) => {
+        const listed = info(kind)
+        return listed ? (
+          <HarnessAccountCard
+            key={kind}
+            harness={kind}
+            info={listed}
+            harnesses={harnesses.data}
+            busy={busy}
+            run={run}
+          />
+        ) : null
+      })}
       <GitHubAccount profile={profile} busy={busy} run={run} />
       <NotificationsPanel run={run} />
     </>
   )
 }
 
-function ClaudeAccount({
+/**
+ * The sentences on a harness's account card that are about which projects
+ * use it. Claude's are what they always were: every project ran on it.
+ * Anything else only runs the projects created for it.
+ */
+function cardCopy(harness: HarnessKind, agent: string) {
+  if (harness === 'claude_code') {
+    return {
+      intro:
+        'Sign in once here. Moonphase stores the credential encrypted and injects it into ' +
+        'every project container. You can add more accounts afterwards — a work one, a ' +
+        'client’s — and choose per project or per session.',
+      caveat: null,
+      signedIn: 'Signed in to Claude. Every project will use it.',
+      onlyOne:
+        'Every project uses this account. Add another to run some projects or sessions on a different subscription.',
+    }
+  }
+  return {
+    intro:
+      `Sign in once here and ${agent} becomes a choice in New project. Moonphase stores ` +
+      `the credential encrypted and injects it into the container of every project that ` +
+      `runs ${agent}. You can add more accounts afterwards and choose per project or per ` +
+      'session.',
+    // Google's FAQ, not an inference: it says wrapping agy in third-party
+    // apps is not supported on consumer plans, and recommends an API key for
+    // that. Moonphase runs agy's own interactive terminal on your sign-in and
+    // never switches accounts by itself, but the person deciding which to
+    // use should hear it from here rather than find out later.
+    caveat:
+      harness === 'antigravity'
+        ? 'Google’s Antigravity FAQ says its consumer plans do not support using agy ' +
+          'through third-party apps, and recommends a Gemini API key for that.'
+        : null,
+    signedIn: `Signed in to ${agent}. New project now offers it.`,
+    onlyOne:
+      `Every ${agent} project uses this account. Add another to run some projects or ` +
+      'sessions on a different one.',
+  }
+}
+
+function HarnessAccountCard({
+  harness,
+  info,
+  harnesses,
   busy,
   run,
 }: {
-  profile: WorkspaceProfile
+  harness: HarnessKind
+  /** From `/api/harnesses`. Undefined until it answers, or on a backend too old to. */
+  info?: HarnessInfo
+  harnesses?: HarnessInfo[] | null
   busy: boolean
   run: Runner
 }) {
-  const accounts = useResource<HarnessAccount[]>(() => api.harnessAccounts(), [])
+  const copy = harnessCopy(harness, harnesses)
+  const words = cardCopy(harness, copy.agent)
+  const name = (account: HarnessAccount) => accountName(account, harness)
+  const accounts = useResource<HarnessAccount[]>(() => api.harnessAccounts(harness), [harness])
   const list = accounts.data ?? []
   // What the sign-in panel below is for: a new account, or one already in the
   // list being signed in again.
@@ -214,7 +306,7 @@ function ClaudeAccount({
     return (
       <div className="card inner">
         <h3>
-          <span className="dot" /> Claude
+          <span className="dot" /> {copy.agent}
         </h3>
         <p className="hint">Loading…</p>
       </div>
@@ -225,16 +317,16 @@ function ClaudeAccount({
     return (
       <div className="card inner">
         <h3>
-          <span className="dot" /> Claude
+          <span className="dot" /> {copy.agent}
         </h3>
-        <p className="hint">
-          Sign in once here. Moonphase stores the credential encrypted and injects it into
-          every project container. You can add more accounts afterwards — a work one, a
-          client&rsquo;s — and choose per project or per session.
-        </p>
-        <ClaudeSignIn
+        <p className="hint">{words.intro}</p>
+        {words.caveat && <p className="hint">{words.caveat}</p>}
+        <HarnessSignIn
+          harness={harness}
+          info={info}
+          harnesses={harnesses}
           target={{ label: 'Personal' }}
-          onDone={() => void signedIn('Signed in to Claude. Every project will use it.')}
+          onDone={() => void signedIn(words.signedIn)}
         />
       </div>
     )
@@ -243,11 +335,11 @@ function ClaudeAccount({
   return (
     <div className="card inner">
       <h3>
-        <span className="dot connected" /> Claude
+        <span className="dot connected" /> {copy.agent}
       </h3>
       <p className="hint">
         {list.length === 1
-          ? 'Every project uses this account. Add another to run some projects or sessions on a different subscription.'
+          ? words.onlyOne
           : 'New sessions run on the default unless their project or the session itself picks another.'}
       </p>
       <ul className="account-list">
@@ -279,10 +371,10 @@ function ClaudeAccount({
                 </span>
               ) : (
                 <>
-                  <strong>{accountName(account)}</strong>
+                  <strong>{name(account)}</strong>
                   {account.is_default && <span className="shared-tag">default</span>}
                   <span className="hint">
-                    {account.auth_mode === 'oauth' ? 'Claude subscription' : 'API key'}
+                    {account.auth_mode === 'oauth' ? copy.oauthAccount : copy.keyAccount}
                   </span>
                 </>
               )}
@@ -301,7 +393,7 @@ function ClaudeAccount({
                       onClick={() =>
                         void change(
                           () => api.deleteHarnessAccount(account.id),
-                          `${accountName(account)} removed.`,
+                          `${name(account)} removed.`,
                         ).then(() => setRemoving(null))
                       }
                     >
@@ -318,7 +410,7 @@ function ClaudeAccount({
                         onClick={() =>
                           void change(
                             () => api.updateHarnessAccount(account.id, { is_default: true }),
-                            `${accountName(account)} is now the default.`,
+                            `${name(account)} is now the default.`,
                           )
                         }
                       >
@@ -351,9 +443,12 @@ function ClaudeAccount({
               </div>
             )}
             {renewing === account.id && (
-              <ClaudeSignIn
+              <HarnessSignIn
+                harness={harness}
+                info={info}
+                harnesses={harnesses}
                 target={{ accountId: account.id }}
-                onDone={() => void signedIn(`${accountName(account)} signed in again.`)}
+                onDone={() => void signedIn(`${name(account)} signed in again.`)}
                 onCancel={() => setRenewing(null)}
               />
             )}
@@ -374,7 +469,10 @@ function ClaudeAccount({
             />
           </label>
           {newName.trim() ? (
-            <ClaudeSignIn
+            <HarnessSignIn
+              harness={harness}
+              info={info}
+              harnesses={harnesses}
               target={{ label: newName.trim() }}
               onDone={() => void signedIn(`${newName.trim()} added.`)}
               onCancel={() => setAdding(false)}
@@ -402,18 +500,34 @@ function ClaudeAccount({
 }
 
 /**
- * One Claude sign-in, by subscription or by API key, landing in `target`:
- * an existing account to replace, or a new account by that name.
+ * One sign-in to `harness`, by its own sign-in or by API key, landing in
+ * `target`: an existing account to replace, or a new account by that name.
+ *
+ * Which of the two is offered is the harness's to say. `/api/harnesses`
+ * reports both — `login_supported`, `supported_auth_modes` — and this used to
+ * fetch them and read neither, offering Claude's subscription sign-in and an
+ * Anthropic key field for anything. Until that answer arrives (or from a
+ * backend too old to give it) both are offered, which is what Claude always
+ * had.
  */
-function ClaudeSignIn({
+function HarnessSignIn({
+  harness,
+  info,
+  harnesses,
   target,
   onDone,
   onCancel,
 }: {
+  harness: HarnessKind
+  info?: HarnessInfo
+  harnesses?: HarnessInfo[] | null
   target: AccountTarget
   onDone: () => void
   onCancel?: () => void
 }) {
+  const copy = harnessCopy(harness, harnesses)
+  const canSignIn = info ? info.login_supported : true
+  const canUseKey = info ? info.supported_auth_modes.includes('api_key') : true
   const [login, setLogin] = useState<HarnessLogin | null>(null)
   const [code, setCode] = useState('')
   const [showKey, setShowKey] = useState(false)
@@ -439,7 +553,7 @@ function ClaudeSignIn({
     setWorking(true)
     setError(null)
     try {
-      const started = await api.startHarnessLogin(target)
+      const started = await api.startHarnessLogin(target, harness)
       setLogin(started)
       if (started.state !== 'starting') {
         setWorking(false)
@@ -521,7 +635,7 @@ function ClaudeSignIn({
     setWorking(true)
     setError(null)
     try {
-      await api.setHarnessApiKey(apiKey.trim(), target)
+      await api.setHarnessApiKey(apiKey.trim(), target, harness)
       setApiKey('')
       onDone()
     } catch (err) {
@@ -532,6 +646,27 @@ function ClaudeSignIn({
   }
 
   const verifying = login?.state === 'verifying'
+
+  const keyField = (
+    <>
+      <label>
+        <span>{copy.keyLabel}</span>
+        <input
+          type="password"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder={copy.keyPlaceholder}
+        />
+      </label>
+      <button
+        className="primary"
+        disabled={working || !apiKey.trim()}
+        onClick={() => void saveKey()}
+      >
+        Save key
+      </button>
+    </>
+  )
 
   return (
     <div className="claude-signin">
@@ -555,7 +690,7 @@ function ClaudeSignIn({
       {login?.state === 'awaiting_code' || verifying ? (
         <>
           <p className="hint">
-            <strong>1.</strong> Open this URL and approve:
+            <strong>1.</strong> {copy.openStep}
           </p>
           <div className="keyblock">
             <a href={login?.url ?? ''} target="_blank" rel="noreferrer">
@@ -582,7 +717,7 @@ function ClaudeSignIn({
             )}
           </div>
           <p className="hint">
-            <strong>2.</strong> Paste the code it gives you:
+            <strong>2.</strong> {copy.codeStep}
           </p>
           <label>
             <input
@@ -599,16 +734,31 @@ function ClaudeSignIn({
               disabled={working || verifying || !code.trim()}
               onClick={submit}
             >
-              {verifying ? 'Waiting for Claude…' : 'Finish sign-in'}
+              {verifying ? `Waiting for ${copy.agent}…` : 'Finish sign-in'}
             </button>
             <button onClick={cancel}>Cancel</button>
           </div>
+        </>
+      ) : !canSignIn ? (
+        // Nothing to sign in to, so the key is the whole of it rather than an
+        // alternative hidden behind a button.
+        <>
+          {canUseKey ? (
+            keyField
+          ) : (
+            <p className="hint">{copy.name} cannot be connected from here.</p>
+          )}
+          {onCancel && (
+            <div className="actions">
+              <button onClick={cancel}>Cancel</button>
+            </div>
+          )}
         </>
       ) : (
         <>
           <div className="actions">
             <button className="primary" disabled={working} onClick={start}>
-              {working ? 'Starting…' : 'Sign in with Claude'}
+              {working ? 'Starting…' : copy.signIn}
             </button>
             {login?.state === 'starting' ? (
               // Waiting on a container build is a long time to be stuck with no
@@ -616,34 +766,17 @@ function ClaudeSignIn({
               <button onClick={cancel}>Cancel</button>
             ) : (
               <>
-                <button onClick={() => setShowKey((v) => !v)}>
-                  {showKey ? 'Hide API key option' : 'Use an API key instead'}
-                </button>
+                {canUseKey && (
+                  <button onClick={() => setShowKey((v) => !v)}>
+                    {showKey ? 'Hide API key option' : copy.keyOption}
+                  </button>
+                )}
                 {onCancel && <button onClick={cancel}>Cancel</button>}
               </>
             )}
           </div>
 
-          {showKey && (
-            <div style={{ marginTop: 14 }}>
-              <label>
-                <span>Anthropic API key</span>
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="sk-ant-…"
-                />
-              </label>
-              <button
-                className="primary"
-                disabled={working || !apiKey.trim()}
-                onClick={() => void saveKey()}
-              >
-                Save key
-              </button>
-            </div>
-          )}
+          {showKey && canUseKey && <div style={{ marginTop: 14 }}>{keyField}</div>}
         </>
       )}
     </div>
@@ -1432,7 +1565,7 @@ function NotificationsPanel({ run }: { run: Runner }) {
         <span className={`dot${status?.subscribed ? ' connected' : ''}`} /> Notifications
       </h3>
       <p className="hint">
-        Tells you when Claude finishes or gets stuck on a question, so you can close the
+        Tells you when an agent finishes or gets stuck on a question, so you can close the
         app and walk away instead of checking it. They arrive through your phone&rsquo;s
         own notification system, so they show up with the app closed and the screen off.
       </p>

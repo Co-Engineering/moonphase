@@ -5,13 +5,20 @@ to know four things about one: how to launch it, how to give it credentials,
 whether those credentials are present, and where it writes its transcript.
 
 Everything above this interface — containers, tmux, the PTY bridge, the UI — is
-harness-agnostic, so adding OpenCode is a new subclass and a new enum value
-rather than a change to the session machinery.
+harness-agnostic, so adding a harness is a new subclass and a new enum value
+rather than a change to the session machinery. Four have been: Claude Code,
+OpenCode, Pydantic AI and Antigravity. Where one of them needed something the
+others did not — a transcript that is not one flat file per conversation, a
+sign-in that opens on a picker, a binary released outside npm — that became an
+overridable hook here with the old behaviour as its default, not a branch on
+which harness it is.
 """
 
 from __future__ import annotations
 
 import abc
+import re
+import shlex
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -24,6 +31,7 @@ class HarnessKind(StrEnum):
     CLAUDE_CODE = "claude_code"
     OPENCODE = "opencode"
     PYDANTIC_AI = "pydantic_ai"
+    ANTIGRAVITY = "antigravity"
 
 
 class HarnessAuthMode(StrEnum):
@@ -100,9 +108,21 @@ class Harness(abc.ABC):
     # container (see harness_updates.py), and the executable it provides. The
     # image's own copy is frozen at whenever the image was first built, so
     # without this a container runs that version for the rest of its life.
-    # None means the harness is not installed from npm and is left alone.
+    # None means the harness is not installed from npm.
     managed_package: str | None = None
+    # For a harness shipped as a native binary rather than through npm: the
+    # base URL of its release manifests, `<base>/<platform>.json` each naming
+    # the current version, a tarball and its SHA-512. Set instead of
+    # `managed_package`, never alongside it. Both None means the harness is
+    # left at the image's copy.
+    managed_manifest: str | None = None
     managed_binary: str | None = None
+    # A path under a session's HOME that exists once a session has been set up
+    # to run this harness. For a manifest-released harness the update script
+    # downloads it only into containers where one has — a native agent is a
+    # few hundred megabytes, and most containers never run it. None means
+    # every container keeps it current, as npm harnesses always have been.
+    managed_marker: str | None = None
 
     def managed_env(self) -> dict[str, str]:
         """Environment the launcher exports after the session's env file.
@@ -257,16 +277,35 @@ class Harness(abc.ABC):
 
         return ActivitySignals()
 
-    def parse_transcript_record(self, record: Any) -> list[Any]:
+    def parse_transcript_record(self, record: Any, source: str | None = None) -> list[Any]:
         """Turn one transcript line into zero or more `TranscriptEvent`s.
 
         Loosely typed for the same reason as `activity_signals`: the transcript
         module imports the harness registry, so naming its types here would be
         circular. A harness that writes no transcript returns nothing and the
         feed simply stays empty.
+
+        `source` names the file the line came from, relative to
+        `transcript_dir` (see `transcript.file_identity`). Event ids have to be
+        unique across every conversation a feed ever shows, because the client
+        de-duplicates by id across a switch from one file to the next; a
+        harness whose records carry no id of their own builds one from this.
         """
-        del record
+        del record, source
         return []
+
+    def live_transcript_script(self, space: SessionSpace) -> str:
+        """A `sh` snippet printing the path of the live transcript, or nothing.
+
+        The default is the newest `*.jsonl` directly in `transcript_dir`, which
+        is how a harness writing one flat file per conversation is followed. A
+        harness that nests its transcripts, or names every one of them alike,
+        says where the current one is instead.
+        """
+        return (
+            f"ls -1t {shlex.quote(self.transcript_dir(space))}/*.jsonl 2>/dev/null"
+            " | head -1"
+        )
 
     def auth_status_script(self) -> str | None:
         """A `sh` snippet printing the harness's own auth status as JSON.
@@ -288,6 +327,43 @@ class Harness(abc.ABC):
     def login_url_pattern(self) -> str | None:
         """Regex matching the authorization URL the login flow prints."""
         return None
+
+    def login_preamble(self) -> tuple[tuple[str, str], ...]:
+        """Screens to get past before the sign-in prints its URL.
+
+        Each entry is (regex, tmux key name): when the pane matches the regex,
+        that key is sent, once, in order. For a sign-in that opens on a picker
+        rather than going straight to its URL. Only ever the choice the person
+        already made by pressing a sign-in button in Moonphase — never a
+        question they have not been asked.
+        """
+        return ()
+
+    def login_url(self, pane: str) -> str | None:
+        """The authorization URL in a captured sign-in pane, or None yet.
+
+        The pane hard-wraps a long URL, so the default rejoins the lines before
+        matching `login_url_pattern`. A harness that wraps differently — with an
+        indent on every continuation line, say, which a plain rejoin would
+        leave in the middle of the URL — overrides this.
+        """
+        pattern = re.compile(self.login_url_pattern() or r"https://\S+")
+        match = pattern.search(pane.replace("\n", ""))
+        return match.group(0).rstrip(")]},.") if match else None
+
+    def login_failure_patterns(self) -> tuple[str, ...]:
+        """Regexes, matched case-insensitively against the pane after a code is
+        submitted, meaning the harness rejected it."""
+        return (r"invalid code", r"expired", r"authentication failed")
+
+    def credential_paths(self) -> list[str]:
+        """Files to harvest after an interactive sign-in succeeds.
+
+        The sign-in relay runs in a throwaway container of its own, not in a
+        session, so these are paths under the plain default `SessionSpace`.
+        The first that exists and is not empty becomes the stored credential.
+        """
+        return []
 
     @abc.abstractmethod
     def auth_probe_script(self, space: SessionSpace) -> str:
@@ -330,4 +406,7 @@ def get(kind: HarnessKind | str) -> Harness:
 
 
 def available() -> list[Harness]:
-    return list(_REGISTRY.values())
+    # In the enum's order rather than the order modules happened to import in:
+    # the first one is what a new project is offered by default, and that
+    # should not change because an import line was sorted.
+    return [_REGISTRY[kind] for kind in HarnessKind if kind in _REGISTRY]

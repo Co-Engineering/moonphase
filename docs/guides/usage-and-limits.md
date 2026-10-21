@@ -5,6 +5,10 @@ What the agents consumed, and how much of your allowance is left.
 Everything on the Usage screen is counted from the harness's own transcripts — the same
 `usage` figures the provider billed. Nothing is estimated, intercepted, or asked for.
 
+All of it is Claude Code's for now: Antigravity sessions are not counted here and their
+accounts have no plan limits on the Dashboard — see
+[what does not work yet](antigravity.md#what-does-not-work-yet).
+
 ## The dashboard: every account's limits, live
 
 **Dashboard** in the sidebar shows what `/usage` shows inside Claude Code — the

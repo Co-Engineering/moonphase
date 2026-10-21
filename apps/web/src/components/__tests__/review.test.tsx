@@ -107,6 +107,29 @@ describe('Attention', () => {
     await waitFor(() => expect(screen.getByPlaceholderText('Type an answer…')).toBeTruthy())
   })
 
+  it('offers nothing to type at a question only the terminal can answer', async () => {
+    // Antigravity's folder trust moves only on the arrow keys, and Enter takes
+    // whatever is highlighted: a typed "no" would have trusted the folder.
+    const opened = vi.fn()
+    serve(() => [
+      {
+        ...question,
+        question: 'Do you trust the contents of this project?',
+        prompt: {
+          question: 'Do you trust the contents of this project?',
+          options: [],
+          terminal_only: true,
+        },
+      },
+    ])
+    render(<Attention sessions={[session] as never} onOpen={opened} />)
+
+    await waitFor(() => expect(screen.getByText(/answered with the arrow keys/)).toBeTruthy())
+    expect(screen.queryByPlaceholderText('Type an answer…')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Open the terminal' }))
+    expect(opened).toHaveBeenCalled()
+  })
+
   it('shows what led to the question before you answer it', async () => {
     serve(() => [question])
     render(<Attention sessions={[session] as never} onOpen={() => {}} />)

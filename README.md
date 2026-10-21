@@ -22,9 +22,10 @@ Implemented:
 - Add a server with three SSH trust modes (password bootstrap, Moonphase-managed key,
   bring-your-own key), Docker probe and optional install
 - Create a project → dedicated container + named volumes, optional `git clone`
-- Claude Code, OpenCode or Pydantic AI launched in `tmux`, attached over a WebSocket
-  PTY bridge into xterm.js
-- Global sign-in and settings: connect Claude Code and GitHub once, every project uses it
+- Claude Code, OpenCode, Pydantic AI or Google's Antigravity (`agy`) launched in `tmux`,
+  attached over a WebSocket PTY bridge into xterm.js
+- Global sign-in and settings: connect Claude Code or Antigravity, and GitHub, once —
+  every project uses it
 - User-definable environments — base image plus setup commands, built on the server
 - Automatic port detection and preview tunnels; nothing is ever declared
 - Previews that run inside the container's network, so an app calling its own
@@ -35,9 +36,10 @@ Implemented:
 - Desktop app for Linux, macOS and Windows, installed with one command
 
 Not yet: zrok tunnels (previews are reachable from the backend host today), a
-transcript feed for OpenCode or Pydantic AI (neither writes the format it reads, so
-those sessions show the terminal and nothing else), organization invites and role
-management UI.
+transcript feed for OpenCode or Pydantic AI (neither writes a transcript Moonphase can
+read, so those sessions show the terminal and nothing else; Claude Code and Antigravity
+both have one), usage, plan limits, search and summaries for Antigravity sessions
+(Claude Code's only, so far), organization invites and role management UI.
 
 ## Installing it on a server
 
@@ -144,7 +146,7 @@ WebSocket.
 
 Inside a project container, one long-lived `tmux` session is the single source of truth.
 The desktop attaches to its real PTY; the (planned) phone client renders a readable feed
-parsed from Claude Code's own session transcript and writes back with `tmux send-keys`, so
+parsed from the harness's own session transcript and writes back with `tmux send-keys`, so
 both surfaces drive the same session with no protocol drift.
 
 **[Read the documentation →](https://co-engineering.github.io/moonphase/)**

@@ -44,7 +44,31 @@ def test_recipe_installs_everything_moonphase_depends_on() -> None:
     for package in ("tmux", "socat", "iproute2", "git"):
         assert package in recipe, f"{package} missing from the recipe"
     assert "@anthropic-ai/claude-code" in recipe
+    assert "install -m 0755 \"$tmp/antigravity\" /usr/local/bin/agy" in recipe
     assert "FROM debian:bookworm-slim" in recipe
+
+
+def test_recipe_installs_agy_before_the_users_own_setup() -> None:
+    """A setup script can then use `agy`, and it is in place, root-owned,
+    before `dev` exists — the user whose sessions must not be able to
+    rewrite it."""
+    recipe = imagebuild.recipe_for("debian:bookworm-slim", "echo user-setup")
+
+    agy = recipe.index("/usr/local/bin/agy")
+    assert recipe.index("uv tool install clai") < agy
+    assert agy < recipe.index("# --- user-defined setup") < recipe.index("useradd")
+
+
+def test_recipe_installs_agy_without_googles_installer() -> None:
+    """install.sh, as root, would install into /root/.local/bin and run `agy
+    install`, which edits root's shell profiles; the binary needs neither."""
+    recipe = imagebuild.recipe_for("debian:bookworm-slim", None)
+    commands = [line for line in recipe.splitlines() if not line.lstrip().startswith("#")]
+
+    assert all("astral.sh/uv/install.sh" in line for line in commands if "install.sh" in line)
+    assert not [line for line in commands if "agy install" in line]
+    assert any("sha512sum -c -" in line for line in commands)
+    assert any("--proto '=https'" in line for line in commands)
 
 
 def test_recipe_lets_the_harnesss_clipboard_copy_reach_the_browser() -> None:
@@ -126,7 +150,9 @@ def test_unknown_environment_falls_back_to_the_default() -> None:
 
 # --- against a real server --------------------------------------------------
 
-pytestmark = pytest.mark.skipif(
+# On the one test that needs it rather than as the module's `pytestmark`, which
+# skipped every test above along with it wherever there was no Docker daemon.
+needs_docker = pytest.mark.skipif(
     not _docker_available(), reason="Docker daemon is not reachable"
 )
 
@@ -154,6 +180,7 @@ def fake_server():
     _docker("rm", "-f", name, check=False)
 
 
+@needs_docker
 @pytest.mark.asyncio(loop_scope="module")
 async def test_builds_a_user_defined_environment_on_the_server(fake_server: str) -> None:
     server_id = str(uuid.uuid4())
@@ -232,12 +259,19 @@ async def test_builds_a_user_defined_environment_on_the_server(fake_server: str)
             user="root", timeout=120,
         )
 
-        for tool in ("tmux", "socat", "ss", "claude", "psql"):
+        for tool in ("tmux", "socat", "ss", "claude", "agy", "psql"):
             probe = await docker_remote.exec_capture(
                 conn, container, ["sh", "-c", f"command -v {tool}"], timeout=30
             )
             assert probe.ok, f"{tool} missing from the built image"
-        print("  image has tmux, socat, ss, claude and the user's psql")
+        print("  image has tmux, socat, ss, claude, agy and the user's psql")
+
+        # Everything run in the container has agy's updater off, a bare
+        # `docker exec` included.
+        switch = await docker_remote.exec_capture(
+            conn, container, ["sh", "-c", 'printf %s "$AGY_CLI_DISABLE_AUTO_UPDATE"'], timeout=30
+        )
+        assert switch.stdout == "true"
 
         created = await sessions.ensure_session(
             conn, container, harness_kind="claude_code"

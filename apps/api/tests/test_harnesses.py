@@ -1,6 +1,6 @@
 """The harness seam, exercised through every harness registered in it.
 
-Written against the registry rather than one class, so a fourth harness is
+Written against the registry rather than one class, so the next harness is
 covered the day it is added and the rules that hold for all of them are stated
 once. The facts specific to each — OpenCode's auth file, the model clai has to
 be told — were checked against the real binaries in the runtime image, not
@@ -159,4 +159,43 @@ def test_the_runtime_image_installs_every_harness() -> None:
     # The tool's virtualenv has to be readable by `dev`, or the shim is on PATH
     # and cannot be executed.
     assert "UV_TOOL_DIR" in recipe
-    assert int(imagebuild.RECIPE_VERSION) >= 4
+    # agy is not on npm: the image fetches the release Google's manifest names
+    # and installs its one member as the command, root-owned.
+    agy = registry.get("antigravity")
+    assert f"{agy.managed_manifest}/linux_${{arch}}.json" in recipe
+    assert "install -m 0755" in recipe and "/usr/local/bin/agy" in recipe
+    assert int(imagebuild.RECIPE_VERSION) >= 10
+
+
+def test_the_runtime_image_checks_agy_against_its_checksum() -> None:
+    """The manifest's SHA-512 is the only thing saying the 222MB binary every
+    agy session runs is the one Google published."""
+    from moonphase import imagebuild
+
+    recipe = imagebuild.recipe_for("debian:bookworm-slim", None)
+
+    installed = recipe.index("/usr/local/bin/agy")
+    step = recipe[recipe.rindex("\nRUN ", 0, installed) : recipe.index("\n\n", installed)]
+    assert "dpkg --print-architecture" in step, "the arch the image is built for"
+    assert "sha512sum -c -" in step
+    assert step.index("sha512sum -c -") < step.index("tar -xzf") < step.index("install -m 0755")
+    # Only the one member, and never Google's install.sh or `agy install`,
+    # which as root would edit root's shell profiles.
+    assert "--no-same-owner antigravity;" in step
+    assert "install.sh" not in step
+    assert "agy install" not in step
+    # Its smoke test must not start the self-updater, which only "true" stops.
+    assert 'AGY_CLI_DISABLE_AUTO_UPDATE=true HOME="$tmp" agy --version' in step
+
+
+def test_the_runtime_image_switches_agys_updater_off_everywhere() -> None:
+    """Login shells, tmux windows and Moonphase's own execs never see the
+    launcher's exports, and with updates switched off nothing writes the
+    profile that would; the image's ENV reaches all of them."""
+    from moonphase import imagebuild
+
+    recipe = imagebuild.recipe_for("debian:bookworm-slim", None)
+
+    assert "\nENV AGY_CLI_DISABLE_AUTO_UPDATE=true\n" in recipe
+    # The same exact value the harness itself exports: "1" is ignored.
+    assert registry.get("antigravity").managed_env() == {"AGY_CLI_DISABLE_AUTO_UPDATE": "true"}

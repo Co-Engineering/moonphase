@@ -11,6 +11,11 @@ servers, CLAUDE.md, skills, and environment variables.
 - **Session** — a session's **⋯ menu → Configure.** Applies to that one session only,
   and only its owner (or a project admin) can see or change it.
 
+Antigravity sessions get the same instructions, MCP servers, skills and environment
+variables, layered the same way; **Permissions and behaviour** is Claude Code's own
+`settings.json` and does not apply to them — see
+[what Antigravity shares](antigravity.md#what-it-shares-with-claude-codes-configuration).
+
 A session's effective config is all three layers combined — org, then project, then
 session — materialised into that session's own `HOME` when it starts, not into the
 project's git checkout. That keeps it out of `git status` and out of the way of a

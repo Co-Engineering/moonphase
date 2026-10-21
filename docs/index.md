@@ -90,9 +90,9 @@ over a WebSocket.
 ## Self-hosted first
 
 You run the backend, you point it at machines you control, and your agents run on your
-own Claude account or API key. Nothing about your code, your transcripts or your
-credentials passes through anyone else — not because there is no alternative, but
-because this is the arrangement Moonphase is built around.
+own Claude or Google account, or your own API key. Nothing about your code, your
+transcripts or your credentials passes through anyone else — not because there is no
+alternative, but because this is the arrangement Moonphase is built around.
 
 That also means the security decisions are yours, and the
 [security model](concepts/security.md) documents exactly where the boundaries are.

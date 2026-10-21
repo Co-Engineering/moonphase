@@ -171,13 +171,44 @@ how to launch it, how to give it credentials, how to tell whether it has any,
 and where it writes transcripts. Everything above that line — containers, tmux,
 the PTY bridge, the UI — is harness-agnostic.
 
-Adding OpenCode is a subclass plus an enum value that already exists in the
-database. It is not a change to the session machinery.
+Four harnesses sit on it: Claude Code, OpenCode, Pydantic AI and Antigravity
+(Google's `agy`). Each is a subclass plus an enum value, and none of them was a
+change to the session machinery. Antigravity tested the seam hardest, because it
+differs from Claude Code in the places the seam had quietly assumed Claude's
+shape, so it added a few hooks — each defaulting to exactly what Claude Code
+already did:
+
+- **Where the live transcript is.** `live_transcript_script()` prints the path
+  of the conversation being written now. The default, the newest `*.jsonl` in
+  `transcript_dir`, is Claude Code's flat layout. `agy` nests every conversation
+  in a directory of its own and records which one is current for each working
+  directory, so it reads that record rather than guessing by modification time.
+  Each line is parsed knowing which file it came from, so event ids stay unique
+  when the feed moves on to a new conversation.
+- **Getting to the sign-in URL.** `login_preamble()` names screens to get past
+  before a sign-in prints its URL — `agy` opens on a picker — and only ever with
+  the choice the person already made by pressing a sign-in button.
+  `login_url()` takes the URL out of the pane, since `agy` wraps it with an
+  indent on every continuation line that a plain rejoin would leave inside it,
+  and `login_failure_patterns()` says what a refused code looks like.
+- **Updating a native binary.** `managed_manifest` is the alternative to
+  `managed_package`, for a harness released as a native binary through a manifest
+  naming the current version, its tarball and its SHA-512 rather than through
+  npm. [Harness updates](../reference/configuration.md#harness-updates) follow
+  either.
+
+One more is about answering. In `agy`, pressing an option's number picks it and
+confirms it at once, so its activity signals set `select_submits` and an answer
+is sent as the bare digit. An Enter after it would land on whatever came next —
+if that was another permission prompt, approving its default "Yes".
 
 One deliberate restraint: `seed_config_files()` skips cosmetic first-run
 wizards (Claude Code's theme picker) but does **not** pre-answer the workspace
 trust prompt. That prompt guards against hostile content in a cloned repo, and
-answering it is the user's decision, not Moonphase's.
+answering it is the user's decision, not Moonphase's. The same restraint is why
+`agy`'s first run is left entirely alone: it records its cosmetic colour scheme
+together with Google's terms and data-use choice, and those are the user's to
+accept.
 
 ## Request flow: opening a project
 
@@ -207,5 +238,3 @@ answering it is the user's decision, not Moonphase's.
   webhook, an OAuth callback, or sending a link to someone — still wants zrok.
 * **Invites and role management UI.** Orgs, roles and policies exist in the
   database and are enforced; only the screens are missing.
-* **OpenCode.** A second `Harness` subclass, and an enum value that is already
-  in the schema.
