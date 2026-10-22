@@ -25,7 +25,7 @@ from enum import StrEnum
 import asyncssh
 
 from . import docker_remote, sessions
-from .harness import Harness
+from .harness import Harness, HarnessKind
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +54,18 @@ class ActivitySignals:
     prompt_patterns: tuple[str, ...] = ()
     # Explicit evidence of work in progress, when a harness offers it.
     busy_patterns: tuple[str, ...] = ()
+    # Pressing an option's number both picks it and confirms it, so the Enter
+    # that would normally follow a tapped answer must not be sent: it would
+    # land on whatever the harness shows next, which can be the next prompt.
+    select_submits: bool = False
+    # Questions answered with the arrow keys and Enter alone: a sign-in
+    # picker, a colour scheme, a terms screen, folder trust. They are waiting
+    # for someone, so they count as prompts, but there is no number to tap —
+    # and anything sent from the feed while one is showing would arrive with
+    # an Enter that picks whatever is highlighted. "No" typed at a trust
+    # prompt would trust the folder. So these are surfaced without buttons,
+    # and the feed refuses to type into them.
+    arrow_key_patterns: tuple[str, ...] = ()
 
 
 @dataclass
@@ -74,6 +86,27 @@ def _match(pane: str, patterns: tuple[str, ...]) -> str | None:
         if found:
             return found.group(0).strip()
     return None
+
+
+# A line that is nothing but a box rule, as a harness draws around its input.
+_RULE_LINE = re.compile(r"\s*─{20,}\s*")
+
+
+def _input_box_showing(pane: str) -> bool:
+    """Whether the harness's own input box is at the bottom of the pane.
+
+    The arrow-key screens take the whole terminal and replace it, so with the
+    box showing, a match for one of their phrases is text in the scrollback —
+    the agent quoting it, say — not a question waiting for someone.
+    """
+    tail = [line for line in pane.rstrip().splitlines() if line.strip()][-6:]
+    return sum(1 for line in tail if _RULE_LINE.fullmatch(line)) >= 2
+
+
+def _arrow_match(pane: str, signals: ActivitySignals) -> str | None:
+    if not signals.arrow_key_patterns or _input_box_showing(pane):
+        return None
+    return _match(pane, signals.arrow_key_patterns)
 
 
 def _question_excerpt(pane: str, matched: str) -> str:
@@ -103,7 +136,7 @@ def classify(
     if _match(pane, signals.busy_patterns):
         return Snapshot(state=ActivityState.WORKING, digest=digest)
 
-    matched = _match(pane, signals.prompt_patterns)
+    matched = _match(pane, signals.prompt_patterns) or _arrow_match(pane, signals)
     if matched:
         return Snapshot(
             state=ActivityState.AWAITING_INPUT,
@@ -168,12 +201,40 @@ def _drop_side_panel(text: str) -> str:
     return _SIDE_PANEL.split(text.strip(), maxsplit=1)[0]
 
 
+def _wraps_option_above(lines: list[str], index: int, below_key: str) -> bool:
+    """Whether `lines[index]` is the tail of a label wrapped flush left.
+
+    Some pickers wrap a long label back to column 0 rather than under the
+    label: agy 1.4.3 does at a phone's width, so "2. Yes, and always allow …
+    that start with" continues on a line reading just "'touch'". Indentation
+    alone took that for the chrome that ends the block and offered only the
+    last option — "No, cancel" — as the one button. It is a wrap when the
+    run of text it belongs to sits directly under the option numbered one
+    below the option under it; the question above "1." never does, since a
+    blank line or nothing numbered comes before it.
+    """
+    try:
+        expected = str(int(below_key) - 1)
+    except ValueError:
+        return False
+    for above in range(index - 1, max(-1, index - 5), -1):
+        text = lines[above]
+        if not text.strip():
+            return False
+        found = _OPTION.match(text)
+        if found:
+            return found.group(1) == expected
+    return False
+
+
 @dataclass
 class Prompt:
     """A blocking question, reduced to something tappable."""
 
     question: str
     options: list[dict[str, str]] = field(default_factory=list)
+    # Only the terminal can answer it (see `ActivitySignals.arrow_key_patterns`).
+    terminal_only: bool = False
 
 
 def parse_prompt(pane: str, signals: ActivitySignals) -> Prompt | None:
@@ -183,6 +244,13 @@ def parse_prompt(pane: str, signals: ActivitySignals) -> Prompt | None:
     matters: a long session's scrollback contains earlier prompts, and the one
     being asked now is the last one.
     """
+    arrow = _arrow_match(pane, signals)
+    if arrow is not None:
+        # Checked against the shipped agy 1.4.3: these screens are cleared once
+        # answered and leave nothing in the scrollback, so a match is the
+        # screen showing now rather than one from the start of the session.
+        return Prompt(question=_question_excerpt(pane, arrow)[:200], terminal_only=True)
+
     matched = _match(pane, signals.prompt_patterns)
     if matched is None:
         return None
@@ -230,6 +298,8 @@ def parse_prompt(pane: str, signals: ActivitySignals) -> Prompt | None:
             indent = len(line) - len(line.lstrip())
             if label_indent is not None and indent >= label_indent:
                 continuation.append(" ".join(_drop_side_panel(line).split()))
+            elif _wraps_option_above(lines, index, options[-1]["key"]):
+                continuation.append(" ".join(_drop_side_panel(line).split()))
             else:
                 break
 
@@ -266,20 +336,121 @@ def parse_prompt(pane: str, signals: ActivitySignals) -> Prompt | None:
     return Prompt(question=question[:200], options=options)
 
 
+# An answer that is nothing but an option's number, as a tapped button sends.
+_OPTION_KEY = re.compile(r"[0-9]{1,2}")
+
+
+def offers(prompt: Prompt | None, key: str) -> bool:
+    """Whether `key` is the number of one of `prompt`'s options."""
+    if prompt is None or not _OPTION_KEY.fullmatch(key):
+        return False
+    return any(option.get("key") == key for option in prompt.options)
+
+
+async def send_answer(
+    conn: asyncssh.SSHClientConnection,
+    container: str,
+    harness: Harness,
+    key: str,
+    *,
+    session: str = sessions.DEFAULT_SESSION,
+) -> None:
+    """Type an answer into the session, with an Enter after it unless that
+    Enter could approve something nobody saw.
+
+    Normally Enter goes after whatever is typed: a typed message needs it to
+    be sent at all, and it is how every harness's prompts have always been
+    answered from here. A harness whose picker acts on the digit alone
+    (`select_submits` — Antigravity, checked against the shipped 1.4.3
+    binary) has already picked *and confirmed* the option by the time the
+    Enter arrives, so the Enter lands on whatever it draws next. Usually
+    that is the empty input box, where it was seen to do nothing. But a
+    reply can carry several tool calls, and if the next permission prompt
+    is already on screen the Enter confirms its highlighted option — which
+    starts out as "1. Yes": a second command approved that the person never
+    saw.
+
+    So for such a harness, a number sent while a prompt is on screen goes
+    alone — whether or not it is one of the options that could be read off
+    the pane, because the harness acts on the digit either way, and a label
+    wrapped in some way the parser has not met must not turn the guard off.
+    Everything else is sent exactly as before, Enter included: a typed
+    message, a number with no prompt showing, and every answer to every
+    other harness. The two ways the check can be wrong are lopsided, which
+    is why it leans this way: if the prompt has gone by the time the digit
+    lands, the digit sits unsent in the input box where the person can see
+    it, rather than an Enter approving something.
+
+    And nothing is typed at all into a question only the terminal can answer
+    (`ActivitySignals.arrow_key_patterns`): raises `NeedsTerminal`.
+    """
+    signals = harness.activity_signals()
+    enter = True
+    if signals.select_submits or signals.arrow_key_patterns:
+        pane = await sessions.capture_pane(conn, container, session=session, lines=80)
+        prompt = parse_prompt(pane, signals)
+        if prompt is not None and prompt.terminal_only:
+            raise NeedsTerminal(
+                f"{harness.display_name} is asking something only the terminal "
+                f"can answer: {prompt.question} Open the terminal to answer it."
+            )
+        if signals.select_submits and prompt is not None:
+            if not _OPTION_KEY.fullmatch(key):
+                # Its Enter would confirm the highlighted option, which
+                # starts out as "Yes".
+                raise NeedsTerminal(
+                    f"{harness.display_name} is waiting on a choice: {prompt.question} "
+                    "Answer it with one of its options first, or in the terminal."
+                )
+            enter = False
+    await sessions.send_keys(conn, container, key, session=session, enter=enter)
+
+
+class NeedsTerminal(Exception):
+    """The prompt on screen takes arrow keys, so it cannot be answered from
+    the feed without guessing what Enter would pick."""
+
+
+def agent_name(harness: Harness | None) -> str:
+    """What a notification calls the agent.
+
+    Claude Code sessions' notifications have always said "Claude" — how
+    people refer to it — and that is kept rather than reworded under everyone
+    who already gets them; no harness at all means the same, as it did before
+    there was a choice. Every other harness is called by its own name:
+    "Claude is waiting" about an Antigravity session sends someone looking
+    for the wrong thing.
+    """
+    if harness is None or harness.kind is HarnessKind.CLAUDE_CODE:
+        return "Claude"
+    return harness.display_name
+
+
 def notification_for(
-    previous: ActivityState, current: ActivityState, detail: str | None, project: str
+    previous: ActivityState,
+    current: ActivityState,
+    detail: str | None,
+    project: str,
+    harness: Harness | None = None,
 ) -> tuple[str, str] | None:
     """The (title, body) worth interrupting someone for, or None.
 
     Only the working → stopped-working transitions qualify. Notifying on
     entering `working` would fire every time the user themselves typed
     something, which is the fastest way to get notifications muted.
+
+    `harness` is the session's, so the body names the agent that is actually
+    waiting (see `agent_name`); it is only asked for its name once there is
+    something to say.
     """
     if previous != ActivityState.WORKING:
         return None
 
     if current is ActivityState.AWAITING_INPUT:
-        return (f"{project} needs you", detail or "Claude is waiting for an answer.")
+        return (
+            f"{project} needs you",
+            detail or f"{agent_name(harness)} is waiting for an answer.",
+        )
     if current is ActivityState.IDLE:
-        return (f"{project} finished", "Claude stopped working.")
+        return (f"{project} finished", f"{agent_name(harness)} stopped working.")
     return None

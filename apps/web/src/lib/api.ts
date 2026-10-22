@@ -53,7 +53,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 // --- types ------------------------------------------------------------------
 
 export type SshAuthMode = 'password_bootstrap' | 'managed_key' | 'provided_key'
-export type HarnessKind = 'claude_code' | 'opencode' | 'pydantic_ai'
+export type HarnessKind = 'claude_code' | 'opencode' | 'pydantic_ai' | 'antigravity'
 
 /** What you grant someone. */
 export type ShareRole = 'viewer' | 'collaborator'
@@ -530,6 +530,12 @@ export interface TodoItem {
 export interface Prompt {
   question: string
   options: { key: string; label: string }[]
+  /**
+   * Picked with the arrow keys (folder trust, a terms screen), so there is
+   * nothing to tap, and the server refuses anything typed at it: its Enter
+   * would choose whatever is highlighted. Absent from older servers.
+   */
+  terminal_only?: boolean
 }
 
 export interface FeedPage {
@@ -1096,7 +1102,7 @@ export interface Waiting {
   activity_at: string | null
   question: string
   /** Null when the pane could not be parsed into buttons. */
-  prompt: { question: string; options: PromptOption[] } | null
+  prompt: { question: string; options: PromptOption[]; terminal_only?: boolean } | null
   tail: string
 }
 

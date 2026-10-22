@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from moonphase import transcript
+from moonphase.harness import SessionSpace
 from moonphase.harness.claude_code import ClaudeCode
 
 
@@ -88,11 +89,10 @@ def _reader(blob: bytes):
 async def _poll(blob: bytes, times: int) -> list[tuple[int, int]]:
     """(cursor offset, event count) for each poll."""
     seen: list[tuple[int, int]] = []
+    live = f"{ClaudeCode().transcript_dir(SessionSpace())}/session.jsonl"
     cursor = transcript.Cursor(filename="session.jsonl", offset=0).encode()
     with (
-        patch.object(
-            transcript, "_newest_file", AsyncMock(return_value="/t/session.jsonl")
-        ),
+        patch.object(transcript, "live_file", AsyncMock(return_value=live)),
         patch.object(
             transcript.docker_remote,
             "exec_capture",

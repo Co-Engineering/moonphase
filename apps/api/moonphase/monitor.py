@@ -801,7 +801,11 @@ class SessionMonitor:
             )
 
         message = activity.notification_for(
-            previous, snapshot.state, snapshot.detail, str(row["name"])
+            previous,
+            snapshot.state,
+            snapshot.detail,
+            str(row["name"]),
+            harness=harness_registry.get(str(row["harness"])),
         )
         if message is None:
             return

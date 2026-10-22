@@ -12,7 +12,7 @@ import json
 
 from moonphase.activity import parse_prompt
 from moonphase.harness import get as get_harness
-from moonphase.transcript import MAX_DIFF_LINES, Cursor, build_diff
+from moonphase.transcript import MAX_DIFF_LINES, Cursor, build_diff, file_identity
 
 CLAUDE = get_harness("claude_code")
 
@@ -377,6 +377,43 @@ def test_a_garbage_cursor_reads_as_a_cold_start() -> None:
     # would slice a line in half and drop it.
     for bad in [None, "", "nonsense", "file:notanumber"]:
         assert Cursor.decode(bad).offset == 0
+
+
+def test_a_nested_transcript_round_trips_through_a_cursor() -> None:
+    """Antigravity's files are told apart by the directory above them, so the
+    cursor carries a path; a `:` in it must not be mistaken for the offset."""
+    for name in [
+        "6af7e856-2879-4143-b263-70e95e2243d7/.system_generated/logs/transcript_full.jsonl",
+        "odd:name/transcript.jsonl",
+    ]:
+        decoded = Cursor.decode(Cursor(filename=name, offset=1865).encode())
+        assert (decoded.filename, decoded.offset) == (name, 1865)
+
+
+def test_a_flat_transcript_is_identified_by_its_name_alone() -> None:
+    """What Claude Code's cursors have always held, so they stay valid."""
+    directory = "/home/dev/sessions/alice/.claude/projects/-home-dev-sessions-alice-work"
+    assert file_identity(directory, f"{directory}/abc-123.jsonl") == "abc-123.jsonl"
+    # However the directory happens to be spelled.
+    assert file_identity(f"{directory}/", f"{directory}//abc-123.jsonl") == "abc-123.jsonl"
+
+
+def test_a_nested_transcript_is_identified_by_its_path_below_the_directory() -> None:
+    brain = "/home/dev/sessions/alice/.gemini/antigravity-cli/brain"
+    relative = "6af7e856/.system_generated/logs/transcript_full.jsonl"
+    assert file_identity(brain, f"{brain}/{relative}") == relative
+
+
+def test_a_transcript_outside_the_directory_is_identified_by_its_whole_path() -> None:
+    """Not expected, but a basename is exactly what two of agy's files share,
+    so falling back to one would bring back the bug this exists to fix. A
+    sibling directory sharing the prefix is outside too."""
+    brain = "/home/dev/.gemini/antigravity-cli/brain"
+    for outside in [
+        "/elsewhere/a/transcript_full.jsonl",
+        "/home/dev/.gemini/antigravity-cli/brain2/a/transcript_full.jsonl",
+    ]:
+        assert file_identity(brain, outside) == outside
 
 
 # --- prompts ----------------------------------------------------------------

@@ -88,6 +88,7 @@ function Row({
 
   const question = found?.prompt?.question || found?.question || session.activity_detail
   const options = found?.prompt?.options ?? []
+  const terminalOnly = found?.prompt?.terminal_only ?? false
 
   async function answer(key: string) {
     setBusy(true)
@@ -117,7 +118,18 @@ function Row({
 
       {found && (
         <>
-          {options.length > 0 ? (
+          {terminalOnly ? (
+            // Folder trust, a terms screen: picked with the arrow keys, where
+            // a typed answer would arrive with an Enter that takes whatever is
+            // highlighted. The server refuses one, so none is offered.
+            <p className="muted">
+              This one is answered with the arrow keys.{' '}
+              <button className="link" onClick={onOpen}>
+                Open the terminal
+              </button>{' '}
+              to answer it.
+            </p>
+          ) : options.length > 0 ? (
             <div className="answer-options">
               {options.map((option) => (
                 <button

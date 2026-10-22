@@ -66,6 +66,12 @@ async def _build_out(principal: Principal, org_id: UUID) -> WorkspaceProfileOut:
         }
 
     async with service_session() as conn:
+        # `harness_connected` and `harness_auth_mode` are from before there
+        # was more than one harness to sign in to, and describe Claude Code
+        # only. Nothing in the web app reads them — accounts are
+        # listed per harness by /harness/accounts — so they are left as they
+        # were rather than made to mean "any harness", which would answer a
+        # question nobody asks.
         harness_row = await queries.resolve_harness_credential_privileged(
             conn, org_id=org_id, project_id=org_id, harness="claude_code"
         )

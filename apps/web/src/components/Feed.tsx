@@ -43,6 +43,12 @@ interface Props {
   readOnly?: boolean
   /** Called when an attempt to send was refused, so the caller can react. */
   onRefusedInput?: () => void
+  /**
+   * What to call the agent on its own rows and while it works. Every feed
+   * said "Claude" when Claude Code was the only harness with one; an
+   * Antigravity session's replies are not Claude's.
+   */
+  agent?: string
 }
 
 const TOOL_ICON: Record<string, string> = {
@@ -209,6 +215,7 @@ export function Feed({
   running,
   readOnly = false,
   onRefusedInput,
+  agent = 'Claude',
 }: Props) {
   const [events, setEvents] = useState<FeedEvent[]>([])
   const [prompt, setPrompt] = useState<Prompt | null>(null)
@@ -555,14 +562,14 @@ export function Feed({
                 {row.label}
               </div>
             ) : row.kind === 'tool-group' ? (
-              <ToolGroup key={row.key} events={row.events} />
+              <ToolGroup key={row.key} events={row.events} agent={agent} />
             ) : row.thread ? (
               <div key={row.event.id} id={`feed-event-${row.event.id}`}>
-                <SubagentThread taskEvent={row.event} thread={row.thread} />
+                <SubagentThread taskEvent={row.event} thread={row.thread} agent={agent} />
               </div>
             ) : (
               <div key={row.event.id} id={`feed-event-${row.event.id}`}>
-                <FeedRow event={row.event} />
+                <FeedRow event={row.event} agent={agent} />
               </div>
             ),
           )
@@ -585,6 +592,11 @@ export function Feed({
             />
           )}
           <div className="feed-question">{prompt.question}</div>
+          {prompt.terminal_only && (
+            // Picked with the arrow keys; anything sent from here would land
+            // with an Enter on whatever is highlighted, so it is refused.
+            <div className="muted">Answer this one in the terminal, with the arrow keys.</div>
+          )}
           <div className="feed-options">
             {prompt.options.map((option) => (
               <button
@@ -719,11 +731,13 @@ export function Feed({
             placeholder={
               readOnly
                 ? 'Read-only — this session is someone else\u2019s'
-                : prompt
-                  ? 'Tap a choice above to answer'
-                  : activity === 'working'
-                    ? 'Claude is working…'
-                    : 'Send a message'
+                : prompt?.terminal_only
+                  ? 'Waiting on an answer in the terminal'
+                  : prompt
+                    ? 'Tap a choice above to answer'
+                    : activity === 'working'
+                      ? `${agent} is working…`
+                      : 'Send a message'
             }
             readOnly={readOnly}
             onClick={() => readOnly && onRefusedInput?.()}
@@ -949,7 +963,7 @@ function TodoChecklist({ todos }: { todos: TodoItem[] }) {
  * expanding it renders each original event through the ordinary `FeedRow`,
  * so nothing about how a single call looks is duplicated here.
  */
-function ToolGroup({ events }: { events: FeedEvent[] }) {
+function ToolGroup({ events, agent }: { events: FeedEvent[]; agent: string }) {
   const [open, setOpen] = useState(false)
   const counts = new Map<string, number>()
   for (const event of events) {
@@ -975,7 +989,7 @@ function ToolGroup({ events }: { events: FeedEvent[] }) {
       {open && (
         <div className="feed-tool-group-body">
           {events.map((event) => (
-            <FeedRow key={event.id} event={event} />
+            <FeedRow key={event.id} event={event} agent={agent} />
           ))}
         </div>
       )}
@@ -991,7 +1005,15 @@ function ToolGroup({ events }: { events: FeedEvent[] }) {
  * treatment the top level gets, recursively, so a busy sub-agent reads as
  * easily as the main conversation does.
  */
-function SubagentThread({ taskEvent, thread }: { taskEvent: FeedEvent; thread: FeedEvent[] }) {
+function SubagentThread({
+  taskEvent,
+  thread,
+  agent,
+}: {
+  taskEvent: FeedEvent
+  thread: FeedEvent[]
+  agent: string
+}) {
   const [open, setOpen] = useState(false)
   const threadRows = useMemo(
     () => groupToolBursts(insertTimeDividers(thread.map((event) => ({ kind: 'event' as const, event })))),
@@ -1019,9 +1041,14 @@ function SubagentThread({ taskEvent, thread }: { taskEvent: FeedEvent; thread: F
                 {row.label}
               </div>
             ) : row.kind === 'tool-group' ? (
-              <ToolGroup key={row.key} events={row.events} />
+              <ToolGroup key={row.key} events={row.events} agent={agent} />
             ) : (
-              <FeedRow key={row.event.id} event={row.event} suppressSidechainDim />
+              <FeedRow
+                key={row.event.id}
+                event={row.event}
+                suppressSidechainDim
+                agent={agent}
+              />
             ),
           )}
         </div>
@@ -1046,6 +1073,7 @@ function ToolLine({ tool, text }: { tool: string | null; text: string }) {
 export function FeedRow({
   event,
   suppressSidechainDim = false,
+  agent = 'Claude',
 }: {
   event: FeedEvent
   /** True only from inside a `SubagentThread` — its own wrapper already
@@ -1053,6 +1081,8 @@ export function FeedRow({
    *  is redundant. A row shown flat (no thread could be attached to it)
    *  keeps the dim, since it's the only signal it has. */
   suppressSidechainDim?: boolean
+  /** Who the agent's own rows are from. See `Feed`'s prop of the same name. */
+  agent?: string
 }) {
   const dim = event.sidechain && !suppressSidechainDim ? ' sidechain' : ''
 
@@ -1108,7 +1138,7 @@ export function FeedRow({
   const isUser = event.kind === 'user'
   return (
     <div className={`feed-row feed-${event.kind}${dim}`}>
-      <div className="feed-who">{isUser ? 'You' : 'Claude'}</div>
+      <div className="feed-who">{isUser ? 'You' : agent}</div>
       <div className="feed-body">{isUser ? event.text : <Markdown text={event.text} />}</div>
     </div>
   )

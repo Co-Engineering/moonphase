@@ -4,6 +4,7 @@ Importing a harness module registers it, so `harness.get("claude_code")` works
 anywhere without the caller knowing which module defines it.
 """
 
+from .antigravity import Antigravity  # noqa: F401
 from .base import (
     AuthStatus,
     Harness,
@@ -21,6 +22,7 @@ from .opencode import OpenCode  # noqa: F401
 from .pydantic_ai import PydanticAI  # noqa: F401
 
 __all__ = [
+    "Antigravity",
     "AuthStatus",
     "ClaudeCode",
     "OpenCode",

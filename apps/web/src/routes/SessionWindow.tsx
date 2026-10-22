@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, canControl, type Project, type Session } from '../lib/api'
+import { api, canControl, type HarnessInfo, type Project, type Session } from '../lib/api'
+import { harnessCopy } from '../lib/harness'
 import { useResource } from '../lib/useResource'
 import { ProjectTerminal } from '../components/Terminal'
 import { Feed } from '../components/Feed'
@@ -42,6 +43,9 @@ export function SessionWindow({ projectId, session }: Props) {
     [projectId],
     { pollMs: 10000 },
   )
+  // Only for what to call the agent; the built-in names stand in until then.
+  const harnesses = useResource<HarnessInfo[]>(() => api.harnesses(), [])
+  const copy = harnessCopy(project.data?.harness, harnesses.data)
 
   const mine = sessions.data?.find((s) => s.tmux_session === session) ?? null
   const drivable = Boolean(project.data && canControl(project.data.access) && mine?.is_mine)
@@ -132,7 +136,7 @@ export function SessionWindow({ projectId, session }: Props) {
               <span className="readonly-chip">Read-only</span>
               <span className="readonly-text">
                 This is <strong>{mine?.owner ?? 'someone else'}</strong>&rsquo;s session. It
-                runs on their Claude account, so only they can type into it — you can watch it
+                runs on their {copy.account}, so only they can type into it — you can watch it
                 live.
               </span>
             </div>
@@ -151,6 +155,7 @@ export function SessionWindow({ projectId, session }: Props) {
               running={running}
               readOnly={!drivable}
               onRefusedInput={nudge}
+              agent={copy.agent}
             />
           )}
         </div>

@@ -1,0 +1,40 @@
+● Explored 1 file (greet.txt) (ctrl+o to expand)
+  Both done.
+
+────────────────────────────────────────────────────────────
+> exit code please
+
+● Ran (ls /nonexistent-probe-dir) failed (ctrl+o to expand)
+
+  The listing failed.
+
+────────────────────────────────────────────────────────────
+> decline please
+
+● Ran (touch declined.txt) failed (ctrl+o to expand)
+
+Command
+  ⎿  User declined the tool call
+
+────────────────────────────────────────────────────────────
+> ask please
+
+? Which colour should the banner be?
+> Green
+
+  Blue it is.
+
+────────────────────────────────────────────────────────────
+> slow please
+
+▸ Thought for 20s
+  Considering the request carefully.
+  Slow reply done.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+>
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+? for shortcuts                                                                                     Gemini 3.1 Pro · low
+
+
+

@@ -110,7 +110,11 @@ async def attention(
                     ),
                     prompt=(
                         PromptOut.model_validate(
-                            {"question": parsed.question, "options": parsed.options}
+                            {
+                                "question": parsed.question,
+                                "options": parsed.options,
+                                "terminal_only": parsed.terminal_only,
+                            }
                         )
                         if parsed
                         else None
@@ -274,7 +278,18 @@ async def answer_from_anywhere(
     try:
         ctx = await runtime.load_project_context(principal.claims, project_id)
         conn_ssh = await ssh.pool.get(ctx.target)
-        await sessions.send_keys(conn_ssh, ctx.container, keys, session=session_name)
+        # The same rule as the feed's own answer: Enter after it, except for
+        # a tapped option on a harness that confirms on the digit alone, where
+        # the Enter would land on the next prompt and approve its default.
+        await activity.send_answer(
+            conn_ssh,
+            ctx.container,
+            harness_registry.get(ctx.harness),
+            keys,
+            session=session_name,
+        )
+    except activity.NeedsTerminal as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except NotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SSHError as exc:

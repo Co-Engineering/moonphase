@@ -1,0 +1,236 @@
+import { fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ProjectView } from '../App'
+import { AccountDialog } from '../components/AccountPicker'
+import { ClaudeConfigDialog } from '../components/ClaudeConfigDialog'
+import { api, type ClaudeConfig, type HarnessAccount, type Project, type Session } from '../lib/api'
+import { useHarnessAccounts } from '../lib/useHarnessAccounts'
+
+vi.mock('../lib/supabase', () => ({
+  accessToken: async () => 'test-token',
+  client: () => ({ auth: {} }),
+}))
+
+// jsdom has no media queries, and the view defaults by screen width.
+vi.stubGlobal('matchMedia', (query: string) => ({
+  matches: false,
+  media: query,
+  addEventListener: () => {},
+  removeEventListener: () => {},
+  addListener: () => {},
+  removeListener: () => {},
+  onchange: null,
+  dispatchEvent: () => false,
+}))
+
+afterEach(() => vi.restoreAllMocks())
+
+const account = (over: Partial<HarnessAccount>): HarnessAccount => ({
+  id: 'a1',
+  label: null,
+  auth_mode: 'oauth',
+  is_default: true,
+  created_at: '',
+  updated_at: '',
+  ...over,
+})
+
+const claudeAccounts = [
+  account({ id: 'c1', label: 'Personal' }),
+  account({ id: 'c2', label: 'Client X', is_default: false }),
+]
+const googleAccounts = [
+  account({ id: 'g1' }),
+  account({ id: 'g2', label: 'Work', is_default: false }),
+]
+
+const project = (over: Partial<Project>): Project =>
+  ({
+    id: 'p1',
+    name: 'gravity',
+    status: 'running',
+    access: 'admin',
+    server_name: 'test',
+    environment: 'debian',
+    share_count: 0,
+    status_detail: null,
+    harness: 'claude_code',
+    harness_credential_id: null,
+    ...over,
+  }) as unknown as Project
+
+const claudeProject = project({ id: 'p-claude', harness: 'claude_code' })
+const gravityProject = project({ id: 'p-gravity', harness: 'antigravity' })
+
+/**
+ * Accounts are per harness, and the backend refuses another harness's.
+ *
+ * The app loaded one list — Claude's — and gave it to every project, so an
+ * Antigravity project's pickers listed Claude accounts, and choosing one came
+ * back "No such account.". Each project has to get its own harness's.
+ */
+describe('loading accounts for the harnesses projects use', () => {
+  it('gives each project its own harness’s accounts', async () => {
+    const listed = vi
+      .spyOn(api, 'harnessAccounts')
+      .mockImplementation(async (harness = 'claude_code') =>
+        harness === 'antigravity' ? googleAccounts : claudeAccounts,
+      )
+
+    const { result } = renderHook(() => useHarnessAccounts([claudeProject, gravityProject]))
+
+    await waitFor(() => expect(result.current.accountsFor(gravityProject)).toEqual(googleAccounts))
+    expect(result.current.accountsFor(claudeProject)).toEqual(claudeAccounts)
+    expect(listed).toHaveBeenCalledWith('claude_code')
+    expect(listed).toHaveBeenCalledWith('antigravity')
+  })
+
+  it('keeps Claude’s accounts when another harness’s fail to load', async () => {
+    vi.spyOn(api, 'harnessAccounts').mockImplementation(async (harness = 'claude_code') => {
+      if (harness === 'antigravity') throw new Error('Not Found')
+      return claudeAccounts
+    })
+
+    const { result } = renderHook(() => useHarnessAccounts([claudeProject, gravityProject]))
+
+    await waitFor(() => expect(result.current.accountsFor(claudeProject)).toEqual(claudeAccounts))
+    expect(result.current.accountsFor(gravityProject)).toEqual([])
+  })
+
+  it('asks for Claude’s alone while no project uses anything else', async () => {
+    const listed = vi.spyOn(api, 'harnessAccounts').mockResolvedValue(claudeAccounts)
+
+    const { result } = renderHook(() => useHarnessAccounts([claudeProject]))
+
+    await waitFor(() => expect(result.current.accountsFor(claudeProject)).toEqual(claudeAccounts))
+    expect(listed).toHaveBeenCalledTimes(1)
+    expect(listed).toHaveBeenCalledWith('claude_code')
+    // And another harness's project gets nothing rather than Claude's.
+    expect(result.current.accountsFor(gravityProject)).toEqual([])
+  })
+})
+
+describe('an Antigravity project’s account pickers', () => {
+  const view = () =>
+    render(
+      <ProjectView
+        project={gravityProject}
+        session={null}
+        sessions={[]}
+        accounts={googleAccounts}
+        onEnter={() => {}}
+        onChanged={() => {}}
+        onToggleSidebar={() => {}}
+        onShare={() => {}}
+        onRemoved={() => {}}
+      />,
+    )
+
+  it('names the harness and lists its accounts, calling an unnamed one Google', async () => {
+    vi.spyOn(api, 'branches').mockResolvedValue(['main'])
+    view()
+    await screen.findByText('main (default)')
+
+    const picker = screen
+      .getAllByLabelText<HTMLSelectElement>('Antigravity account')
+      .find((el) => el.closest('.new-session'))!
+    expect([...picker.options].map((o) => o.textContent)).toEqual([
+      "Google account (project's)",
+      'Google account',
+      'Work',
+    ])
+    expect(screen.queryByLabelText('Claude account')).toBeNull()
+    expect(screen.queryByText(/Claude subscription/)).toBeNull()
+  })
+
+  it('starts a session on the Antigravity account picked', async () => {
+    vi.spyOn(api, 'branches').mockResolvedValue(['main'])
+    const create = vi
+      .spyOn(api, 'createSession')
+      .mockResolvedValue({ tmux_session: 'g' } as unknown as Session)
+    view()
+    await screen.findByText('main (default)')
+
+    const picker = screen
+      .getAllByLabelText<HTMLSelectElement>('Antigravity account')
+      .find((el) => el.closest('.new-session'))!
+    fireEvent.change(picker, { target: { value: 'g2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Start my session' }))
+
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith('p-gravity', undefined, undefined, 'g2'),
+    )
+  })
+
+  it('titles the sidebar’s account dialog by the harness', () => {
+    render(
+      <AccountDialog
+        project={gravityProject}
+        accounts={[googleAccounts[0]]}
+        onChanged={() => {}}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.getByRole('heading', { name: 'Antigravity account — gravity' })).toBeTruthy()
+    expect(screen.getByText(/You have one Antigravity account/)).toBeTruthy()
+  })
+
+  it('leaves a Claude project’s dialog exactly as it was', () => {
+    render(
+      <AccountDialog
+        project={claudeProject}
+        accounts={[claudeAccounts[0]]}
+        onChanged={() => {}}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.getByRole('heading', { name: 'Claude account — gravity' })).toBeTruthy()
+    expect(screen.getByText(/You have one Claude account/)).toBeTruthy()
+  })
+})
+
+/**
+ * Configure is Claude Code's editors. For another harness the settings.json
+ * one does nothing at all — agy never reads `~/.claude/settings.json` — so
+ * it is not offered, and the dialog says what does apply.
+ */
+describe('configuring a project on another harness', () => {
+  const config: ClaudeConfig = {
+    claude_settings_json: null,
+    claude_md: null,
+    mcp_json: null,
+    skills: {},
+    env_vars: {},
+  }
+
+  const dialog = (harness?: 'claude_code' | 'antigravity') =>
+    render(
+      <ClaudeConfigDialog
+        harness={harness}
+        title="Configure gravity"
+        note="Applies to every session in this project."
+        load={() => Promise.resolve(config)}
+        save={() => Promise.resolve()}
+        onClose={() => {}}
+      />,
+    )
+
+  it('leaves out Claude Code’s permissions and says what applies', async () => {
+    vi.spyOn(api, 'mcpOAuthConnections').mockResolvedValue([])
+    dialog('antigravity')
+
+    expect(await screen.findByRole('tab', { name: 'MCP servers' })).toBeTruthy()
+    expect(screen.queryByRole('tab', { name: 'Permissions & behaviour' })).toBeNull()
+    expect(screen.getByRole('tab', { name: 'Instructions' })).toBeTruthy()
+    expect(screen.getByText(/~\/\.gemini\/AGENTS\.md/)).toBeTruthy()
+  })
+
+  it('changes nothing for Claude Code', async () => {
+    vi.spyOn(api, 'mcpOAuthConnections').mockResolvedValue([])
+    dialog()
+
+    expect(await screen.findByRole('tab', { name: 'Permissions & behaviour' })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: 'CLAUDE.md' })).toBeTruthy()
+    expect(screen.queryByText(/permissions file does not apply/)).toBeNull()
+  })
+})

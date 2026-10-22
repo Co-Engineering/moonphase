@@ -116,10 +116,18 @@ it held.
 
 - [x] OpenCode as a second `Harness` subclass
 - [x] Pydantic AI as a third, running the `pydantic-ai-harness` coder agent
-- [ ] A feed for either. Neither writes the transcript format the feed reads, so
-      their sessions show the terminal and nothing else
+- [x] Antigravity (`agy`) as a fourth — Google's CLI, signed in with a Google
+      account or a Gemini API key, with a feed, and kept current from Google's own
+      release manifest. [The guide](guides/antigravity.md) says what does not work
+      yet
+- [ ] A feed for OpenCode and Pydantic AI. Neither writes a transcript the feed
+      can read, so their sessions show the terminal and nothing else; Claude Code
+      and Antigravity both have one
+- [ ] Usage, plan limits, search and summaries for Antigravity sessions, which
+      are Claude Code's only so far. Google documents that `agy` hands a status line
+      command the quota it reports, which is where plan limits would come from
 - [ ] Multiple harnesses in one workspace as separate tmux sessions
-- [ ] Per-harness runtime images. One image carries all three today, which costs
+- [ ] Per-harness runtime images. One image carries all four today, which costs
       disk on the server and saves a rebuild when a project changes harness
 
 ## Not scheduled — signed desktop builds

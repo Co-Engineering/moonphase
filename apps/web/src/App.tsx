@@ -9,6 +9,8 @@ import {
   liveActivity,
   type ActivityState,
   type HarnessAccount,
+  type HarnessInfo,
+  type HarnessKind,
   type Project,
   type Server,
   type ServerResources,
@@ -16,6 +18,8 @@ import {
   setupState,
 } from './lib/api'
 import { useResource } from './lib/useResource'
+import { harnessCopy } from './lib/harness'
+import { useHarnessAccounts } from './lib/useHarnessAccounts'
 import { useCollapsed, useCollapsedFlag } from './lib/collapsed'
 import { useSessionOrder } from './lib/sessionOrder'
 import { playAlertSound } from './lib/sound'
@@ -293,7 +297,15 @@ function Shell({ email }: { email: string }) {
   const projects = useResource<Project[]>(() => api.projects(), [], { pollMs: 8000 })
   const harnesses = useResource(() => api.harnesses(), [])
   const profile = useResource(() => api.profile(), [])
-  const accounts = useResource(() => api.harnessAccounts(), [])
+  // Per harness: an Antigravity project gets Antigravity accounts, never
+  // Claude's, which the backend would refuse for it.
+  const accounts = useHarnessAccounts(projects.data)
+  const { accountsFor } = accounts
+  // Which harness the Configure dialog is for. Its editors are Claude Code's,
+  // and not all of them mean anything to another harness.
+  const configureHarness: HarnessKind =
+    (configureTarget && projects.data?.find((p) => p.id === configureTarget.projectId)?.harness) ||
+    'claude_code'
   const environments = useResource(() => api.environments(), [])
   // Every session, in one query and without touching a server. Listing what
   // exists must not cost a connection to a machine that may be asleep.
@@ -599,6 +611,7 @@ function Shell({ email }: { email: string }) {
                       onChooseAccount={(item, session) =>
                         setAccountTarget({ projectId: item.id, session: session?.tmux_session })
                       }
+                      harnesses={harnesses.data}
                     />
                   ))}
               </div>
@@ -672,6 +685,7 @@ function Shell({ email }: { email: string }) {
                   onChooseAccount={(item, session) =>
                     setAccountTarget({ projectId: item.id, session: session?.tmux_session })
                   }
+                  harnesses={harnesses.data}
                 />
               ))}
             </>
@@ -742,7 +756,8 @@ function Shell({ email }: { email: string }) {
             project={activeProject}
             session={selected?.kind === 'project' ? (selected.session ?? null) : null}
             sessions={(sessions.data ?? []).filter((s) => s.project_id === activeProject.id)}
-            accounts={accounts.data ?? []}
+            accounts={accountsFor(activeProject)}
+            harnesses={harnesses.data}
             startNote={startNote?.projectId === activeProject.id ? startNote.note : null}
             onStartNote={(note) =>
               setStartNote(note ? { projectId: activeProject.id, note } : null)
@@ -876,7 +891,8 @@ function Shell({ email }: { email: string }) {
             <AccountDialog
               project={project}
               session={session}
-              accounts={accounts.data ?? []}
+              accounts={accountsFor(project)}
+              harnesses={harnesses.data}
               onChanged={reloadAll}
               onClose={() => setAccountTarget(null)}
             />
@@ -884,6 +900,8 @@ function Shell({ email }: { email: string }) {
         })()}
       {configureTarget && (
         <ClaudeConfigDialog
+          harness={configureHarness}
+          harnesses={harnesses.data}
           title={
             configureTarget.session
               ? `Configure ${configureTarget.session} — ${configureTarget.projectName}`
@@ -917,14 +935,19 @@ function Shell({ email }: { email: string }) {
           // out is org-wide regardless), not something to guess at here from
           // whichever session list happens to be loaded and however fresh its
           // liveness is.
+          //
+          // Both Connect and the connection check run `claude mcp …` inside a
+          // session, so they mean nothing to another harness's session.
           mcpConnect={
-            configureTarget.session
-              ? {
-                  scope: 'session',
-                  projectId: configureTarget.projectId,
-                  session: configureTarget.session,
-                }
-              : { scope: 'project', projectId: configureTarget.projectId }
+            configureHarness !== 'claude_code'
+              ? undefined
+              : configureTarget.session
+                ? {
+                    scope: 'session',
+                    projectId: configureTarget.projectId,
+                    session: configureTarget.session,
+                  }
+                : { scope: 'project', projectId: configureTarget.projectId }
           }
         />
       )}
@@ -950,6 +973,18 @@ function Shell({ email }: { email: string }) {
   )
 }
 
+/**
+ * What Configure edits, for the menu's one-line description of it. Claude
+ * Code's settings.json permissions are Claude's alone, so another harness's
+ * dialog does not offer them and its menu does not promise them.
+ */
+function configureDetail(harness: HarnessKind | undefined): string {
+  if ((harness ?? 'claude_code') === 'claude_code') {
+    return 'MCP servers, skills, permissions and CLAUDE.md'
+  }
+  return harness === 'antigravity' ? 'MCP servers, skills and instructions (AGENTS.md)' : 'Settings'
+}
+
 function ProjectRow({
   project,
   active,
@@ -969,6 +1004,7 @@ function ProjectRow({
   onConfigureSession,
   onChooseAccount,
   onReorderSession,
+  harnesses,
 }: {
   project: Project
   active: boolean
@@ -986,12 +1022,16 @@ function ProjectRow({
   onDuplicateSession?: (session: Session) => void
   onConfigure?: (project: Project) => void
   onConfigureSession?: (session: Session) => void
-  /** Pick which Claude account the project, or one session, runs on. */
+  /** Pick which account the project, or one session, runs on. */
   onChooseAccount?: (project: Project, session?: Session) => void
   /** `beforeName` is null when dropped after the last session. */
   onReorderSession?: (draggedName: string, beforeName: string | null) => void
+  /** For the harness's display name; the built-in one is used until it loads. */
+  harnesses?: HarnessInfo[] | null
 }) {
   const hasSessions = project.status === 'running' && sessions.length > 0
+  const copy = harnessCopy(project.harness, harnesses)
+  const configures = configureDetail(project.harness)
   const [draggingOver, setDraggingOver] = useState<string | null>(null)
   return (
     <>
@@ -1059,14 +1099,14 @@ function ProjectRow({
             },
             {
               label: 'Configure',
-              detail: 'MCP servers, skills, permissions and CLAUDE.md for this project.',
+              detail: `${configures} for this project.`,
               disabledReason: canControl(project.access) ? undefined : 'view only',
               onSelect: () => onConfigure?.(project),
             },
             ...(onChooseAccount
               ? [
                   {
-                    label: 'Claude account',
+                    label: copy.account,
                     detail: 'Which of your accounts your sessions here run on.',
                     disabledReason: project.access === 'admin' ? undefined : 'not yours',
                     onSelect: () => onChooseAccount(project),
@@ -1176,8 +1216,7 @@ function ProjectRow({
               },
               {
                 label: 'Configure',
-                detail:
-                  'MCP servers, skills, permissions and CLAUDE.md for this session only.',
+                detail: `${configures} for this session only.`,
                 disabledReason:
                   session.is_mine || project.access === 'admin'
                     ? undefined
@@ -1187,7 +1226,7 @@ function ProjectRow({
               ...(onChooseAccount
                 ? [
                     {
-                      label: 'Claude account',
+                      label: copy.account,
                       detail: 'Restart this session on another of your accounts.',
                       disabledReason:
                         session.is_mine && canControl(project.access) ? undefined : 'not yours',
@@ -1225,6 +1264,7 @@ export function ProjectView({
   session,
   sessions,
   accounts = [],
+  harnesses,
   startNote = null,
   onStartNote,
   onEnter,
@@ -1237,8 +1277,14 @@ export function ProjectView({
   /** Null until a session is entered — and nothing connects before that. */
   session: string | null
   sessions: Session[]
-  /** Your Claude accounts. Choosing between them only appears once there are two. */
+  /**
+   * Your accounts on this project's harness, and only that harness's: an
+   * account of another harness's is refused. Choosing between them only
+   * appears once there are two.
+   */
   accounts?: HarnessAccount[]
+  /** For the harness's display name; the built-in one is used until it loads. */
+  harnesses?: HarnessInfo[] | null
   /** What the server said about where the latest session here started, if anything. */
   startNote?: string | null
   onStartNote?: (note: string | null) => void
@@ -1262,6 +1308,7 @@ export function ProjectView({
   const [newAccount, setNewAccount] = useState('')
   const [choosingAccount, setChoosingAccount] = useState(false)
   const choosingAccounts = accounts.length > 1
+  const copy = harnessCopy(project.harness, harnesses)
   const branches = useResource<string[]>(
     () =>
       session === null && project.status === 'running' && canControl(project.access)
@@ -1387,6 +1434,7 @@ export function ProjectView({
           project={project}
           session={active}
           accounts={accounts}
+          harnesses={harnesses}
           onChanged={onChanged}
           onClose={() => setChoosingAccount(false)}
         />
@@ -1440,6 +1488,7 @@ export function ProjectView({
               project={project}
               session={active}
               accounts={accounts}
+              harnesses={harnesses}
               onSwitched={onChanged}
             />
           )}
@@ -1535,7 +1584,7 @@ export function ProjectView({
               ...(drivable && active?.is_mine
                 ? [
                     {
-                      label: 'Claude account',
+                      label: copy.account,
                       detail: 'Restart this session on another of your accounts.',
                       onSelect: () => setChoosingAccount(true),
                     },
@@ -1663,6 +1712,7 @@ export function ProjectView({
                         project={project}
                         session={item}
                         accounts={accounts}
+                        harnesses={harnesses}
                         onSwitched={onChanged}
                       />
                     )}
@@ -1738,18 +1788,21 @@ export function ProjectView({
                     className="account-choice"
                     value={newAccount}
                     onChange={(e) => setNewAccount(e.target.value)}
-                    aria-label="Claude account"
-                    title="Which of your Claude accounts the session runs on"
+                    aria-label={copy.account}
+                    title={`Which of your ${copy.agent} accounts the session runs on`}
                     disabled={busy}
                   >
                     <option value="">
                       {projectAccount(project, accounts)
-                        ? `${accountName(projectAccount(project, accounts)!)} (project's)`
+                        ? `${accountName(
+                            projectAccount(project, accounts)!,
+                            project.harness,
+                          )} (project's)`
                         : "Project's account"}
                     </option>
                     {accounts.map((a) => (
                       <option key={a.id} value={a.id}>
-                        {accountName(a)}
+                        {accountName(a, project.harness)}
                       </option>
                     ))}
                   </select>
@@ -1784,6 +1837,7 @@ export function ProjectView({
             projectName={project.name}
             running
             readOnly={!canControl(project.access)}
+            agent={copy.agent}
           />
         </div>
       ) : (
@@ -1793,7 +1847,7 @@ export function ProjectView({
               <span className="readonly-chip">Read-only</span>
               <span className="readonly-text">
                 This is <strong>{active?.owner ?? 'someone else'}</strong>&rsquo;s session.
-                It runs on their Claude account, so only they can type into it — you can
+                It runs on their {copy.account}, so only they can type into it — you can
                 watch it live.
               </span>
               {canControl(project.access) && (
@@ -1833,6 +1887,7 @@ export function ProjectView({
                 running
                 readOnly={!drivable}
                 onRefusedInput={nudge}
+                agent={copy.agent}
               />
             </div>
           )}
@@ -1841,6 +1896,7 @@ export function ProjectView({
             projectName={project.name}
             running
             readOnly={!drivable}
+            agent={copy.agent}
           />
         </div>
       )}

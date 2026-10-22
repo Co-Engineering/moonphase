@@ -108,7 +108,11 @@ async def get_feed(
         available=page.available,
         activity=state,
         prompt=PromptOut.model_validate(
-            {"question": parsed.question, "options": parsed.options}
+            {
+                "question": parsed.question,
+                "options": parsed.options,
+                "terminal_only": parsed.terminal_only,
+            }
         )
         if parsed
         else None,
@@ -135,11 +139,18 @@ async def answer(
     except NotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    harness = harness_registry.get(ctx.harness)
     conn_ssh = await ssh.pool.get(ctx.target)
     try:
-        await sessions.send_keys(
-            conn_ssh, ctx.container, payload.key, session=session_name, enter=True
+        # Enter after it, as ever — except for a tapped option on a harness
+        # that confirms on the digit alone (Antigravity), where that Enter
+        # would land on the next prompt and approve its default. See
+        # `activity.send_answer`.
+        await activity.send_answer(
+            conn_ssh, ctx.container, harness, payload.key, session=session_name
         )
+    except activity.NeedsTerminal as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except SSHError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

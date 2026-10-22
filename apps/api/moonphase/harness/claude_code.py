@@ -17,6 +17,13 @@ from .base import (
     SessionSpace,
     register,
 )
+from .layers import (
+    merge_instruction_layers,
+    merge_mcp_layers,
+    merge_skills_layers,
+    parse_object,
+    row_skills,
+)
 
 log = logging.getLogger(__name__)
 
@@ -238,22 +245,12 @@ def _project_slug(workdir: str) -> str:
 _PERMISSION_DECISIONS = ("deny", "ask", "allow")  # most restrictive first
 
 
-def _parse_object(raw: str | None) -> dict[str, Any]:
-    if not raw:
-        return {}
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
 def _merge_settings_layers(layers: list[str | None]) -> str | None:
     merged: dict[str, Any] = {}
     decided: dict[str, str] = {}  # "Tool(pattern)" -> decision
 
     for index, raw in enumerate(layers):
-        doc = _parse_object(raw)
+        doc = parse_object(raw)
         for key, value in doc.items():
             if key == "permissions":
                 continue
@@ -295,44 +292,6 @@ def _merge_settings_layers(layers: list[str | None]) -> str | None:
     return json.dumps(merged) if merged else None
 
 
-def _merge_claude_md_layers(layers: list[tuple[str, str | None]]) -> str | None:
-    """Concatenate CLAUDE.md layers, broadest first.
-
-    Same order Claude Code itself loads nested CLAUDE.md files in: user, then
-    project, then the most specific one.
-    """
-    parts = [
-        f"# {label}\n\n{text.strip()}"
-        for label, text in layers
-        if text and text.strip()
-    ]
-    return "\n\n---\n\n".join(parts) if parts else None
-
-
-def _merge_mcp_layers(layers: list[str | None]) -> str | None:
-    servers: dict[str, Any] = {}
-    for raw in layers:
-        layer_servers = _parse_object(raw).get("mcpServers")
-        if isinstance(layer_servers, dict):
-            servers.update(layer_servers)
-    return json.dumps({"mcpServers": servers}) if servers else None
-
-
-def _merge_skills_layers(layers: list[dict[str, str]]) -> dict[str, str]:
-    merged: dict[str, str] = {}
-    for layer in layers:
-        merged.update(layer)
-    return merged
-
-
-def _row_skills(row: dict[str, Any] | None) -> dict[str, str]:
-    if not row:
-        return {}
-    from ..profile import parse_json_object
-
-    return {str(k): str(v) for k, v in parse_json_object(row.get("skills_json")).items()}
-
-
 def _row_has_config(row: dict[str, Any] | None) -> bool:
     if not row:
         return False
@@ -340,7 +299,7 @@ def _row_has_config(row: dict[str, Any] | None) -> bool:
         row.get("claude_settings_json")
         or row.get("claude_md")
         or row.get("mcp_json")
-        or _row_skills(row)
+        or row_skills(row)
     )
 
 
@@ -548,22 +507,22 @@ class ClaudeCode(Harness):
                 session_row.get("claude_settings_json"),
             ]
         )
-        claude_md = _merge_claude_md_layers(
+        claude_md = merge_instruction_layers(
             [
                 ("Global preferences", profile.claude_md),
                 ("Project instructions", project_row.get("claude_md")),
                 ("Your session", session_row.get("claude_md")),
             ]
         )
-        mcp_json = _merge_mcp_layers(
+        mcp_json = merge_mcp_layers(
             [
                 profile.mcp_json,
                 project_row.get("mcp_json"),
                 session_row.get("mcp_json"),
             ]
         )
-        skills = _merge_skills_layers(
-            [profile.skills, _row_skills(project_row), _row_skills(session_row)]
+        skills = merge_skills_layers(
+            [profile.skills, row_skills(project_row), row_skills(session_row)]
         )
 
         return replace(
@@ -595,15 +554,19 @@ class ClaudeCode(Harness):
         )
 
 
-    def parse_transcript_record(self, record: Any) -> list[Any]:
+    def parse_transcript_record(self, record: Any, source: str | None = None) -> list[Any]:
         """Normalise one Claude Code transcript line.
 
         Only `user` and `assistant` records carry conversation; the rest are
         bookkeeping (file history, modes, titles) that a reader does not want
         to see. Thinking blocks are emitted but tagged, so the UI can offer
         them without them dominating a small screen.
+
+        `source` is not needed: every record carries a uuid of its own.
         """
         from ..transcript import TranscriptEvent
+
+        del source
 
         if not isinstance(record, dict):
             return []

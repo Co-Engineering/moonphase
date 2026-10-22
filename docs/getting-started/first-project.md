@@ -9,6 +9,9 @@ and a coding harness running inside a `tmux` session that outlives every client.
 
 - **A server** — any of yours that is online
 - **A name** — becomes the container name and the project slug
+- **A harness** — the agent the project runs: Claude Code, or
+  [Antigravity](../guides/antigravity.md) once you have connected it. Only
+  harnesses you have connected are offered, and the choice stays with the project
 - **A repository URL** *(optional)* — cloned on first start
 - **An environment** *(optional)* — the base image and setup commands, see
   [environments](../guides/environments.md)
@@ -37,6 +40,11 @@ You can add more accounts later — see [more than one account](#more-than-one-a
     rather than with how much of a window you have used, because that is the limit you
     actually have.
 
+!!! tip "Antigravity instead, or as well"
+    Google's agent has its own card under **Settings → Accounts**: sign in with your
+    Google account, or paste a Gemini API key. Once connected it is a choice in **New
+    project**. See [Antigravity](../guides/antigravity.md#connect-it).
+
 ### More than one account
 
 Most people have more than one subscription: their own, an employer's, a client's.
@@ -59,7 +67,9 @@ are offered: in a shared project, everyone's sessions still run on their own.
 Open the project and press **Enter** on a session. Nothing connects until you do — a
 session you are not looking at costs nothing.
 
-On first attach Claude Code asks whether you trust the workspace folder.
+On first attach Claude Code asks whether you trust the workspace folder. Antigravity
+asks the same, after a colour scheme and Google's terms — see
+[its first start](../guides/antigravity.md#the-first-start-in-each-session).
 
 !!! note "That prompt is not pre-answered, on purpose"
     It guards against hostile content in a cloned repository. Answering it for you would

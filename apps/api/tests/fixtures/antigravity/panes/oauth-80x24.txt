@@ -1,0 +1,24 @@
+
+     ▄▀▀▄
+    ▀▀▀▀▀▀
+   ▀▀▀▀▀▀▀▀
+  ▄▀▀    ▀▀▄
+ ▄▀▀      ▀▀▄
+
+ Your browser should open automatically. If not:
+
+ https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=107100
+ 6060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com&code_chall
+ enge=d70kwE4f6hggc92R9K5Xr9AraL92adOGu_UsoLO6_ww&code_challenge_method=S256&pr
+ ompt=consent&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&re
+ sponse_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platfor
+ m+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.email+https%3A%2F%2Fwww.g
+ oogleapis.com%2Fauth%2Fuserinfo.profile+https%3A%2F%2Fwww.googleapis.com%2Faut
+ h%2Fcclog+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fexperimentsandconfigs+http
+ s%3A%2F%2Fwww.googleapis.com%2Fauth%2Faicode+openid&state=rk30ltuuMq7cqxwpQXLh
+ ig
+
+  (1–20 of 29 lines)
+
+  shift+up/down Navigate
+

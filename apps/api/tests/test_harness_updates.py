@@ -1,21 +1,27 @@
 """Keeping the harness CLIs current inside a project container.
 
 The update script is the part that runs unattended as root in every container,
-so it is run for real here — with `sh`, against temporary directories, and with
-a stub `npm` on PATH standing in for the registry. The launcher is run for real
-too, since "which binary did it start, with what environment" is a question
-about a shell script, not about the Python that wrote it.
+so it is run for real here — with `sh`, against temporary directories, with a
+stub `npm` on PATH standing in for the registry and a stub `curl` standing in
+for agy's release server, serving a manifest and a real tarball built here. The
+launcher is run for real too, since "which binary did it start, with what
+environment" is a question about a shell script, not about the Python that
+wrote it.
 """
 
 from __future__ import annotations
 
 import asyncio
 import fcntl
+import gzip
+import hashlib
+import io
 import json
 import os
 import shlex
 import shutil
 import subprocess
+import tarfile
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,6 +39,10 @@ from moonphase.ssh import CommandResult
 
 CLAUDE = "anthropic-ai-claude-code"
 OPENCODE = "opencode-ai"
+AGY = "antigravity"
+# Where the stub release server's tarballs live. `.invalid` never resolves, so
+# a stub that failed to be the `curl` the script runs could not reach anything.
+RELEASES = "https://releases.invalid"
 
 # Answers `view pkg@latest` with $STUB_VERSION, `view pkg@other` only for the
 # specs listed in $STUB_KNOWN (a 404 like npm's otherwise), and `install -g
@@ -86,6 +96,69 @@ case $1 in
 esac
 """
 
+# agy's release server: any `.../manifests/<platform>.json` is answered with
+# $STUB_RELEASES/manifest.json, and a tarball URL under RELEASES with the file
+# at the same path under $STUB_RELEASES — 22, curl's own exit for an HTTP error
+# under -f, when there is none. $STUB_AGY_MODE=offline cannot connect at all.
+STUB_CURL = r"""#!/bin/sh
+echo "curl $*" >> "$STUB_CURL_LOG"
+out= url=
+while [ $# -gt 0 ]; do
+    case $1 in
+        -o) out=$2; shift ;;
+        http://*|https://*) url=$1 ;;
+    esac
+    shift
+done
+[ "${STUB_AGY_MODE:-}" = offline ] && exit 7
+case $url in
+    */manifests/*.json) src=$STUB_RELEASES/manifest.json ;;
+    @RELEASES@/*) src=$STUB_RELEASES/${url#@RELEASES@/} ;;
+    *) exit 6 ;;
+esac
+[ -f "$src" ] || exit 22
+if [ -n "$out" ]; then cp "$src" "$out"; else cat "$src"; fi
+""".replace("@RELEASES@", RELEASES)
+
+# `uname -m` as $STUB_ARCH says, and `ldd` reporting musl when $STUB_MUSL is
+# set; both are the real thing otherwise.
+STUB_UNAME = """#!/bin/sh
+if [ "$1" = -m ] && [ -n "${STUB_ARCH:-}" ]; then echo "$STUB_ARCH"; exit 0; fi
+exec @REAL@ "$@"
+"""
+STUB_LDD = """#!/bin/sh
+if [ -n "${STUB_MUSL:-}" ]; then echo "musl libc (x86_64)"; exit 1; fi
+exec @REAL@ "$@"
+"""
+
+# What the tarball's `antigravity` is: a binary that prints a bare version for
+# `--version`, as agy 1.4.3 does, and logs what it was run with.
+STUB_AGY = """#!/bin/sh
+[ -n "${STUB_AGY_LOG:-}" ] && echo "agy $* switch=${AGY_CLI_DISABLE_AUTO_UPDATE-unset} \
+home=$HOME" >> "$STUB_AGY_LOG"
+@BODY@
+"""
+
+
+def _tarball(members: dict[str, str]) -> bytes:
+    """A release tarball as Google builds them: root-owned 0755 members.
+
+    Byte-for-byte the same for the same members. tarfile's own gzip mode
+    stamps the header with the current time, so the same release built a
+    second apart got a different checksum — and so a different URL — which
+    made a test comparing two builds of one release fail now and then.
+    """
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as tar:
+        for name, text in members.items():
+            data = text.encode()
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            info.mode = 0o755
+            info.uname = info.gname = "root"
+            tar.addfile(info, io.BytesIO(data))
+    return gzip.compress(buffer.getvalue(), mtime=0)
+
 
 class Box:
     """One container's worth of directories, and a way to run the script in it."""
@@ -103,13 +176,59 @@ class Box:
         # to, even as root.
         self.profile = base / "profile.d" / "moonphase-harness.sh"
         self.npm_log = base / "npm.log"
+        self.releases = base / "releases"
+        self.curl_log = base / "curl.log"
+        self.agy_log = base / "agy.log"
         self.script = base / "moonphase-harness-update"
-        for d in (self.home, self.proc, self.bin):
+        for d in (self.home, self.proc, self.bin, self.releases):
             d.mkdir(parents=True, exist_ok=True)
+        # One session here has been set up to run agy, as profile.apply does
+        # before its launch asks for an update; without one the script leaves
+        # agy undownloaded (see the tests for that below).
+        self.agy_session = self.home / "sessions" / "alice" / ".gemini"
+        self.agy_session.mkdir(parents=True)
         self.script.write_text(harness_updates.update_script())
-        npm = self.bin / "npm"
-        npm.write_text(STUB_NPM)
-        npm.chmod(0o755)
+        stubs = {
+            "npm": STUB_NPM,
+            # Without it the script's PATH finds the real curl, and every
+            # test here would fetch agy's real manifest.
+            "curl": STUB_CURL,
+            "uname": STUB_UNAME.replace("@REAL@", shutil.which("uname") or "/bin/uname"),
+            "ldd": STUB_LDD.replace("@REAL@", shutil.which("ldd") or "/usr/bin/ldd"),
+        }
+        for name, text in stubs.items():
+            (self.bin / name).write_text(text)
+            (self.bin / name).chmod(0o755)
+
+    def release(
+        self,
+        version: str,
+        /,
+        *,
+        body: str | None = None,
+        member: str = "antigravity",
+        indent: int | None = 2,
+        **fields: str,
+    ) -> str:
+        """agy `version` as its release server would publish it: a tarball
+        under `releases`, and the manifest naming it. `body` replaces what its
+        binary does (by default, print `version`), `member` the tarball's one
+        file, `indent=None` gives a one-line manifest rather than the
+        pretty-printed one Google serves, and `fields` override the manifest's
+        own values."""
+        script = STUB_AGY.replace("@BODY@", body or f'[ "$1" = --version ] && echo {version}')
+        data = _tarball({member: script})
+        sha512 = hashlib.sha512(data).hexdigest()
+        tarball = self.releases / version / f"{sha512[:12]}.tar.gz"
+        tarball.parent.mkdir(parents=True, exist_ok=True)
+        tarball.write_bytes(data)
+        manifest = {
+            "version": version,
+            "url": f"{RELEASES}/{version}/{tarball.name}",
+            "sha512": sha512,
+            **fields,
+        }
+        return json.dumps(manifest, indent=indent) + "\n"
 
     def run(
         self,
@@ -117,8 +236,16 @@ class Box:
         version: str = "1.0.0",
         mode: str = "",
         cwd: Path | None = None,
+        agy: str | None = None,
+        manifest: str | None = None,
         **env: str,
     ) -> subprocess.CompletedProcess[str]:
+        """Run the script. npm offers `version`, and so does agy's release
+        server unless `agy` names another version or `manifest` is the exact
+        manifest to serve."""
+        if manifest is None:
+            manifest = self.release(agy or version)
+        (self.releases / "manifest.json").write_text(manifest)
         full_env = {
             "PATH": os.environ["PATH"],
             "MOONPHASE_HARNESS_ROOT": str(self.root),
@@ -131,6 +258,11 @@ class Box:
             "STUB_LOG": str(self.npm_log),
             "STUB_VERSION": version,
             "STUB_MODE": mode,
+            "STUB_RELEASES": str(self.releases),
+            "STUB_CURL_LOG": str(self.curl_log),
+            "STUB_AGY_LOG": str(self.agy_log),
+            # x86_64 unless a test says otherwise, whatever this machine is.
+            "STUB_ARCH": "x86_64",
             # What a root `docker exec` inherits from the image.
             "npm_config_prefix": str(self.legacy),
             **env,
@@ -162,6 +294,16 @@ class Box:
     def npm_calls(self) -> list[str]:
         return self.npm_log.read_text().splitlines() if self.npm_log.exists() else []
 
+    def curl_calls(self) -> list[str]:
+        return self.curl_log.read_text().splitlines() if self.curl_log.exists() else []
+
+    def downloads(self) -> list[str]:
+        """The tarballs fetched, as opposed to the manifests."""
+        return [c for c in self.curl_calls() if f" {RELEASES}/" in c]
+
+    def log(self) -> str:
+        return (self.state / "harness-update.log").read_text()
+
     def process(self, pid: int, argv: list[str], exe: Path | None = None) -> None:
         """A fake /proc/<pid>. Without `exe` it is what root sees for another
         user's process when it lacks CAP_SYS_PTRACE, as under Docker's
@@ -177,7 +319,7 @@ class Box:
 # bash is the shell a base image might have as sh instead.
 @pytest.fixture(params=["sh", "bash"])
 def box(request, tmp_path: Path) -> Box:
-    for tool in ("flock", request.param):
+    for tool in ("flock", "sha512sum", "tar", request.param):
         if shutil.which(tool) is None:
             pytest.skip(f"{tool} is not installed")
     return Box(tmp_path, request.param)
@@ -190,10 +332,10 @@ def test_first_install_switches_current(box: Box) -> None:
     result = box.run("6")
 
     assert result.returncode == 0, (box.state / "harness-update.log").read_text()
-    for slug, binary in ((CLAUDE, "claude"), (OPENCODE, "opencode")):
+    for slug, binary in ((CLAUDE, "claude"), (OPENCODE, "opencode"), (AGY, "agy")):
         assert box.current(slug) == "1.0.0"
         out = subprocess.run(
-            [str(box.root / slug / "current" / "bin" / binary)],
+            [str(box.root / slug / "current" / "bin" / binary), "--version"],
             capture_output=True, text=True, check=True,
         )
         assert out.stdout.strip() == "1.0.0"
@@ -201,6 +343,7 @@ def test_first_install_switches_current(box: Box) -> None:
     assert status["result"] == "ok"
     assert status["packages"]["@anthropic-ai/claude-code"]["current"] == "1.0.0"
     assert status["packages"]["opencode-ai"]["result"] == "ok"
+    assert status["packages"][AGY]["result"] == "ok"
 
 
 def test_install_never_touches_the_home_volume_prefix_or_cache(box: Box) -> None:
@@ -395,6 +538,392 @@ def test_npm_runs_from_the_root_not_the_callers_directory(box: Box) -> None:
         assert call.endswith(" cwd=/"), call
 
 
+# --- agy, from its release manifest ---------------------------------------------
+
+
+def _agy_status(box: Box) -> dict[str, Any]:
+    return box.status()["packages"][AGY]
+
+
+def test_a_container_nobody_runs_agy_in_does_not_download_it(box: Box) -> None:
+    """A release is a 64MB download unpacking to 222MB, and most containers
+    only ever run Claude Code. Until a session here has been set up for agy,
+    the image's own copy stays the only one — and that is not a failure."""
+    shutil.rmtree(box.agy_session)
+
+    result = box.run("6")
+
+    assert result.returncode == 0, box.log()
+    assert box.curl_calls() == []
+    assert box.current(AGY) is None
+    assert _agy_status(box)["result"] == "unused"
+    assert box.status()["result"] == "ok"
+    # Claude Code and OpenCode are kept current regardless, as they always were.
+    assert box.current(CLAUDE) == "1.0.0"
+
+
+def test_agy_is_fetched_once_a_session_is_set_up_to_run_it(box: Box) -> None:
+    """The first Antigravity session in a container: profile.apply has
+    written its ~/.gemini before the launch asks for an update, so that very
+    update is the one that installs agy."""
+    shutil.rmtree(box.agy_session)
+    box.run("6")
+    assert box.current(AGY) is None
+
+    (box.home / "sessions" / "bob" / ".gemini").mkdir(parents=True)
+    result = box.run("6", "force")
+
+    assert result.returncode == 0, box.log()
+    assert box.current(AGY) == "1.0.0"
+
+
+def test_a_session_from_before_per_session_homes_counts_too(box: Box) -> None:
+    shutil.rmtree(box.agy_session)
+    (box.home / ".gemini").mkdir()
+
+    box.run("6")
+
+    assert box.current(AGY) == "1.0.0"
+
+
+def test_agy_stays_current_once_installed_even_with_its_sessions_gone(box: Box) -> None:
+    """Deleting the last Antigravity session does not freeze the copy
+    Moonphase already keeps: a new session would start on it."""
+    box.run("6")
+    shutil.rmtree(box.agy_session)
+
+    box.run("6", "force", agy="2.0.0")
+
+    assert box.current(AGY) == "2.0.0"
+
+
+def test_agy_is_installed_from_its_manifest_and_switched_to(box: Box) -> None:
+    """agy is not on npm. Its release server's manifest names the version, a
+    tarball and its SHA-512, and the tarball's one member is the binary."""
+    result = box.run("6", version="1.0.0")
+
+    assert result.returncode == 0, box.log()
+    assert box.current(AGY) == "1.0.0"
+    binary = box.root / AGY / "1.0.0" / "bin" / "agy"
+    assert binary.stat().st_mode & 0o777 == 0o755
+    ran = subprocess.run([str(binary), "--version"], capture_output=True, text=True, check=True)
+    assert ran.stdout == "1.0.0\n"
+    assert _tree(box.root / AGY / "1.0.0") == {"bin", "bin/agy"}, "only the binary, as agy"
+    manifest, download = box.curl_calls()
+    base = registry.get("antigravity").managed_manifest
+    assert manifest.endswith(f" {base}/linux_amd64.json")
+    assert download.endswith(json.loads(box.release("1.0.0"))["url"])
+    for call in (manifest, download):
+        # Never in the clear, never hanging, and not given up on at one blip.
+        for flag in ("--proto =https", "--proto-redir =https", "--max-time", "--retry"):
+            assert flag in call, (flag, call)
+    assert "release.tar.gz: OK" in box.log()
+    assert _agy_status(box) == {
+        "current": "1.0.0",
+        "previous": "",
+        "channel": "latest",
+        "result": "ok",
+    }
+
+
+def test_an_agy_already_current_downloads_nothing(box: Box) -> None:
+    box.run("6")
+    box.curl_log.unlink()
+
+    result = box.run("6", "force")
+
+    assert result.returncode == 0, box.log()
+    assert box.downloads() == []
+    assert len(box.curl_calls()) == 1, "the manifest is still read: it says nothing is new"
+    assert box.current(AGY) == "1.0.0"
+    assert box.previous(AGY) is None
+
+
+def test_a_new_agy_release_keeps_the_old_as_previous_and_prunes_the_rest(box: Box) -> None:
+    box.run("6", agy="1.0.0")
+    box.run("6", "force", agy="2.0.0")
+
+    assert box.current(AGY) == "2.0.0"
+    assert box.previous(AGY) == "1.0.0"
+    assert box.versions(AGY) == {"1.0.0", "2.0.0"}
+
+    box.run("6", "force", agy="3.0.0")
+
+    assert box.current(AGY) == "3.0.0"
+    assert box.previous(AGY) == "2.0.0"
+    assert box.versions(AGY) == {"2.0.0", "3.0.0"}
+    assert _agy_status(box)["previous"] == "2.0.0"
+    assert box.versions(CLAUDE) == {"1.0.0"}, "npm's harnesses had nothing new"
+
+
+def test_an_agy_session_still_running_keeps_its_version(box: Box) -> None:
+    """The launcher starts agy by its versioned path, which is all prune can
+    see of another user's process."""
+    box.run("6", agy="1.0.0")
+    box.process(4242, [str(box.root / AGY / "1.0.0" / "bin" / "agy"), "--continue"])
+
+    box.run("6", "force", agy="2.0.0")
+    box.run("6", "force", agy="3.0.0")
+
+    assert box.versions(AGY) == {"1.0.0", "2.0.0", "3.0.0"}
+
+
+def test_an_agy_tarball_that_fails_its_checksum_is_refused(box: Box) -> None:
+    """The SHA-512 is the manifest's whole guarantee that the 222MB about to
+    run as every session's agent is the one Google published."""
+    box.run("6", agy="1.0.0")
+    tampered = box.release("2.0.0", sha512=hashlib.sha512(b"something else").hexdigest())
+
+    result = box.run("6", "force", version="2.0.0", manifest=tampered)
+
+    assert result.returncode != 0
+    assert len(box.downloads()) == 2, "it was fetched, then refused"
+    assert "FAILED" in box.log()
+    assert box.current(AGY) == "1.0.0"
+    assert box.previous(AGY) is None
+    assert box.versions(AGY) == {"1.0.0"}, "nothing unpacked from it"
+    assert _agy_status(box)["result"] == "failed: 2.0.0 does not match its SHA-512"
+    assert box.current(CLAUDE) == "2.0.0", "the npm harnesses updated regardless"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://releases.invalid/2.0.0/cli.tar.gz",
+        "file:///etc/shadow",
+        "",
+    ],
+    ids=["http", "file", "none"],
+)
+def test_an_agy_manifest_naming_anything_but_https_is_refused(box: Box, url: str) -> None:
+    box.run("6")
+    box.curl_log.unlink()
+
+    result = box.run("6", "force", manifest=box.release("2.0.0", url=url))
+
+    assert result.returncode != 0
+    assert len(box.curl_calls()) == 1, "nothing but the manifest was fetched"
+    assert box.current(AGY) == "1.0.0"
+    assert _agy_status(box)["result"] == "failed: the linux_amd64 manifest names no https download"
+
+
+@pytest.mark.parametrize(
+    ("fields", "result"),
+    [
+        ({"version": ""}, "names no version"),
+        ({"version": '1.0.0", "x": "y'}, "names no version"),
+        ({"version": "2.0.0; touch /pwned"}, "names no version"),
+        ({"sha512": "abc123"}, "names no SHA-512"),
+        ({"sha512": "z" * 128}, "names no SHA-512"),
+    ],
+    ids=["empty-version", "quoted-version", "shell-version", "short-sha", "not-hex-sha"],
+)
+def test_a_malformed_agy_manifest_changes_nothing(
+    box: Box, fields: dict[str, str], result: str
+) -> None:
+    """Its values reach a directory name, the log and harness-update.json,
+    none of which escapes them, so each is checked before any is used."""
+    box.run("6")
+    box.curl_log.unlink()
+
+    ran = box.run("6", "force", manifest=box.release("2.0.0", **fields))
+
+    assert ran.returncode != 0
+    assert box.downloads() == []
+    assert box.current(AGY) == "1.0.0"
+    assert box.versions(AGY) == {"1.0.0"}
+    assert result in _agy_status(box)["result"]
+
+
+def test_a_one_line_agy_manifest_reads_as_well_as_a_pretty_printed_one(box: Box) -> None:
+    """Google serves it pretty-printed, one key to a line. Its installer's sed
+    reads it either way, and so must this."""
+    result = box.run("6", manifest=box.release("1.0.0", indent=None))
+
+    assert result.returncode == 0, box.log()
+    assert box.current(AGY) == "1.0.0"
+
+
+def test_an_agy_release_that_does_not_run_leaves_current_untouched(box: Box) -> None:
+    box.run("6")
+
+    result = box.run("6", "force", manifest=box.release("2.0.0", body="exit 1"))
+
+    assert result.returncode != 0
+    assert box.current(AGY) == "1.0.0"
+    assert box.versions(AGY) == {"1.0.0"}
+    assert _agy_status(box)["result"] == "failed: 2.0.0 does not run"
+
+
+def test_an_agy_tarball_without_its_binary_leaves_nothing_behind(box: Box) -> None:
+    box.run("6")
+
+    result = box.run("6", "force", manifest=box.release("2.0.0", member="agy"))
+
+    assert result.returncode != 0
+    assert box.versions(AGY) == {"1.0.0"}
+    assert _agy_status(box)["result"] == "failed: could not unpack 2.0.0"
+
+
+def test_an_agy_tarball_whose_binary_is_a_link_is_refused(box: Box) -> None:
+    """Streaming a link's member yields nothing, rather than whatever it
+    points at landing world-readable in the install."""
+    box.run("6")
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+        link = tarfile.TarInfo("antigravity")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "/etc/hostname"
+        tar.addfile(link)
+    data = buffer.getvalue()
+    (box.releases / "linked.tar.gz").write_bytes(data)
+    manifest = box.release(
+        "2.0.0", url=f"{RELEASES}/linked.tar.gz", sha512=hashlib.sha512(data).hexdigest()
+    )
+
+    result = box.run("6", "force", manifest=manifest)
+
+    assert result.returncode != 0
+    assert box.versions(AGY) == {"1.0.0"}
+    assert _agy_status(box)["result"] == "failed: could not unpack 2.0.0"
+
+
+def test_an_unreachable_agy_release_server_changes_nothing(box: Box) -> None:
+    """Including a pinned channel: not being able to ask is no reason to
+    leave a pin, exactly as for an unreachable npm registry."""
+    box.run("6", "1.0.0")
+
+    result = box.run("6", "1.0.0", "force", agy="2.0.0", STUB_AGY_MODE="offline")
+
+    assert result.returncode != 0
+    assert box.current(AGY) == "1.0.0"
+    status = _agy_status(box)
+    assert status["result"] == "failed: could not fetch the linux_amd64 manifest"
+    assert status["channel"] == "1.0.0"
+    assert "fallback_from" not in status
+
+
+def test_agy_on_a_machine_it_has_no_release_for_records_a_failure(box: Box) -> None:
+    result = box.run("6", STUB_ARCH="riscv64")
+
+    assert result.returncode != 0
+    assert box.curl_calls() == [], "there is no manifest to ask for"
+    assert box.current(AGY) is None
+    assert _agy_status(box)["result"] == "failed: unsupported architecture"
+    assert "riscv64" in box.log()
+    assert box.current(CLAUDE) == "1.0.0"
+    assert box.status()["packages"]["@anthropic-ai/claude-code"]["result"] == "ok"
+
+
+@pytest.mark.parametrize(
+    ("machine", "musl", "platform"),
+    [
+        ("x86_64", "", "linux_amd64"),
+        ("amd64", "", "linux_amd64"),
+        ("aarch64", "", "linux_arm64"),
+        ("arm64", "", "linux_arm64"),
+        ("x86_64", "1", "linux_amd64_musl"),
+        ("aarch64", "1", "linux_arm64_musl"),
+    ],
+)
+def test_agy_asks_for_the_release_built_for_this_machine(
+    box: Box, machine: str, musl: str, platform: str
+) -> None:
+    """The platform names Google's installer works out, musl included; the
+    arm64 one on an amd64 machine would install and then fail to run."""
+    if not musl and any(Path(f"/lib/libc.musl-{a}.so.1").exists() for a in ("x86_64", "aarch64")):
+        pytest.skip("this machine's own libc is musl")
+
+    box.run("6", STUB_ARCH=machine, STUB_MUSL=musl)
+
+    assert box.curl_calls()[0].endswith(f"/manifests/{platform}.json")
+
+
+def test_a_channel_agys_manifest_cannot_offer_falls_back_to_latest(box: Box) -> None:
+    """The manifest only ever names the newest release, so a Claude Code
+    version number as the channel would otherwise leave agy unable to update
+    for as long as it is set."""
+    result = box.run(
+        "6", "2.1.290", version="1.5.0", STUB_KNOWN="@anthropic-ai/claude-code@2.1.290"
+    )
+
+    assert result.returncode == 0, box.log()
+    assert box.current(CLAUDE) == "2.1.290"
+    assert _agy_status(box) == {
+        "current": "1.5.0",
+        "previous": "",
+        "channel": "latest",
+        "result": "ok",
+        "fallback_from": "2.1.290",
+    }
+
+
+def test_a_channel_naming_agys_newest_release_is_honoured_as_it_is(box: Box) -> None:
+    result = box.run("6", "1.5.0", version="1.5.0")
+
+    assert result.returncode == 0, box.log()
+    status = _agy_status(box)
+    assert status["channel"] == "1.5.0"
+    assert "fallback_from" not in status
+
+
+def test_agys_updater_is_switched_off_for_the_root_job_that_checks_it(box: Box) -> None:
+    """verify runs each new binary as root. Were `--version` ever an ordinary
+    start, agy's updater would rewrite the copy just installed, and nothing
+    stops root writing there."""
+    box.run("6")
+
+    (line,) = box.agy_log.read_text().splitlines()
+    assert line.startswith("agy --version switch=true "), line
+    home = line.rsplit(" home=", 1)[1]
+    assert home.startswith("/") and not Path(home).exists(), "a throwaway HOME, since removed"
+
+
+def test_the_npm_harnesses_are_unaffected_by_agy_failing(box: Box) -> None:
+    result = box.run("6", STUB_AGY_MODE="offline")
+
+    assert result.returncode != 0
+    packages = box.status()["packages"]
+    assert packages["@anthropic-ai/claude-code"]["result"] == "ok"
+    assert packages["opencode-ai"]["result"] == "ok"
+    assert len([c for c in box.npm_calls() if c.startswith("npm install")]) == 2
+    assert box.current(CLAUDE) == box.current(OPENCODE) == "1.0.0"
+
+
+def test_agy_is_updated_from_its_manifest_and_never_through_npm() -> None:
+    script = harness_updates.update_script()
+    agy = registry.get("antigravity")
+
+    calls = [
+        line
+        for line in script.splitlines()
+        if line.split(" ", 1)[0] in {"update_one", "update_manifest", "clean_legacy", "prune"}
+    ]
+    assert calls == [
+        "update_one anthropic-ai-claude-code @anthropic-ai/claude-code claude",
+        "update_one opencode-ai opencode-ai opencode",
+        # After npm's, so a slow download delays only agy's own switch.
+        # The last word is what marks a container as using it: its sessions'
+        # ~/.gemini.
+        f"update_manifest antigravity {agy.managed_manifest} agy antigravity .gemini",
+        "clean_legacy @anthropic-ai/claude-code claude",
+        "clean_legacy opencode-ai opencode",
+        'prune "$ROOT"/anthropic-ai-claude-code',
+        'prune "$ROOT"/opencode-ai',
+        'prune "$ROOT"/antigravity',
+    ]
+
+
+def test_agy_resolves_to_moonphases_copy_then_the_images() -> None:
+    agy = registry.get("antigravity")
+
+    assert harness_updates.binary_candidates(agy, ["agy", "--continue"]) == [
+        "/opt/moonphase/harness/antigravity/current/bin/agy",
+        "/usr/local/bin/agy",
+    ]
+    assert harness_updates.install_slug(agy) == "antigravity"
+
+
 # --- when it runs at all --------------------------------------------------------
 
 
@@ -558,7 +1087,7 @@ def test_old_versions_are_pruned_keeping_current_and_previous(box: Box) -> None:
     for version in ("1.0.0", "2.0.0", "3.0.0"):
         box.run("6", "force", version=version)
 
-    for slug in (CLAUDE, OPENCODE):
+    for slug in (CLAUDE, OPENCODE, AGY):
         assert box.current(slug) == "3.0.0"
         assert box.previous(slug) == "2.0.0"
         assert box.versions(slug) == {"2.0.0", "3.0.0"}
@@ -681,25 +1210,35 @@ def test_login_shells_get_the_updater_switches(box: Box) -> None:
 
     lines = box.profile.read_text().splitlines()
     code = [line for line in lines if line and not line.startswith("#")]
-    assert code[:2] == ["export DISABLE_AUTOUPDATER=1", "export OPENCODE_DISABLE_AUTOUPDATE=1"]
+    assert code[:3] == [
+        "export DISABLE_AUTOUPDATER=1",
+        "export OPENCODE_DISABLE_AUTOUPDATE=1",
+        # agy ignores "1": only the exact string switches it off.
+        "export AGY_CLI_DISABLE_AUTO_UPDATE=true",
+    ]
     assert code[-1] == "export PATH"
     assert box.profile.stat().st_mode & 0o777 == 0o644
-    switches = _login(box, 'echo "$DISABLE_AUTOUPDATER$OPENCODE_DISABLE_AUTOUPDATE"', "/bin")
-    assert switches == "11"
+    switches = _login(
+        box,
+        'echo "$DISABLE_AUTOUPDATER$OPENCODE_DISABLE_AUTOUPDATE$AGY_CLI_DISABLE_AUTO_UPDATE"',
+        "/bin",
+    )
+    assert switches == "11true"
 
 
 def test_login_shells_find_moonphases_copy_first(box: Box) -> None:
     image = box.base / "image"
     _stub_harness(image / "claude", "image")
     _stub_harness(image / "opencode", "image")
+    _stub_harness(image / "agy", "image")
     box.run("6", version="2.0.0")
     path = f"{image}:/usr/bin:/bin"
 
-    for slug, binary in ((CLAUDE, "claude"), (OPENCODE, "opencode")):
+    for slug, binary in ((CLAUDE, "claude"), (OPENCODE, "opencode"), (AGY, "agy")):
         found = _login(box, f"command -v {binary}", path)
         # By its versioned path, so prune can see a shell's copy is in use.
         assert found == str((box.root / slug / "current").resolve() / "bin" / binary)
-        assert _login(box, binary, path) == "2.0.0"
+        assert _login(box, f"{binary} --version", path) == "2.0.0"
 
 
 @pytest.mark.parametrize("breakage", ["dangling", "not executable"])
@@ -717,19 +1256,22 @@ def test_login_shells_fall_back_to_the_images_copy(box: Box, breakage: str) -> N
     path = f"{image}:/usr/bin:/bin"
 
     assert _login(box, "command -v claude", path) == str(image / "claude")
+    others = [(box.root / slug / "current").resolve() / "bin" for slug in (AGY, OPENCODE)]
     assert _login(box, 'echo "$PATH"', path) == (
-        f"{(box.root / OPENCODE / 'current').resolve() / 'bin'}:{path}"
+        ":".join(str(d) for d in others) + f":{path}"
     ), "nothing added for the broken one"
 
 
 # --- the launcher -------------------------------------------------------------------
 
 
-def _stub_harness(path: Path, label: str) -> None:
+def _stub_harness(path: Path, label: str, switch: str = "DISABLE_AUTOUPDATER") -> None:
+    """A harness binary recording its label, arguments, the updater switch
+    named by `switch`, and whether the session's env file was read."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         "#!/bin/sh\n"
-        f'printf "%s|%s|%s|%s\\n" {label} "$*" "$DISABLE_AUTOUPDATER" "$FROM_PROFILE" '
+        f'printf "%s|%s|%s|%s\\n" {label} "$*" "${switch}" "$FROM_PROFILE" '
         '> "$HOME/ran"\n'
         'printf "%s\\n" "$0" > "$HOME/argv0"\n'
     )
@@ -743,7 +1285,11 @@ def _copies_under(tmp_path: Path, monkeypatch) -> None:
 
 
 def _launch(
-    tmp_path: Path, monkeypatch, *, extra_path: Path | None = None
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    extra_path: Path | None = None,
+    kind: str = "claude_code",
 ) -> subprocess.CompletedProcess[str]:
     if shutil.which("bash") is None:
         pytest.skip("bash is not installed")
@@ -751,10 +1297,12 @@ def _launch(
     space = SessionSpace(home=str(tmp_path / "home"), workdir=str(tmp_path / "work"))
     Path(space.home).mkdir(exist_ok=True)
     Path(space.workdir).mkdir(exist_ok=True)
+    harness = registry.get(kind)
     # A profile trying to switch the updater back on must not win.
-    Path(space.env_file).write_text("DISABLE_AUTOUPDATER=0\nFROM_PROFILE=yes\n")
+    Path(space.env_file).write_text(
+        "".join(f"{k}=0\n" for k in harness.managed_env()) + "FROM_PROFILE=yes\n"
+    )
 
-    harness = registry.get("claude_code")
     spec = harness.launch_spec(resume=True)
     launcher = tmp_path / "launch.sh"
     launcher.write_text(sessions._launcher_script(spec.command, space, harness, spec.env))
@@ -773,8 +1321,14 @@ def _launch(
     )
 
 
-def _run_launcher(tmp_path: Path, monkeypatch, *, extra_path: Path | None = None) -> str:
-    _launch(tmp_path, monkeypatch, extra_path=extra_path)
+def _run_launcher(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    extra_path: Path | None = None,
+    kind: str = "claude_code",
+) -> str:
+    _launch(tmp_path, monkeypatch, extra_path=extra_path, kind=kind)
     ran = (tmp_path / "home" / "ran").read_text().strip()
     # The status line Claude is always launched with is not what these test.
     return ran.replace(f" --settings {claude_code._STATUSLINE_SETTINGS}", "")
@@ -842,6 +1396,38 @@ def test_launcher_falls_back_to_the_bare_name(tmp_path: Path, monkeypatch) -> No
     assert ran == "path|--continue|1|yes"
 
 
+AGY_SWITCH = "AGY_CLI_DISABLE_AUTO_UPDATE"
+
+
+def _agy_args() -> str:
+    return " ".join(registry.get("antigravity").launch_spec(resume=True).command[1:])
+
+
+def test_launcher_runs_moonphases_agy_by_its_versioned_path(tmp_path: Path, monkeypatch) -> None:
+    """With its updater switched off however the env file tries to switch it
+    back on, and by the path prune looks for."""
+    real = tmp_path / "opt" / AGY / "1.4.3" / "bin" / "agy"
+    _stub_harness(real, "managed", switch=AGY_SWITCH)
+    (tmp_path / "opt" / AGY / "current").symlink_to("1.4.3")
+    _stub_harness(tmp_path / "image" / "agy", "image", switch=AGY_SWITCH)
+
+    ran = _run_launcher(tmp_path, monkeypatch, kind="antigravity")
+
+    assert ran == f"managed|{_agy_args()}|true|yes"
+    assert (tmp_path / "home" / "argv0").read_text().strip() == os.path.realpath(real)
+
+
+def test_launcher_falls_back_to_the_images_agy(tmp_path: Path, monkeypatch) -> None:
+    """Until the first update has finished, or when it never can."""
+    _stub_harness(tmp_path / "image" / "agy", "image", switch=AGY_SWITCH)
+    (tmp_path / "opt" / AGY).mkdir(parents=True)
+    (tmp_path / "opt" / AGY / "current").symlink_to("9.9.9")
+
+    ran = _run_launcher(tmp_path, monkeypatch, kind="antigravity")
+
+    assert ran == f"image|{_agy_args()}|true|yes"
+
+
 def test_launcher_exports_managed_env_after_the_env_file() -> None:
     harness = registry.get("claude_code")
     script = sessions._launcher_script(["claude"], SessionSpace(), harness, {"EXTRA": "a b"})
@@ -859,6 +1445,18 @@ def test_launcher_leaves_an_unmanaged_harness_alone() -> None:
     assert "harness_bin" not in script
     assert "AUTOUPDATE" not in script
     assert f"\n{' '.join(spec.command)}\n" in script
+
+
+def test_every_manifest_harness_turns_its_own_updater_off() -> None:
+    """agy's own updater replaces the binary it runs from in place. Where
+    Moonphase installs it `dev` cannot write, so a session's attempt fails —
+    after spawning a detached updater that outlives the session, on every
+    start."""
+    for harness in registry.available():
+        if harness.managed_manifest:
+            assert harness.managed_binary
+            assert not harness.managed_package, "one source or the other, never both"
+            assert harness.managed_env(), harness.kind
 
 
 def test_every_npm_harness_turns_its_own_updater_off() -> None:
@@ -901,6 +1499,24 @@ def test_own_calls_run_what_a_session_would(tmp_path: Path, monkeypatch, managed
 
     label = "managed" if managed else "image"
     assert _ran(argv, home) == f"{label}|a b c|1|"
+
+
+@pytest.mark.parametrize("managed", [True, False])
+def test_own_agy_calls_run_what_a_session_would(
+    tmp_path: Path, monkeypatch, managed: bool
+) -> None:
+    _copies_under(tmp_path, monkeypatch)
+    _stub_harness(tmp_path / "image" / "agy", "image", switch=AGY_SWITCH)
+    if managed:
+        _stub_harness(tmp_path / "opt" / AGY / "1.4.3" / "bin" / "agy", "managed", AGY_SWITCH)
+        (tmp_path / "opt" / AGY / "current").symlink_to("1.4.3")
+    home = tmp_path / "home"
+    home.mkdir()
+
+    argv = harness_updates.managed_command(registry.get("antigravity"), ["agy", "mcp", "list"])
+
+    label = "managed" if managed else "image"
+    assert _ran(argv, home) == f"{label}|mcp list|true|"
 
 
 def test_own_calls_leave_other_commands_alone() -> None:

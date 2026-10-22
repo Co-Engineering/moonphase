@@ -1,7 +1,15 @@
 import { useEffect, useState } from 'react'
 import { ClaudeConfigFields, type ClaudeConfigValue } from './ClaudeConfig'
 import { McpConnectDialog, type McpConnectTarget } from './McpConnectDialog'
-import { api, type ClaudeConfig, type McpHealth, type McpOAuthConnectionInfo } from '../lib/api'
+import {
+  api,
+  type ClaudeConfig,
+  type HarnessInfo,
+  type HarnessKind,
+  type McpHealth,
+  type McpOAuthConnectionInfo,
+} from '../lib/api'
+import { harnessCopy } from '../lib/harness'
 
 const EMPTY: ClaudeConfigValue = {
   claude_settings_json: null,
@@ -12,13 +20,35 @@ const EMPTY: ClaudeConfigValue = {
 }
 
 /**
+ * What applies, said up front, for a harness that is not Claude Code: the
+ * same fields are stored for every harness, but each reads them its own way,
+ * and Claude Code's settings.json is not one any other harness reads.
+ */
+function otherHarnessNote(harness: string, name: string): string {
+  if (harness === 'antigravity') {
+    return (
+      'Antigravity reads the MCP servers, the skills and the instructions — written ' +
+      'to ~/.gemini/AGENTS.md — plus the environment variables. Claude Code’s ' +
+      'permissions file does not apply to it, so it is not offered here.'
+    )
+  }
+  return `Claude Code’s permissions file does not apply to ${name}, so it is not offered here.`
+}
+
+/**
  * Project- or session-level Claude Code config, in a modal of its own.
  *
  * The same four editors the global Settings screen uses, at a narrower scope
  * — `load`/`save` are the only thing that differs between "this project" and
  * "this session", so the dialog does not need to know which one it is.
+ *
+ * Another harness gets the same dialog minus Claude Code's settings.json
+ * editor, which it never reads: offering it there invited permission rules
+ * that silently did nothing.
  */
 export function ClaudeConfigDialog({
+  harness = 'claude_code',
+  harnesses,
   title,
   note,
   load,
@@ -27,6 +57,9 @@ export function ClaudeConfigDialog({
   onSaved,
   mcpConnect,
 }: {
+  /** The project's harness. Claude Code's dialog is the one it always was. */
+  harness?: HarnessKind
+  harnesses?: HarnessInfo[] | null
   title: string
   note: string
   load: () => Promise<ClaudeConfig>
@@ -41,6 +74,7 @@ export function ClaudeConfigDialog({
    */
   mcpConnect?: Extract<McpConnectTarget, { scope: 'session' | 'project' }>
 }) {
+  const isClaude = harness === 'claude_code'
   const [value, setValue] = useState<ClaudeConfigValue>(EMPTY)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -135,6 +169,9 @@ export function ClaudeConfigDialog({
       <div className="card modal modal--wide" onClick={(e) => e.stopPropagation()}>
         <h2>{title}</h2>
         <p className="hint">{note}</p>
+        {!isClaude && (
+          <p className="hint">{otherHarnessNote(harness, harnessCopy(harness, harnesses).name)}</p>
+        )}
 
         {error && <div className="banner error">{error}</div>}
         {notice && <div className="banner">{notice}</div>}
@@ -145,10 +182,15 @@ export function ClaudeConfigDialog({
           <ClaudeConfigFields
             value={value}
             onChange={setValue}
-            claudeMdHint="Added to CLAUDE.md for this scope, alongside anything set above it"
+            claudeMdHint={
+              isClaude
+                ? 'Added to CLAUDE.md for this scope, alongside anything set above it'
+                : 'Added to the instructions for this scope, alongside anything set above it'
+            }
             onConnectMcp={onConnectMcp}
             onCheckMcp={onCheckMcp}
             mcpConnections={connections}
+            claudeSettings={isClaude}
           />
         )}
 

@@ -1,0 +1,40 @@
+
+  That file is missing.
+
+────────────────────────────────────────────────────────────
+> multi please
+
+▸ Thought Process
+  Running two things.
+
+● Ran (echo multi-one)
+● Explored 1 file (greet.txt) (ctrl+o to expand)
+
+  Both done.
+
+────────────────────────────────────────────────────────────
+> exit code please
+
+● Ran (ls /nonexistent-probe-dir) failed (ctrl+o to expand)
+
+  The listing failed.
+
+────────────────────────────────────────────────────────────
+> decline please
+
+● Ran (touch declined.txt) failed (ctrl+o to expand)
+
+Command
+  ⎿  User declined the tool call
+
+  ⎿  Interrupted · What should Antigravity CLI do instead?
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+>
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+? for shortcuts                                                                                     Gemini 3.1 Pro · low
+
+
+
+
+
+

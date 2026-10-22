@@ -47,7 +47,12 @@ export function NewProject({
 
   const [serverId, setServerId] = useState(defaultServerId ?? online[0]?.id ?? '')
   const [name, setName] = useState('')
-  const [harness, setHarness] = useState(usable[0]?.kind ?? '')
+  const [picked, setPicked] = useState(usable[0]?.kind ?? '')
+  // What the select shows is what gets sent. The list can arrive after the
+  // form first rendered — or change under it once a sign-in finishes — and a
+  // choice made from an older list, or none at all, would otherwise go to the
+  // backend as a harness the select is not showing.
+  const harness = usable.some((h) => h.kind === picked) ? picked : (usable[0]?.kind ?? '')
   const [environment, setEnvironment] = useState(environments[0]?.key ?? 'debian')
   const [repoUrl, setRepoUrl] = useState('')
   const [dockerAccess, setDockerAccess] = useState(false)
@@ -241,7 +246,7 @@ export function NewProject({
           <div className="row">
             <label>
               <span>Harness</span>
-              <select value={harness} onChange={(e) => setHarness(e.target.value)}>
+              <select value={harness} onChange={(e) => setPicked(e.target.value)}>
                 {usable.map((h) => (
                   <option key={h.kind} value={h.kind}>
                     {h.display_name}

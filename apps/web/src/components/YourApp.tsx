@@ -26,6 +26,8 @@ interface Props {
    * decision for whoever owns the project.
    */
   readOnly?: boolean
+  /** Who to ask to start it: the project's agent, which is not always Claude. */
+  agent?: string
 }
 
 /**
@@ -61,7 +63,13 @@ function isAutoindex(title: string | null | undefined): boolean {
   return /^(directory listing|index of)\b/i.test((title ?? '').trim())
 }
 
-export function YourApp({ projectId, projectName, running, readOnly = false }: Props) {
+export function YourApp({
+  projectId,
+  projectName,
+  running,
+  readOnly = false,
+  agent = 'Claude',
+}: Props) {
   const [ports, setPorts] = useState<DetectedPort[]>([])
   const [services, setServices] = useState<PreviewService[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -150,7 +158,7 @@ export function YourApp({ projectId, projectName, running, readOnly = false }: P
         {ports.length === 0 ? (
           <span className="hint">
             {loaded
-              ? 'Nothing is running yet — ask Claude to start it.'
+              ? `Nothing is running yet — ask ${agent} to start it.`
               : 'Looking for it…'}
           </span>
         ) : (

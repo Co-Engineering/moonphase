@@ -74,7 +74,9 @@ describe('Claude accounts in Settings', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Sign in with Claude' }))
 
-    await waitFor(() => expect(start).toHaveBeenCalledWith({ label: 'Client X' }))
+    // Named explicitly rather than left to the client's default: the card is
+    // one of several now, and each must say whose sign-in it is starting.
+    await waitFor(() => expect(start).toHaveBeenCalledWith({ label: 'Client X' }, 'claude_code'))
   })
 
   it('signs an existing account in again rather than adding one', async () => {
@@ -87,7 +89,7 @@ describe('Claude accounts in Settings', () => {
     fireEvent.click(again[1])
     fireEvent.click(screen.getByRole('button', { name: 'Sign in with Claude' }))
 
-    await waitFor(() => expect(start).toHaveBeenCalledWith({ accountId: 'a2' }))
+    await waitFor(() => expect(start).toHaveBeenCalledWith({ accountId: 'a2' }, 'claude_code'))
   })
 
   it('asks before removing one', async () => {

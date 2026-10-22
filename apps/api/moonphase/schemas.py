@@ -13,7 +13,7 @@ from .push import InvalidPushEndpoint
 from .push import validate_endpoint as _validate_push_endpoint
 
 SshAuthMode = Literal["password_bootstrap", "managed_key", "provided_key"]
-HarnessKindStr = Literal["claude_code", "opencode", "pydantic_ai"]
+HarnessKindStr = Literal["claude_code", "opencode", "pydantic_ai", "antigravity"]
 HarnessAuthModeStr = Literal["oauth", "api_key"]
 
 # What you grant someone.
@@ -385,6 +385,9 @@ class PromptOptionOut(BaseModel):
 class PromptOut(BaseModel):
     question: str
     options: list[PromptOptionOut] = Field(default_factory=list)
+    # A question only the terminal can answer — one picked with the arrow
+    # keys — so there is nothing to tap and nothing typed is sent to it.
+    terminal_only: bool = False
 
 
 class FeedOut(BaseModel):

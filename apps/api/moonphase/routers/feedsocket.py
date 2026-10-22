@@ -30,7 +30,7 @@ from uuid import UUID
 import asyncssh
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 
-from .. import activity, docker_remote, runtime, sessions, ssh
+from .. import activity, runtime, sessions, ssh
 from .. import harness as harness_registry
 from .. import transcript as transcript_reader
 from ..auth import Principal, websocket_principal
@@ -66,25 +66,22 @@ async def _stream_transcript(
     space,
     target,
 ) -> None:
-    """Follow the newest transcript file and push events as they are written.
+    """Follow the live transcript file and push events as they are written.
 
     Resumes from exactly where the initial page stopped. Following from the
     top of the file instead would replay everything the client just received,
     and following from the end would drop anything written in between.
+
+    Which file is live, and what counts as a different one, are decided
+    exactly as the initial page decided them (`transcript.live_file` and
+    `transcript.file_identity`), so the cursor the page handed over means the
+    same thing here.
     """
     directory = harness.transcript_dir(space)
     position = transcript_reader.Cursor.decode(start_cursor)
     current: str | None = position.filename or None
     process: asyncssh.SSHClientProcess | None = None
     buffer = ""
-
-    async def newest() -> str | None:
-        result = await docker_remote.exec_capture(
-            conn, container,
-            ["sh", "-c", f"ls -1t {shlex.quote(directory)}/*.jsonl 2>/dev/null | head -1"],
-            timeout=30,
-        )
-        return result.stdout.strip() or None
 
     async def start_tail(path: str, byte_offset: int) -> asyncssh.SSHClientProcess:
         command = (
@@ -97,21 +94,24 @@ async def _stream_transcript(
 
     try:
         while True:
-            path = await newest()
+            path = await transcript_reader.live_file(conn, container, harness, space)
             if path is None:
                 await asyncio.sleep(ROTATION_INTERVAL_SECONDS)
                 continue
 
-            filename = path.rsplit("/", 1)[-1]
-            if process is None or filename != current:
+            # By path, not name: every Antigravity conversation's file is
+            # called transcript_full.jsonl, so by name a new conversation would
+            # never be a rotation and this would follow the old file forever.
+            identity = transcript_reader.file_identity(directory, path)
+            if process is None or identity != current:
                 if process is not None:
                     with contextlib.suppress(Exception):
                         process.close()
                 # Resume where the page left off for the file it read; a
                 # rotation is a new run, so follow that one from its start.
-                offset = position.offset if filename == position.filename else 0
+                offset = position.offset if identity == position.filename else 0
                 process = await start_tail(path, offset)
-                current = filename
+                current = identity
                 buffer = ""
             try:
                 chunk = await asyncio.wait_for(
@@ -138,7 +138,7 @@ async def _stream_transcript(
                     record = json.loads(stripped)
                 except json.JSONDecodeError:
                     continue
-                events.extend(harness.parse_transcript_record(record))
+                events.extend(harness.parse_transcript_record(record, source=current))
 
             if events:
                 await _send(
@@ -175,7 +175,11 @@ async def _stream_prompt(
                 {
                     "type": "prompt",
                     "prompt": (
-                        {"question": parsed.question, "options": parsed.options}
+                        {
+                            "question": parsed.question,
+                            "options": parsed.options,
+                            "terminal_only": parsed.terminal_only,
+                        }
                         if parsed
                         else None
                     ),

@@ -128,6 +128,7 @@ nav:
       - guides/previews.md
       - guides/sharing.md
       - guides/configuring-claude.md
+      - guides/antigravity.md
       - guides/environments.md
       - guides/docker-access.md
       - guides/usage-and-limits.md

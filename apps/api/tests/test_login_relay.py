@@ -8,6 +8,12 @@ harvest whatever credential appears — from the part Anthropic owns.
 Both harvest shapes are covered, because which one a given flow produces is not
 something Moonphase gets to decide: a credentials file on disk, or a long-lived
 token printed to the terminal.
+
+The scripted harness keeps the defaults for the screens before the URL, for
+reading the URL and for recognising a rejected code, which is Claude Code's
+path. What a harness changes by overriding them — a picker before the URL, a
+URL wrapped the way agy wraps it, its own idea of a rejection — is covered
+without Docker in test_login_relay_hooks.py.
 """
 
 from __future__ import annotations

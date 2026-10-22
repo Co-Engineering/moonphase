@@ -29,7 +29,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from .. import docker_remote, plan_usage, profile, queries, runtime, ssh, usage
 from ..auth import Principal, current_principal
 from ..db import service_session, user_session
-from ..harness import SessionSpace, claude_code
+from ..harness import HarnessKind, SessionSpace, claude_code
 from ..harness import get as get_harness
 from ..schemas import (
     AccountUsageOut,
@@ -187,10 +187,12 @@ async def read_usage(
     overall, slices, cost = _totals(rows, overrides)
 
     # Which framing to lead with is a property of how they pay, so it is read
-    # from the credential rather than asked for.
+    # from the credential rather than asked for — their Claude Code one, since
+    # what this page counts and prices is Claude's transcripts. A Gemini API
+    # key added for Antigravity says nothing about how Claude is paid for.
     async with service_session() as conn:
         credential = await queries.first_harness_credential_privileged(
-            conn, str(principal.user_id)
+            conn, str(principal.user_id), harness=HarnessKind.CLAUDE_CODE
         )
     billing = str(credential or "unknown")
 
@@ -595,6 +597,17 @@ async def read_account_usage(
     by_account: dict[Any, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
     for session in session_rows:
         if not session.get("is_mine") or session.get("state") != "running":
+            continue
+        # Claude Code sessions only. An Antigravity session for which neither
+        # it nor its project names an account runs on Antigravity's default,
+        # but the fallback below is Claude's: it would be counted as a session
+        # on that account, have its HOME searched for Claude's credentials
+        # file and status-line reading, and push a real Claude session out of
+        # the few each account is allowed to look in. Every row from the
+        # database names its harness (the column is not null); a hand-built
+        # one that does not is taken as Claude Code, which is what a project
+        # runs when it names none.
+        if str(session.get("harness") or HarnessKind.CLAUDE_CODE) != HarnessKind.CLAUDE_CODE:
             continue
         project = projects.get(session["project_id"])
         if project is None:
