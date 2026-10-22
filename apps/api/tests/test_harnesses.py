@@ -9,6 +9,8 @@ inferred from documentation.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from moonphase import harness as registry
@@ -181,7 +183,7 @@ def test_the_runtime_image_checks_agy_against_its_checksum() -> None:
     assert step.index("sha512sum -c -") < step.index("tar -xzf") < step.index("install -m 0755")
     # Only the one member, and never Google's install.sh or `agy install`,
     # which as root would edit root's shell profiles.
-    assert "--no-same-owner antigravity;" in step
+    assert re.search(r"--no-same-owner antigravity \\$", step, re.MULTILINE)
     assert "install.sh" not in step
     assert "agy install" not in step
     # Its smoke test must not start the self-updater, which only "true" stops.

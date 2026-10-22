@@ -25,15 +25,18 @@ export function useHarnessAccounts(projects: Pick<Project, 'harness'>[] | null |
   }, [projects])
   const key = kinds.join(',')
 
-  const resource = useResource<ByHarness>(
-    async () =>
-      Object.fromEntries(
-        await Promise.all(
-          kinds.map(async (kind) => [kind, await api.harnessAccounts(kind)] as const),
-        ),
-      ),
-    [key],
-  )
+  // Each harness's list on its own: one that fails to load leaves the others
+  // in place, rather than every project's picker going empty with it.
+  const resource = useResource<ByHarness>(async () => {
+    const settled = await Promise.allSettled(kinds.map((kind) => api.harnessAccounts(kind)))
+    const loaded: ByHarness = {}
+    settled.forEach((result, i) => {
+      if (result.status === 'fulfilled') loaded[kinds[i]] = result.value
+    })
+    const failed = settled.find((result) => result.status === 'rejected')
+    if (failed && Object.keys(loaded).length === 0) throw failed.reason
+    return loaded
+  }, [key])
 
   return {
     ...resource,

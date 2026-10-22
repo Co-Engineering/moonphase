@@ -234,6 +234,9 @@ class Antigravity(Harness):
     # `profile_files` before its launch asks for an update — so a container
     # downloads agy once a session there runs it, and not before.
     managed_marker = ".gemini"
+    # `--continue` finds the conversation by the worktree's absolute path,
+    # and a duplicate's is a different one.
+    duplicate_resumes = False
 
     def managed_env(self) -> dict[str, str]:
         # Checked against the shipped 1.4.3 binary: only the exact string

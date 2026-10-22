@@ -906,3 +906,12 @@ def test_a_rejected_code_is_recognised() -> None:
         re.search(p, _pane("oauth-200x50"), re.IGNORECASE)
         for p in AGY.login_failure_patterns()
     )
+
+
+def test_a_duplicate_does_not_copy_conversations_it_cannot_reopen() -> None:
+    """agy reopens by the worktree's absolute path, so a duplicate's copy of
+    the source's conversations would be disk spent on nothing."""
+    from moonphase.harness import get
+
+    assert not get("antigravity").duplicate_resumes
+    assert get("claude_code").duplicate_resumes

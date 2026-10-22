@@ -1369,12 +1369,13 @@ async def duplicate_session(
     await sessions.ensure_home(conn_ssh, ctx.container, space)
 
     harness = harness_registry.get(ctx.harness)
-    await docker_remote.copy_path(
-        conn_ssh,
-        ctx.container,
-        harness.transcript_dir(source_space),
-        harness.transcript_dir(space),
-    )
+    if harness.duplicate_resumes:
+        await docker_remote.copy_path(
+            conn_ssh,
+            ctx.container,
+            harness.transcript_dir(source_space),
+            harness.transcript_dir(space),
+        )
 
     try:
         await sessions.ensure_session(

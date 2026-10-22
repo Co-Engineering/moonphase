@@ -88,6 +88,27 @@ def _match(pane: str, patterns: tuple[str, ...]) -> str | None:
     return None
 
 
+# A line that is nothing but a box rule, as a harness draws around its input.
+_RULE_LINE = re.compile(r"\s*─{20,}\s*")
+
+
+def _input_box_showing(pane: str) -> bool:
+    """Whether the harness's own input box is at the bottom of the pane.
+
+    The arrow-key screens take the whole terminal and replace it, so with the
+    box showing, a match for one of their phrases is text in the scrollback —
+    the agent quoting it, say — not a question waiting for someone.
+    """
+    tail = [line for line in pane.rstrip().splitlines() if line.strip()][-6:]
+    return sum(1 for line in tail if _RULE_LINE.fullmatch(line)) >= 2
+
+
+def _arrow_match(pane: str, signals: ActivitySignals) -> str | None:
+    if not signals.arrow_key_patterns or _input_box_showing(pane):
+        return None
+    return _match(pane, signals.arrow_key_patterns)
+
+
 def _question_excerpt(pane: str, matched: str) -> str:
     """The line the prompt appeared on, trimmed for a notification body."""
     for line in reversed(pane.splitlines()):
@@ -115,7 +136,7 @@ def classify(
     if _match(pane, signals.busy_patterns):
         return Snapshot(state=ActivityState.WORKING, digest=digest)
 
-    matched = _match(pane, signals.prompt_patterns + signals.arrow_key_patterns)
+    matched = _match(pane, signals.prompt_patterns) or _arrow_match(pane, signals)
     if matched:
         return Snapshot(
             state=ActivityState.AWAITING_INPUT,
@@ -223,7 +244,7 @@ def parse_prompt(pane: str, signals: ActivitySignals) -> Prompt | None:
     matters: a long session's scrollback contains earlier prompts, and the one
     being asked now is the last one.
     """
-    arrow = _match(pane, signals.arrow_key_patterns)
+    arrow = _arrow_match(pane, signals)
     if arrow is not None:
         # Checked against the shipped agy 1.4.3: these screens are cleared once
         # answered and leave nothing in the scrollback, so a match is the
@@ -373,7 +394,14 @@ async def send_answer(
                 f"{harness.display_name} is asking something only the terminal "
                 f"can answer: {prompt.question} Open the terminal to answer it."
             )
-        if signals.select_submits and prompt is not None and _OPTION_KEY.fullmatch(key):
+        if signals.select_submits and prompt is not None:
+            if not _OPTION_KEY.fullmatch(key):
+                # Its Enter would confirm the highlighted option, which
+                # starts out as "Yes".
+                raise NeedsTerminal(
+                    f"{harness.display_name} is waiting on a choice: {prompt.question} "
+                    "Answer it with one of its options first, or in the terminal."
+                )
             enter = False
     await sessions.send_keys(conn, container, key, session=session, enter=enter)
 

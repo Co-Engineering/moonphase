@@ -123,6 +123,10 @@ class Harness(abc.ABC):
     # few hundred megabytes, and most containers never run it. None means
     # every container keeps it current, as npm harnesses always have been.
     managed_marker: str | None = None
+    # Whether a duplicate, resumed in its own worktree, picks up the copied
+    # transcripts. False means it starts a fresh conversation, so duplicating
+    # a session does not copy them: they would only take up disk.
+    duplicate_resumes: bool = True
 
     def managed_env(self) -> dict[str, str]:
         """Environment the launcher exports after the session's env file.

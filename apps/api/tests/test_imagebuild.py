@@ -71,6 +71,19 @@ def test_recipe_installs_agy_without_googles_installer() -> None:
     assert any("--proto '=https'" in line for line in commands)
 
 
+def test_an_unreachable_agy_download_does_not_fail_the_build() -> None:
+    """Every image gets the step, Antigravity used or not; Google's endpoint
+    being down must not stop every project from starting. Moonphase's updater
+    installs agy later instead."""
+    recipe = imagebuild.recipe_for("debian:bookworm-slim", None)
+    step = recipe[recipe.rindex("RUN ", 0, recipe.index("/usr/local/bin/agy")) :]
+    step = step[: step.index("\n\n")]
+
+    assert "set -e" not in step
+    assert "rm -f /usr/local/bin/agy" in step
+    assert "WARNING: could not install agy" in step
+
+
 def test_recipe_lets_the_harnesss_clipboard_copy_reach_the_browser() -> None:
     # With no X server and no Wayland in here, the harness's own clipboard
     # copy falls back to an OSC 52 escape wrapped in tmux's DCS passthrough

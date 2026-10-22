@@ -284,26 +284,30 @@ RUN env UV_TOOL_BIN_DIR=/usr/local/bin UV_TOOL_DIR=/opt/uv-tools \
 # gets the switch and a throwaway HOME too. 1.4.3's `--version` neither starts
 # the updater nor writes a file, checked against the binary; a later release
 # doing either would still leave nothing of root's in the image.
-RUN set -eux; \\
-    arch="$(dpkg --print-architecture)"; \\
-    case "$arch" in \\
-      amd64|arm64) ;; \\
-      *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \\
-    esac; \\
+#
+# Not fatal. Every image gets this step, Antigravity used or not, so Google's
+# endpoint being down or blocked would otherwise stop every project on the
+# server from starting; without it here, Moonphase's updater installs agy the
+# first time a session uses it. A chain of && rather than `set -e`, which a
+# failure test turns off.
+RUN arch="$(dpkg --print-architecture)"; \\
     tmp="$(mktemp -d)"; \\
-    curl -fsSL --proto '=https' --proto-redir '=https' --retry 3 \\
-      "{AGY_MANIFEST_BASE}/linux_${{arch}}.json" -o "$tmp/manifest.json"; \\
-    url="$(jq -er .url "$tmp/manifest.json")"; \\
-    sha512="$(jq -er .sha512 "$tmp/manifest.json")"; \\
-    case "$url" in \\
-      https://?*) ;; \\
-      *) echo "agy: the manifest names no https download" >&2; exit 1 ;; \\
-    esac; \\
-    curl -fsSL --proto '=https' --proto-redir '=https' --retry 3 "$url" -o "$tmp/agy.tar.gz"; \\
-    (cd "$tmp" && echo "$sha512  agy.tar.gz" | sha512sum -c -); \\
-    tar -xzf "$tmp/agy.tar.gz" -C "$tmp" --no-same-owner antigravity; \\
-    install -m 0755 "$tmp/antigravity" /usr/local/bin/agy; \\
-    AGY_CLI_DISABLE_AUTO_UPDATE=true HOME="$tmp" agy --version; \\
+    if {{ [ "$arch" = amd64 ] || [ "$arch" = arm64 ]; }} \\
+      && curl -fsSL --proto '=https' --proto-redir '=https' --retry 3 \\
+           "{AGY_MANIFEST_BASE}/linux_${{arch}}.json" -o "$tmp/manifest.json" \\
+      && url="$(jq -er .url "$tmp/manifest.json")" \\
+      && sha512="$(jq -er .sha512 "$tmp/manifest.json")" \\
+      && case "$url" in https://?*) true ;; *) false ;; esac \\
+      && curl -fsSL --proto '=https' --proto-redir '=https' --retry 3 "$url" -o "$tmp/agy.tar.gz" \\
+      && (cd "$tmp" && echo "$sha512  agy.tar.gz" | sha512sum -c -) \\
+      && tar -xzf "$tmp/agy.tar.gz" -C "$tmp" --no-same-owner antigravity \\
+      && install -m 0755 "$tmp/antigravity" /usr/local/bin/agy \\
+      && AGY_CLI_DISABLE_AUTO_UPDATE=true HOME="$tmp" agy --version; then \\
+      echo "agy is in place"; \\
+    else \\
+      rm -f /usr/local/bin/agy; \\
+      echo "WARNING: could not install agy; Moonphase installs it when a session first uses it" >&2; \\
+    fi; \\
     rm -rf "$tmp"
 {extra_step}
 # Non-root by default, at a fixed uid so the API can chown the named volumes.

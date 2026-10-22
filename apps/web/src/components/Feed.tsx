@@ -731,11 +731,13 @@ export function Feed({
             placeholder={
               readOnly
                 ? 'Read-only — this session is someone else\u2019s'
-                : prompt
-                  ? 'Tap a choice above to answer'
-                  : activity === 'working'
-                    ? `${agent} is working…`
-                    : 'Send a message'
+                : prompt?.terminal_only
+                  ? 'Waiting on an answer in the terminal'
+                  : prompt
+                    ? 'Tap a choice above to answer'
+                    : activity === 'working'
+                      ? `${agent} is working…`
+                      : 'Send a message'
             }
             readOnly={readOnly}
             onClick={() => readOnly && onRefusedInput?.()}

@@ -85,6 +85,18 @@ describe('loading accounts for the harnesses projects use', () => {
     expect(listed).toHaveBeenCalledWith('antigravity')
   })
 
+  it('keeps Claude’s accounts when another harness’s fail to load', async () => {
+    vi.spyOn(api, 'harnessAccounts').mockImplementation(async (harness = 'claude_code') => {
+      if (harness === 'antigravity') throw new Error('Not Found')
+      return claudeAccounts
+    })
+
+    const { result } = renderHook(() => useHarnessAccounts([claudeProject, gravityProject]))
+
+    await waitFor(() => expect(result.current.accountsFor(claudeProject)).toEqual(claudeAccounts))
+    expect(result.current.accountsFor(gravityProject)).toEqual([])
+  })
+
   it('asks for Claude’s alone while no project uses anything else', async () => {
     const listed = vi.spyOn(api, 'harnessAccounts').mockResolvedValue(claudeAccounts)
 

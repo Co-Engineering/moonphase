@@ -175,15 +175,15 @@ async def test_a_number_with_no_prompt_on_screen_is_a_message(container) -> None
     assert fake.calls == [CAPTURE, _typed("2"), ENTER]
 
 
-async def test_a_typed_message_is_still_sent_with_enter(container) -> None:
-    """Only a bare option number can be an answer on its own; anything else
-    is sent exactly as it always was. The pane is read first, but only to
-    make sure it is not a question the terminal alone can answer."""
+async def test_a_typed_message_is_refused_while_a_choice_is_showing(container) -> None:
+    """Its Enter would confirm whatever the picker highlights, and that starts
+    out as "1. Yes" — approving a command nobody saw."""
     fake = container(AGY_PERMISSION)
 
-    await activity.send_answer(None, "c", AGY, "no, use pytest instead", session=SESSION)
+    with pytest.raises(activity.NeedsTerminal, match="waiting on a choice"):
+        await activity.send_answer(None, "c", AGY, "no, use pytest instead", session=SESSION)
 
-    assert fake.calls == [CAPTURE, _typed("no, use pytest instead"), ENTER]
+    assert fake.calls == [CAPTURE]
 
 
 # agy's folder-trust question, as it draws it on a session's first start.
@@ -314,3 +314,25 @@ async def test_answering_from_the_waiting_list_follows_the_same_rule(
     )
 
     assert fake.calls == expected
+
+
+async def test_a_typed_message_with_no_prompt_showing_is_sent_with_enter(container) -> None:
+    fake = container(AGY_IDLE)
+
+    await activity.send_answer(None, "c", AGY, "no, use pytest instead", session=SESSION)
+
+    assert fake.calls == [CAPTURE, _typed("no, use pytest instead"), ENTER]
+
+
+async def test_an_agent_quoting_a_terminal_only_question_does_not_lock_the_feed(
+    container,
+) -> None:
+    """The arrow-key screens replace agy's input box; with the box showing,
+    the phrase is scrollback."""
+    pane = "Do you trust the contents of this project?\n" + AGY_IDLE
+    fake = container(pane)
+
+    await activity.send_answer(None, "c", AGY, "carry on", session=SESSION)
+
+    assert fake.calls == [CAPTURE, _typed("carry on"), ENTER]
+    assert activity.parse_prompt(pane, AGY.activity_signals()) is None
