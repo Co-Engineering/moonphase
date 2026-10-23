@@ -91,13 +91,15 @@ async def attention(
             log.debug("attention: %s unreachable (%s)", project_id, exc)
             return []
 
-        signals = harness_registry.get(ctx.harness).activity_signals()
         out: list[AttentionOut] = []
         for row in rows:
             name = str(row["tmux_session"])
             pane = panes.get(name)
             if pane is None:
                 continue
+            signals = harness_registry.get(
+                str(row.get("harness") or ctx.harness)
+            ).activity_signals()
             parsed = activity.parse_prompt(pane, signals)
             out.append(
                 AttentionOut(
@@ -278,13 +280,14 @@ async def answer_from_anywhere(
     try:
         ctx = await runtime.load_project_context(principal.claims, project_id)
         conn_ssh = await ssh.pool.get(ctx.target)
+        session_harness = str(row.get("harness") or ctx.harness)
         # The same rule as the feed's own answer: Enter after it, except for
         # a tapped option on a harness that confirms on the digit alone, where
         # the Enter would land on the next prompt and approve its default.
         await activity.send_answer(
             conn_ssh,
             ctx.container,
-            harness_registry.get(ctx.harness),
+            harness_registry.get(session_harness),
             keys,
             session=session_name,
         )
@@ -316,7 +319,7 @@ async def _own_session(principal: Principal, project_id: UUID, name: str):
     except NotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     space = sessions.space_for(session_name, row.get("workdir"))
-    return ctx, space, session_name
+    return ctx, space, session_name, row
 
 
 @router.get(
@@ -328,7 +331,7 @@ async def list_checkpoints(
     principal: Principal = Depends(current_principal),
 ) -> CheckpointsOut:
     """Where you have saved, and whether there is unsaved work."""
-    ctx, space, _ = await _own_session(principal, project_id, name)
+    ctx, space, _, _ = await _own_session(principal, project_id, name)
     conn_ssh = await ssh.pool.get(ctx.target)
     try:
         found = await checkpoints.board(conn_ssh, ctx.container, space.workdir)
@@ -360,11 +363,12 @@ async def save_checkpoint(
     principal: Principal = Depends(current_principal),
 ) -> CheckpointsOut:
     """Save everything as it is now, under a name."""
-    ctx, space, session_name = await _own_session(principal, project_id, name)
+    ctx, space, session_name, row = await _own_session(principal, project_id, name)
     conn_ssh = await ssh.pool.get(ctx.target)
     label = (payload.label or "").strip() or checkpoints.default_label()
+    session_harness = str(row.get("harness") or ctx.harness)
     workspace_profile = await runtime.load_session_profile(
-        principal.claims, ctx.project, ctx.harness, session_name
+        principal.claims, ctx.project, session_harness, session_name
     )
     try:
         ok, detail = await checkpoints.save(
@@ -398,7 +402,7 @@ async def restore_checkpoint(
     Nothing is destroyed: the current state is saved as its own point first, so
     the undo has an undo.
     """
-    ctx, space, session_name = await _own_session(principal, project_id, name)
+    ctx, space, session_name, row = await _own_session(principal, project_id, name)
     if not checkpoint.isalnum() or len(checkpoint) < 7:
         raise HTTPException(status_code=422, detail="That is not a save point.")
 
@@ -408,8 +412,9 @@ async def restore_checkpoint(
     if target is None:
         raise HTTPException(status_code=404, detail="That save point is no longer there.")
 
+    session_harness = str(row.get("harness") or ctx.harness)
     workspace_profile = await runtime.load_session_profile(
-        principal.claims, ctx.project, ctx.harness, session_name
+        principal.claims, ctx.project, session_harness, session_name
     )
     try:
         ok, detail = await checkpoints.restore(

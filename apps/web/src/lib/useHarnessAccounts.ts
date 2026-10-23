@@ -1,28 +1,29 @@
 import { useMemo } from 'react'
-import { api, type HarnessAccount, type HarnessKind, type Project } from './api'
+import { api, type HarnessAccount, type HarnessKind, type Project, type Session } from './api'
 import { useResource } from './useResource'
 
 type ByHarness = Partial<Record<HarnessKind, HarnessAccount[]>>
 
 /**
- * Your accounts, harness by harness, for the harnesses your projects run.
+ * Your accounts, harness by harness, for the harnesses your projects and sessions run.
  *
  * An account belongs to one harness, and the backend refuses one that is not
- * the project's harness's with "No such account.". The app used to load a
- * single list — Claude's — and hand it to every project, so an Antigravity
- * project's pickers offered Claude accounts that could only ever fail. Each
- * project now gets `accountsFor(project)`, its own harness's list.
+ * the session's harness's with "No such account.". Each project or session
+ * gets `accountsFor(target)`, its own harness's list.
  *
- * Claude Code's are always loaded, exactly as before; another harness's once
- * a project here uses it. The list of harnesses only changes when a project
- * on a new one appears, so the projects poll does not refetch accounts.
+ * Claude Code's and Antigravity's accounts are always loaded; another harness's
+ * once a project or session here uses it.
  */
-export function useHarnessAccounts(projects: Pick<Project, 'harness'>[] | null | undefined) {
+export function useHarnessAccounts(
+  projects: Pick<Project, 'harness'>[] | null | undefined,
+  sessions?: Pick<Session, 'harness'>[] | null | undefined,
+) {
   const kinds = useMemo(() => {
     const found = new Set<HarnessKind>(['claude_code'])
     for (const project of projects ?? []) if (project.harness) found.add(project.harness)
+    for (const session of sessions ?? []) if (session.harness) found.add(session.harness)
     return [...found].sort()
-  }, [projects])
+  }, [projects, sessions])
   const key = kinds.join(',')
 
   // Each harness's list on its own: one that fails to load leaves the others
@@ -40,8 +41,10 @@ export function useHarnessAccounts(projects: Pick<Project, 'harness'>[] | null |
 
   return {
     ...resource,
-    /** A project's own harness's accounts; none until they have loaded. */
-    accountsFor: (project: Pick<Project, 'harness'>): HarnessAccount[] =>
-      resource.data?.[project.harness ?? 'claude_code'] ?? [],
+    /** A project or session's own harness's accounts; none until they have loaded. */
+    accountsFor: (target: Pick<Project, 'harness'> | HarnessKind | string): HarnessAccount[] => {
+      const kind = typeof target === 'string' ? target : (target.harness ?? 'claude_code')
+      return resource.data?.[kind as HarnessKind] ?? []
+    },
   }
 }

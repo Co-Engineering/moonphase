@@ -322,6 +322,8 @@ class SessionStartIn(BaseModel):
     # Which tmux session. Left out, it resolves to the caller's own — never
     # somebody else's, which would run their subscription on your keystrokes.
     session: str | None = None
+    # Which harness to run on restart. Left out, it keeps the session's current harness.
+    harness: HarnessKindStr | None = None
 
 
 class SessionCreateIn(BaseModel):
@@ -343,6 +345,8 @@ class SessionCreateIn(BaseModel):
     # Which of the caller's accounts to run on. Left out, the project's
     # account, then the caller's default.
     account_id: UUID | None = None
+    # Which harness to run in this session. Left out, defaults to the project's harness.
+    harness: HarnessKindStr | None = None
 
 
 class DiffLineOut(BaseModel):

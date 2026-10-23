@@ -166,7 +166,8 @@ async def _start(
     # is touched: otherwise an Antigravity session would have `claude mcp
     # login` run in a HOME where no Claude Code configuration names the
     # server, and fail with Claude's complaint rather than this one.
-    if ctx.harness != HarnessKind.CLAUDE_CODE:
+    session_harness = str(row.get("harness") or ctx.harness)
+    if session_harness != HarnessKind.CLAUDE_CODE:
         raise HTTPException(
             status_code=409,
             detail="Connecting MCP servers through OAuth is only available for "
@@ -174,7 +175,7 @@ async def _start(
         )
 
     profile = await runtime.load_session_profile(
-        principal.claims, ctx.project, ctx.harness, session_name
+        principal.claims, ctx.project, session_harness, session_name
     )
     if not profile.has_harness_auth:
         raise HTTPException(
@@ -196,7 +197,7 @@ async def _start(
         await sessions.ensure_session(
             conn_ssh,
             ctx.container,
-            harness_kind=ctx.harness,
+            harness_kind=session_harness,
             workspace_profile=profile,
             session=session_name,
             space=space,
@@ -242,14 +243,15 @@ async def _check(
             "MCP servers.",
         )
 
-    if ctx.harness != HarnessKind.CLAUDE_CODE:
+    session_harness = str(row.get("harness") or ctx.harness)
+    if session_harness != HarnessKind.CLAUDE_CODE:
         raise HTTPException(
             status_code=409,
             detail="Checking MCP connections is only available for Claude Code.",
         )
 
     profile = await runtime.load_session_profile(
-        principal.claims, ctx.project, ctx.harness, session_name
+        principal.claims, ctx.project, session_harness, session_name
     )
 
     try:
@@ -261,14 +263,14 @@ async def _check(
         await sessions.ensure_session(
             conn_ssh,
             ctx.container,
-            harness_kind=ctx.harness,
+            harness_kind=session_harness,
             workspace_profile=profile,
             session=session_name,
             space=space,
         )
         # As a session runs it: the same binary, with its updater off.
         command = harness_updates.managed_command(
-            harness_registry.get(ctx.harness), ["claude", "mcp", "list"]
+            harness_registry.get(session_harness), ["claude", "mcp", "list"]
         )
         result = await docker_remote.exec_capture(
             conn_ssh, ctx.container, command, timeout=45.0
