@@ -106,7 +106,7 @@ export function Settings({ onClose, onSaved }: Props) {
           {(
             [
               ['accounts', 'Accounts'],
-              ['harness', 'Claude'],
+              ['harness', 'Agent settings'],
               ['environments', 'Environments'],
               ['workspace', 'Workspace'],
               // Only for whoever administers the instance. Everyone else has no
@@ -1065,7 +1065,8 @@ function HarnessSettingsTab({
       <ClaudeConfigFields
         value={config}
         onChange={setConfig}
-        claudeMdHint="Written to ~/.claude/CLAUDE.md, so it applies to every project"
+        claudeMdHint="Written to ~/.claude/CLAUDE.md for Claude Code and ~/.gemini/AGENTS.md for Antigravity, so it applies to every project"
+        instructionTabLabel="Instructions"
         onConnectMcp={(name) => void onConnectMcp(name)}
         onCheckMcp={onCheckMcp}
         mcpConnections={connections}

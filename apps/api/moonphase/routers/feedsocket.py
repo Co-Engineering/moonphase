@@ -220,8 +220,6 @@ async def project_feed(
         await websocket.close(code=4409)
         return
 
-    harness = harness_registry.get(ctx.harness)
-
     try:
         space, _row = await runtime.load_session_space(
             principal.claims, project_id, session_name
@@ -230,6 +228,9 @@ async def project_feed(
         await _send(websocket, {"type": "error", "message": str(exc)})
         await websocket.close(code=4404)
         return
+
+    session_harness = str(_row.get("harness") or ctx.harness)
+    harness = harness_registry.get(session_harness)
 
     try:
         conn_ssh = await ssh.pool.get(ctx.target)

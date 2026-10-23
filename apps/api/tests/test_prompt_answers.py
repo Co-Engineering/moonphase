@@ -260,6 +260,11 @@ def project(monkeypatch: pytest.MonkeyPatch):
         async def load_project_context(_claims: Any, _project_id: Any, **_: Any) -> _Context:
             return _Context(harness=kind)
 
+        async def load_session_space(
+            _claims: Any, _project_id: Any, _name: str
+        ) -> tuple[Any, dict[str, Any]]:
+            return (None, {"harness": kind})
+
         async def get_pool(_target: Any) -> object:
             return object()
 
@@ -271,6 +276,7 @@ def project(monkeypatch: pytest.MonkeyPatch):
             yield None
 
         monkeypatch.setattr(runtime, "load_project_context", load_project_context)
+        monkeypatch.setattr(runtime, "load_session_space", load_session_space)
         monkeypatch.setattr(ssh.pool, "get", get_pool)
         monkeypatch.setattr(queries, "get_sessions", get_sessions)
         monkeypatch.setattr(review, "user_session", user_session)

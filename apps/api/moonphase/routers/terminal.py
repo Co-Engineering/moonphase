@@ -357,8 +357,13 @@ async def project_terminal(
             if container.state != "running":
                 await docker_remote.start(conn_ssh, ctx.container)
 
+            session_harness = (
+                str(session_row.get("harness") or ctx.harness)
+                if session_row
+                else ctx.harness
+            )
             workspace_profile = await runtime.load_session_profile(
-                principal.claims, ctx.project, ctx.harness, session_name
+                principal.claims, ctx.project, session_harness, session_name
             )
             if not session_row:
                 # First attach for this person: give them a worktree before
@@ -381,7 +386,7 @@ async def project_terminal(
             await sessions.ensure_session(
                 conn_ssh,
                 ctx.container,
-                harness_kind=ctx.harness,
+                harness_kind=session_harness,
                 workspace_profile=workspace_profile,
                 session=session_name,
                 space=space,

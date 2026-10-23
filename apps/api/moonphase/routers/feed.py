@@ -74,13 +74,15 @@ async def get_feed(
     if ctx.project["status"] != "running":
         return FeedOut(available=False, activity="stopped", cursor=cursor or "")
 
-    harness = harness_registry.get(ctx.harness)
     try:
         space, _row = await runtime.load_session_space(
             principal.claims, project_id, session_name
         )
     except NotFound:
         return FeedOut(available=False, activity="unknown", cursor=cursor or "")
+
+    session_harness = str(_row.get("harness") or ctx.harness)
+    harness = harness_registry.get(session_harness)
 
     try:
         conn_ssh = await ssh.pool.get(ctx.target)
@@ -139,7 +141,15 @@ async def answer(
     except NotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    harness = harness_registry.get(ctx.harness)
+    try:
+        _space, _row = await runtime.load_session_space(
+            principal.claims, project_id, session_name
+        )
+        session_harness = str(_row.get("harness") or ctx.harness)
+    except (NotFound, Exception):
+        session_harness = ctx.harness
+
+    harness = harness_registry.get(session_harness)
     conn_ssh = await ssh.pool.get(ctx.target)
     try:
         # Enter after it, as ever — except for a tapped option on a harness

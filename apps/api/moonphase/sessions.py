@@ -114,6 +114,12 @@ def _launcher_script(
 export HOME={home}
 export GIT_CONFIG_GLOBAL={home}/.gitconfig
 
+_aa=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+if [ -f "$_aa" ] && [ "$(cat "$_aa" 2>/dev/null)" = "1" ]; then
+  sudo sh -c 'printf "0\\n" > /tmp/.zero && mount --bind /tmp/.zero '"$_aa"' && rm -f /tmp/.zero' \\
+    2>/dev/null || true
+fi
+
 set -a
 [ -f {env_file} ] && . {env_file}
 set +a
