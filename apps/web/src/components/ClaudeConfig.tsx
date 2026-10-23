@@ -919,6 +919,7 @@ export function ClaudeConfigFields({
   mcpConnections,
   showEnvVars = true,
   claudeSettings = true,
+  instructionTabLabel,
 }: {
   value: ClaudeConfigValue
   onChange: (next: ClaudeConfigValue) => void
@@ -942,6 +943,8 @@ export function ClaudeConfigFields({
    * instructions tab drops a file name that is Claude's.
    */
   claudeSettings?: boolean
+  /** Override label for instructions tab. Defaults to CLAUDE.md or Instructions. */
+  instructionTabLabel?: string
 }) {
   const [section, setSection] = useState<ClaudeConfigSection>(claudeSettings ? 'settings' : 'mcp')
 
@@ -950,7 +953,7 @@ export function ClaudeConfigFields({
       ? ([['settings', 'Permissions & behaviour']] as [ClaudeConfigSection, string][])
       : []),
     ['mcp', 'MCP servers'],
-    ['md', claudeSettings ? 'CLAUDE.md' : 'Instructions'],
+    ['md', instructionTabLabel ?? (claudeSettings ? 'CLAUDE.md' : 'Instructions')],
     ['skills', 'Skills'],
     ...(showEnvVars ? ([['env', 'Environment variables']] as [ClaudeConfigSection, string][]) : []),
   ]

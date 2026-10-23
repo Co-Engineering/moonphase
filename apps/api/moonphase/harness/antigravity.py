@@ -318,18 +318,29 @@ class Antigravity(Harness):
     def profile_file_target(self, space: SessionSpace) -> str | None:
         return f"{_app_dir(space)}/settings.json"
 
-    # No `seed_config_files`, deliberately. Checked against the shipped 1.4.3
-    # binary: the colour-scheme picker on a new HOME's first start is not
-    # skipped by a `colorScheme` in settings.json — with "terminal" or "dark"
-    # it still opens, on "terminal". What does skip it is
-    # `cache/onboarding.json`, but either of the flags in that file skips the
-    # "Terms of Service & Data Use" screen along with it, and that screen is
-    # an agreement plus a data-sharing box ticked by default: the user's to
-    # answer, not Moonphase's. Folder trust comes straight after, and is left
-    # to the user for the same reason (it is never seeded into
-    # `trustedWorkspaces`). So a session's first start shows all three. The
-    # sign-in relay needs nothing seeded either: agy asks for the sign-in
-    # before any of them.
+    def seed_config_files(self, space: SessionSpace) -> dict[str, str]:
+        """First-run config to skip first-run wizard prompts in clean session homes.
+
+        Seeds `cache/onboarding.json` to bypass the color scheme, terms of service,
+        and onboarding wizard, and seeds `trustedWorkspaces` in `settings.json` so
+        the session opens directly on a ready prompt instead of blocking on setup.
+        """
+        return {
+            f"{_app_dir(space)}/cache/onboarding.json": json.dumps(
+                {
+                    "consumerOnboardingComplete": True,
+                    "enterpriseOnboardingComplete": False,
+                    "onboardingComplete": True,
+                },
+                indent=2,
+            ),
+            f"{_app_dir(space)}/settings.json": json.dumps(
+                {
+                    "trustedWorkspaces": [space.workdir],
+                },
+                indent=2,
+            ),
+        }
 
     def merge_into_profile_file(self, existing: str | None, profile: Any) -> str | None:
         """Point agy at the credential this session runs on.

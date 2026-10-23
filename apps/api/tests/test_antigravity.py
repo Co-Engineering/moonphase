@@ -286,13 +286,22 @@ def test_nothing_this_harness_writes_is_ever_empty(profile: WorkspaceProfile) ->
     assert all(contents for contents in written)
 
 
-def test_nothing_is_seeded_because_the_only_skip_also_answers_the_terms() -> None:
-    """A `colorScheme` in settings.json ("terminal" and "dark" both tried) did
-    not skip the colour picker on a fresh HOME. What does is
-    `cache/onboarding.json`, and either of its flags skips the Terms of
-    Service & Data Use screen with it — the user's agreement and a data
-    sharing box ticked by default — so nothing is seeded at all."""
-    assert AGY.seed_config_files(ALICE) == {}
+def test_first_run_config_is_seeded_to_skip_setup_wizards() -> None:
+    """A fresh session HOME gets onboarding.json and trustedWorkspaces seeded so
+    the user lands directly on a usable prompt instead of being blocked on color
+    scheme, terms, and trust questions on every session start."""
+    seeded = AGY.seed_config_files(ALICE)
+    onboarding_path = f"{ALICE.home}/.gemini/antigravity-cli/cache/onboarding.json"
+    settings_path = f"{ALICE.home}/.gemini/antigravity-cli/settings.json"
+    assert onboarding_path in seeded
+    assert settings_path in seeded
+
+    onboarding = json.loads(seeded[onboarding_path])
+    assert onboarding.get("onboardingComplete") is True
+    assert onboarding.get("consumerOnboardingComplete") is True
+
+    settings = json.loads(seeded[settings_path])
+    assert ALICE.workdir in settings.get("trustedWorkspaces", [])
 
 
 # --- settings.json --------------------------------------------------------------

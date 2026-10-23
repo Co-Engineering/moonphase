@@ -64,51 +64,41 @@ account**, then choose one per project or per session; see
 An Antigravity project only offers your Antigravity accounts. Switching restarts
 `agy` on the other account and asks it to continue the same conversation.
 
-## The first start in each session
+## Starting a session
 
 Every session has its own `HOME` (see
-[sessions](../concepts/sessions.md#sessions-are-individual)), so the first time a
-session starts, `agy` behaves as if it had just been installed and asks three things
-before it shows a prompt. Moonphase marks the session as waiting for you while it
-does. All three are answered with the arrow keys and Enter, and Enter takes whatever
-is highlighted — so anything typed from the feed or the home screen would arrive with
-an Enter that picks the highlighted answer for you, and a "no" typed at the trust
-question would trust the folder. Moonphase therefore offers no buttons and no text
-box for them, refuses to type into them, and points you at the **Terminal** instead
-— from something wider than a phone if you can, since a terminal attached from a
-phone narrows the session's window for everyone.
+[sessions](../concepts/sessions.md#sessions-are-individual)), keeping credentials,
+transcripts and configuration isolated.
 
-1. **A colour scheme.** Purely cosmetic. Moonphase still does not answer it for
-   you, because `agy` records it together with the next screen as one step, and
-   skipping it would skip the terms as well.
-2. **Terms of Service & Data Use.** Google's terms, and a checkbox agreeing to let
-   Google collect and use your interactions data — **ticked by default**. Enter
-   toggles the box; ↓ then → reaches **Done**, and Enter confirms. Accepting
-   Google's terms and deciding what happens to your data are yours to do, so
-   Moonphase leaves both alone.
-3. **Do you trust the contents of this project?** Asked once per folder, and every
-   session's worktree is a folder of its own, so once per session. Declining exits
-   `agy` and leaves a shell in the pane; **Restart harness** asks again.
+To ensure sessions start smoothly without requiring interactive setup wizards on
+every new session, Moonphase automatically pre-seeds:
+- `~/.gemini/antigravity-cli/cache/onboarding.json` to complete first-run onboarding.
+- `~/.gemini/antigravity-cli/settings.json` with the session's worktree path in
+  `trustedWorkspaces`.
 
-!!! note "The trust question is yours, on purpose"
-    It is the same check as Claude Code's, and it is left unanswered for the same
-    reason: it guards against hostile content in a cloned repository, at exactly
-    the moment that matters. Moonphase could answer it — `agy` keeps the answer in
-    a file Moonphase already writes to — and deliberately does not.
+As a result, launching a session lands directly on a ready prompt.
 
-After that the session's `HOME` remembers all three, so restarting the harness,
-resuming after a reboot or switching accounts goes straight to the prompt.
+## Auto Mode and Terminal Sandbox
+
+Antigravity features an **Auto Mode** (`--mode auto`, or cycle via `Shift+Tab`) that
+automatically approves safe, reversible actions while running commands within a
+built-in **terminal sandbox**.
+
+On Linux, `agy`'s terminal sandbox isolates execution using unprivileged Linux kernel
+namespaces. On hosts running kernels with AppArmor unprivileged user namespace restrictions
+(`kernel.apparmor_restrict_unprivileged_userns = 1`), `agy` normally reports that the terminal
+sandbox is unavailable. Moonphase automatically masks this restriction inside the container
+environment so that the terminal sandbox can initialize and Auto Mode operates as expected.
 
 ## What it shares with Claude Code's configuration
 
-Moonphase's configuration screens were written for Claude Code, and most of what is
-on them reaches Antigravity too, at every scope — **Settings → Claude** for the
+Moonphase's configuration screens reach Antigravity too, at every scope — **Settings → Agent settings** for the
 organization, a project's or a session's **⋯ menu → Configure** below that — layered
 the same way, org then project then session:
 
 | In Moonphase | What `agy` gets |
 | ------------ | --------------- |
-| Instructions — the **CLAUDE.md** tab in Settings, **Instructions** in an Antigravity project's or session's **Configure** | `~/.gemini/AGENTS.md` — every layer that sets some, concatenated, as for Claude Code |
+| Instructions — the **Instructions** tab in Settings, **Instructions** in an Antigravity project's or session's **Configure** | `~/.gemini/AGENTS.md` — every layer that sets some, concatenated, as for Claude Code |
 | MCP servers | `~/.gemini/config/mcp_config.json` |
 | Skills | `~/.gemini/config/skills/<name>/SKILL.md`, unchanged — `agy` reads the same folders and frontmatter |
 | Environment variables | The session's environment, as for every harness |

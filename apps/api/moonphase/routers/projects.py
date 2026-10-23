@@ -397,6 +397,19 @@ async def _provision_container(
         user="root", timeout=120,
     )
 
+    # Mask AppArmor unprivileged user namespace restriction if enabled on host kernel
+    # so in-container terminal sandboxes (like Antigravity auto-mode) can initialize.
+    mask_userns_cmd = (
+        "p=/proc/sys/kernel/apparmor_restrict_unprivileged_userns; "
+        'if [ -f "$p" ] && [ "$(cat "$p" 2>/dev/null)" = "1" ]; then '
+        'printf "0\\n" > /tmp/.zero && mount --bind /tmp/.zero "$p" && rm -f /tmp/.zero; '
+        "fi"
+    )
+    await docker_remote.exec_capture(
+        conn_ssh, container, ["sh", "-c", mask_userns_cmd],
+        user="root", timeout=30,
+    )
+
     if repo_url:
         # The caller's own GitHub credential, which is what a private repository
         # needs and what this step never had.
