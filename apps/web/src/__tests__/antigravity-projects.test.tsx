@@ -284,7 +284,7 @@ describe('starting a session on another harness in the same project', () => {
       .spyOn(api, 'createSession')
       .mockResolvedValue({ tmux_session: 'g' } as unknown as Session)
 
-    const accountsFor = (h: any) => {
+    const accountsFor = (h: Pick<Project, 'harness'> | string) => {
       const kind = typeof h === 'string' ? h : h.harness
       return kind === 'antigravity' ? googleAccounts : claudeAccounts
     }
