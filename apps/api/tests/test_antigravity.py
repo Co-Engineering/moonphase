@@ -46,7 +46,7 @@ from moonphase import activity
 from moonphase import harness as registry
 from moonphase.harness import HarnessAuthMode, HarnessCredential, HarnessKind, SessionSpace
 from moonphase.harness.antigravity import _TOOL_SUMMARY_FIELD, Antigravity
-from moonphase.profile import WorkspaceProfile
+from moonphase.profile import WorkspaceProfile, profile_from_row
 from moonphase.schemas import TranscriptEventOut
 
 FIXTURES = Path(__file__).parent / "fixtures" / "antigravity"
@@ -286,22 +286,57 @@ def test_nothing_this_harness_writes_is_ever_empty(profile: WorkspaceProfile) ->
     assert all(contents for contents in written)
 
 
-def test_first_run_config_is_seeded_to_skip_setup_wizards() -> None:
-    """A fresh session HOME gets onboarding.json and trustedWorkspaces seeded so
-    the user lands directly on a usable prompt instead of being blocked on color
-    scheme, terms, and trust questions on every session start."""
-    seeded = AGY.seed_config_files(ALICE)
-    onboarding_path = f"{ALICE.home}/.gemini/antigravity-cli/cache/onboarding.json"
-    settings_path = f"{ALICE.home}/.gemini/antigravity-cli/settings.json"
-    assert onboarding_path in seeded
-    assert settings_path in seeded
+ONBOARDING = f"{ALICE.home}/.gemini/antigravity-cli/cache/onboarding.json"
+AGY_SETTINGS = f"{ALICE.home}/.gemini/antigravity-cli/settings.json"
 
-    onboarding = json.loads(seeded[onboarding_path])
-    assert onboarding.get("onboardingComplete") is True
-    assert onboarding.get("consumerOnboardingComplete") is True
 
-    settings = json.loads(seeded[settings_path])
-    assert ALICE.workdir in settings.get("trustedWorkspaces", [])
+def test_nothing_is_seeded_for_someone_who_has_not_said_moonphase_may() -> None:
+    """The only file that skips the colour picker also skips the Terms of
+    Service & Data Use screen — an agreement, and a data-sharing box ticked
+    by default — so by default nothing is seeded and the user answers all
+    three, as agy asks them."""
+    assert AGY.seed_config_files(ALICE) == {}
+    assert AGY.first_run_answers(_profile(), ALICE) == {}
+
+
+def test_the_terms_are_answered_only_for_someone_who_allowed_it() -> None:
+    answers = AGY.first_run_answers(_profile(antigravity_accept_terms=True), ALICE)
+
+    assert list(answers) == [ONBOARDING]
+    onboarding = json.loads(answers[ONBOARDING])
+    assert onboarding["onboardingComplete"] is True
+    assert onboarding["consumerOnboardingComplete"] is True
+
+
+def test_the_folder_is_trusted_only_for_someone_who_allowed_it() -> None:
+    """Its own choice: agreeing to Google's terms says nothing about trusting
+    whatever a cloned repository contains."""
+    answers = AGY.first_run_answers(_profile(antigravity_trust_folders=True), ALICE)
+
+    assert list(answers) == [AGY_SETTINGS]
+    assert json.loads(answers[AGY_SETTINGS]) == {"trustedWorkspaces": [ALICE.workdir]}
+
+
+def test_the_credential_is_still_merged_into_a_settings_file_seeded_with_trust() -> None:
+    """The seeded settings.json is written first, and then is just what is
+    there when the credential's keys are merged in — trust survives it."""
+    seeded = AGY.first_run_answers(_profile(antigravity_trust_folders=True), ALICE)[
+        AGY_SETTINGS
+    ]
+
+    merged = json.loads(AGY.merge_into_profile_file(seeded, _profile()) or "")
+
+    assert merged == {"trustedWorkspaces": [ALICE.workdir], "modelProvider": "gemini"}
+
+
+def test_a_profile_row_from_before_the_choices_existed_answers_nothing() -> None:
+    profile = profile_from_row({"org_id": "org", "env_vars": {}})
+
+    assert not profile.antigravity_accept_terms
+    assert not profile.antigravity_trust_folders
+    assert profile_from_row(
+        {"org_id": "org", "antigravity_accept_terms": True, "antigravity_trust_folders": True}
+    ).antigravity_trust_folders
 
 
 # --- settings.json --------------------------------------------------------------
@@ -924,3 +959,32 @@ def test_a_duplicate_does_not_copy_conversations_it_cannot_reopen() -> None:
 
     assert not get("antigravity").duplicate_resumes
     assert get("claude_code").duplicate_resumes
+
+
+async def test_a_sessions_first_start_writes_the_answers_without_overwriting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Through the same create-if-absent write as every seeded file: a
+    session whose agy has since written its own settings keeps them."""
+    from moonphase import sessions, ssh
+
+    sent: list[tuple[str, str | None]] = []
+
+    async def run(_conn: object, command: str, **kwargs: object) -> ssh.CommandResult:
+        sent.append((command, kwargs.get("stdin")))  # type: ignore[arg-type]
+        return ssh.CommandResult(exit_status=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ssh, "run", run)
+    profile = _profile(antigravity_accept_terms=True, antigravity_trust_folders=True)
+
+    await sessions.seed_config(None, "c", AGY, ALICE, profile)  # type: ignore[arg-type]
+
+    assert len(sent) == 2
+    for path, (command, stdin) in zip([ONBOARDING, AGY_SETTINGS], sent, strict=True):
+        assert path in command
+        assert f"if [ ! -e {path} ]" in command
+        assert stdin == AGY.first_run_answers(profile, ALICE)[path]
+
+    sent.clear()
+    await sessions.seed_config(None, "c", AGY, ALICE, _profile())  # type: ignore[arg-type]
+    assert sent == []

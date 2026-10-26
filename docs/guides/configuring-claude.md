@@ -3,7 +3,7 @@
 Three scopes, same things to configure at each: permissions & behaviour, MCP
 servers, CLAUDE.md, skills, and environment variables.
 
-- **Organization** — **Settings → Claude.** Set once, applies to every project.
+- **Organization** — **Settings → Agent settings.** Set once, applies to every project.
   Environment variables live on their own **Settings → Workspace** tab rather than
   inside this one, since that predates the project and session layers below it.
 - **Project** — a project's **⋯ menu → Configure.** Applies to every session in that
@@ -106,7 +106,7 @@ browser on the same machine as the `claude` process, which is never true here, s
 the link it gives you, approve, then paste back wherever your browser lands (it will
 fail to load — that is expected, the address in the bar is what matters).
 
-Available at every scope — the org's own **Settings → Claude**, a project's or a
+Available at every scope — the org's own **Settings → Agent settings**, a project's or a
 session's own **Configure** — because the credential it produces is org-wide regardless
 of where you clicked Connect. A session's own dialog relays through that session
 directly; the org and project levels have no one session in hand, so they relay through

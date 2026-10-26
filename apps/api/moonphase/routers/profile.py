@@ -22,6 +22,7 @@ from ..harness import get as get_harness
 from ..profile import parse_json_object
 from ..runtime import CAN_CONTROL, NotFound
 from ..schemas import (
+    AntigravityFirstRunIn,
     GitHubDeviceOut,
     GitHubDeviceStart,
     GitHubRepoOut,
@@ -89,6 +90,8 @@ async def _build_out(principal: Principal, org_id: UUID) -> WorkspaceProfileOut:
         env_vars={str(k): str(v) for k, v in env.items()},
         git_user_name=row.get("git_user_name"),
         git_user_email=row.get("git_user_email"),
+        antigravity_accept_terms=bool(row.get("antigravity_accept_terms")),
+        antigravity_trust_folders=bool(row.get("antigravity_trust_folders")),
         harness_connected=harness_row is not None,
         harness_auth_mode=harness_row.get("auth_mode") if harness_row else None,
         github_connected=vcs_row is not None,
@@ -157,6 +160,26 @@ async def update_profile(
                 env_vars=payload.env_vars,
                 git_user_name=payload.git_user_name,
                 git_user_email=payload.git_user_email,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return await _build_out(principal, org_id)
+
+
+@router.put("/antigravity-first-run", response_model=WorkspaceProfileOut)
+async def set_antigravity_first_run(
+    payload: AntigravityFirstRunIn, principal: Principal = Depends(current_principal)
+) -> WorkspaceProfileOut:
+    """Whether Moonphase answers agy's terms and folder-trust questions in
+    your new sessions. Sessions that have already asked are not changed."""
+    org_id = await _resolve_org(principal, payload.org_id)
+    async with user_session(principal.claims) as conn:
+        try:
+            await queries.set_antigravity_first_run(
+                conn,
+                org_id,
+                accept_terms=payload.accept_terms,
+                trust_folders=payload.trust_folders,
             )
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc

@@ -132,6 +132,16 @@ class ServerOut(ORMModel):
     share_count: int = 0
 
 
+class UserNamespacesOut(BaseModel):
+    # None on a kernel with no such restriction at all.
+    restricted: bool | None
+    lifted_by_moonphase: bool
+
+
+class UserNamespacesIn(BaseModel):
+    allow: bool
+
+
 class ServerBootstrapOut(BaseModel):
     server: ServerOut
     status: str
@@ -634,12 +644,22 @@ class WorkspaceProfileOut(BaseModel):
     env_vars: dict[str, str]
     git_user_name: str | None
     git_user_email: str | None
+    # Antigravity's first-run questions Moonphase may answer for you; see
+    # WorkspaceProfile.
+    antigravity_accept_terms: bool = False
+    antigravity_trust_folders: bool = False
     # Connection state, never the credentials themselves.
     harness_connected: bool = False
     harness_auth_mode: str | None = None
     github_connected: bool = False
     github_account: str | None = None
     github_scopes: str | None = None
+
+
+class AntigravityFirstRunIn(BaseModel):
+    org_id: UUID | None = None
+    accept_terms: bool
+    trust_folders: bool
 
 
 # --- project / session Claude config ----------------------------------------

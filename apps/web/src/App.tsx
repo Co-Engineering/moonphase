@@ -19,6 +19,7 @@ import {
 } from './lib/api'
 import { useResource } from './lib/useResource'
 import { harnessCopy } from './lib/harness'
+import { UserNamespacesCard } from './components/UserNamespacesCard'
 import { useHarnessAccounts } from './lib/useHarnessAccounts'
 import { useCollapsed, useCollapsedFlag } from './lib/collapsed'
 import { useSessionOrder } from './lib/sessionOrder'
@@ -2136,6 +2137,8 @@ function ServerView({
             </p>
           )}
         </div>
+
+        {owned && server.status === 'online' && <UserNamespacesCard server={server} />}
 
         {!owned && (
           <div className="card">

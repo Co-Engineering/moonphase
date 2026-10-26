@@ -64,31 +64,75 @@ account**, then choose one per project or per session; see
 An Antigravity project only offers your Antigravity accounts. Switching restarts
 `agy` on the other account and asks it to continue the same conversation.
 
-## Starting a session
+## The first start in each session
 
 Every session has its own `HOME` (see
-[sessions](../concepts/sessions.md#sessions-are-individual)), keeping credentials,
-transcripts and configuration isolated.
+[sessions](../concepts/sessions.md#sessions-are-individual)), so the first time a
+session starts, `agy` behaves as if it had just been installed and asks three things
+before it shows a prompt:
 
-To ensure sessions start smoothly without requiring interactive setup wizards on
-every new session, Moonphase automatically pre-seeds:
-- `~/.gemini/antigravity-cli/cache/onboarding.json` to complete first-run onboarding.
-- `~/.gemini/antigravity-cli/settings.json` with the session's worktree path in
-  `trustedWorkspaces`.
+1. **A colour scheme.** Purely cosmetic, but `agy` records it together with the next
+   screen as one step, so it cannot be skipped on its own.
+2. **Terms of Service & Data Use.** Google's terms, and a checkbox agreeing to let
+   Google collect and use your interactions data — **ticked by default**.
+3. **Do you trust the contents of this project?** Asked once per folder, and every
+   session's worktree is a folder of its own, so once per session. It guards against
+   hostile content in a cloned repository, the same check as Claude Code's.
 
-As a result, launching a session lands directly on a ready prompt.
+By default Moonphase answers none of them. They are answered with the arrow keys and
+Enter, and Enter takes whatever is highlighted — so anything typed from the feed or
+the home screen would pick the highlighted answer for you, and a "no" typed at the
+trust question would trust the folder. Moonphase offers no buttons and no text box
+for them, refuses to type into them, and points you at the **Terminal** instead.
+After that the session's `HOME` remembers all three, so restarting the harness,
+resuming after a reboot or switching accounts goes straight to the prompt.
 
-## Auto Mode and Terminal Sandbox
+### Letting Moonphase answer them
 
-Antigravity features an **Auto Mode** (`--mode auto`, or cycle via `Shift+Tab`) that
-automatically approves safe, reversible actions while running commands within a
-built-in **terminal sandbox**.
+Adding your first Google account in **Settings → Accounts** asks whether Moonphase
+may answer two of them for you in every new session. Both start off, each is its own
+choice, and both stay on the Antigravity card to change later:
 
-On Linux, `agy`'s terminal sandbox isolates execution using unprivileged Linux kernel
-namespaces. On hosts running kernels with AppArmor unprivileged user namespace restrictions
-(`kernel.apparmor_restrict_unprivileged_userns = 1`), `agy` normally reports that the terminal
-sandbox is unavailable. Moonphase automatically masks this restriction inside the container
-environment so that the terminal sandbox can initialize and Auto Mode operates as expected.
+- **Accept Google's terms for me** marks `agy`'s onboarding as done
+  (`~/.gemini/antigravity-cli/cache/onboarding.json`), which skips the terms screen
+  and the colour picker with it. You agree to Google's terms in every session, and
+  the screen's data-use checkbox is never shown to you, so that is not a choice you
+  make.
+- **Trust each session's folder** adds the session's worktree to
+  `trustedWorkspaces` in `agy`'s `settings.json`. Turn it on only if you trust the
+  repositories your projects clone.
+
+Both are written only when the file is not there yet, which means a session's first
+start. A session that has already asked keeps the answer it was given, and turning a
+choice off later does not take an answer back.
+
+## Auto Mode
+
+`agy`'s **Auto Mode** (`--mode auto`, `/config`, or **Shift+Tab**) approves file
+edits and safe commands without asking, and runs commands in its **terminal
+sandbox**. On Linux that sandbox is built on unprivileged user namespaces, and
+without it `agy` falls back from Auto Mode to asking about every command.
+
+Two things decide whether the sandbox can start:
+
+- **The server's kernel.** Ubuntu, from 23.10 on, only lets programs an AppArmor
+  profile names create user namespaces
+  (`kernel.apparmor_restrict_unprivileged_userns = 1`); `agy` then says
+  `Terminal sandbox unavailable: AppArmor restricts unprivileged user namespaces`.
+  That is a setting of the server's kernel, not of any container, so the server's
+  page shows an **Antigravity Auto Mode** card to its owner whenever it is on.
+  **Allow Auto Mode on this server** lifts the restriction for the whole machine —
+  the default on Debian, Fedora and most other distributions — and writes
+  `/etc/sysctl.d/60-moonphase-userns.conf` so a reboot keeps it. **Restore the
+  restriction** puts it back. Both need passwordless sudo, the same as installing
+  Docker.
+- **The project's container.** Docker's default seccomp filter blocks creating user
+  namespaces in an ordinary container, so the sandbox only starts in a project with
+  **Docker access** turned on, which runs under Sysbox. Turn that on for an
+  Antigravity project that should use Auto Mode.
+
+`agy` checks once, when it starts, so a session picks either change up on its next
+**Restart harness**.
 
 ## What it shares with Claude Code's configuration
 
