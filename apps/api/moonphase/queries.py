@@ -1275,7 +1275,9 @@ async def get_profile(conn: AsyncConnection, org_id: UUID) -> dict[str, Any] | N
         text(
             """
             select id, org_id, claude_settings_json, claude_md, mcp_json, skills_json,
-                   env_vars, git_user_name, git_user_email, created_at, updated_at
+                   env_vars, git_user_name, git_user_email,
+                   antigravity_accept_terms, antigravity_trust_folders,
+                   created_at, updated_at
             from workspace_profiles
             where org_id = :org_id
             """
@@ -1316,7 +1318,9 @@ async def upsert_profile(
               git_user_name        = excluded.git_user_name,
               git_user_email       = excluded.git_user_email
             returning id, org_id, claude_settings_json, claude_md, mcp_json, skills_json,
-                      env_vars, git_user_name, git_user_email, created_at, updated_at
+                      env_vars, git_user_name, git_user_email,
+                      antigravity_accept_terms, antigravity_trust_folders,
+                      created_at, updated_at
             """
         ),
         {
@@ -1334,6 +1338,32 @@ async def upsert_profile(
     if row is None:
         raise PermissionError("Not allowed to edit this organization's profile.")
     return _row_to_dict(row)
+
+
+async def set_antigravity_first_run(
+    conn: AsyncConnection, org_id: UUID, *, accept_terms: bool, trust_folders: bool
+) -> None:
+    """Whether Moonphase may answer agy's terms and folder-trust questions.
+
+    Apart from `upsert_profile`, which writes everything on the settings
+    screen and would otherwise have to carry these through every save.
+    """
+    result = await conn.execute(
+        text(
+            """
+            insert into workspace_profiles
+              (org_id, antigravity_accept_terms, antigravity_trust_folders)
+            values (:org_id, :terms, :trust)
+            on conflict (org_id) do update set
+              antigravity_accept_terms  = excluded.antigravity_accept_terms,
+              antigravity_trust_folders = excluded.antigravity_trust_folders
+            returning id
+            """
+        ),
+        {"org_id": org_id, "terms": accept_terms, "trust": trust_folders},
+    )
+    if result.first() is None:
+        raise PermissionError("Not allowed to edit this organization's profile.")
 
 
 # ---------------------------------------------------------------------------

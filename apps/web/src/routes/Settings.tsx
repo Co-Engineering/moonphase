@@ -207,6 +207,7 @@ function AccountsTab({
             harness={kind}
             info={listed}
             harnesses={harnesses.data}
+            profile={profile}
             busy={busy}
             run={run}
           />
@@ -263,6 +264,7 @@ function HarnessAccountCard({
   harness,
   info,
   harnesses,
+  profile,
   busy,
   run,
 }: {
@@ -270,6 +272,8 @@ function HarnessAccountCard({
   /** From `/api/harnesses`. Undefined until it answers, or on a backend too old to. */
   info?: HarnessInfo
   harnesses?: HarnessInfo[] | null
+  /** For the harness's own first-run choices, where it has some. */
+  profile?: WorkspaceProfile
   busy: boolean
   run: Runner
 }) {
@@ -321,6 +325,9 @@ function HarnessAccountCard({
         </h3>
         <p className="hint">{words.intro}</p>
         {words.caveat && <p className="hint">{words.caveat}</p>}
+        {harness === 'antigravity' && profile && (
+          <AntigravityFirstRun profile={profile} busy={busy} run={run} first />
+        )}
         <HarnessSignIn
           harness={harness}
           info={info}
@@ -456,6 +463,10 @@ function HarnessAccountCard({
         ))}
       </ul>
 
+      {harness === 'antigravity' && profile && (
+        <AntigravityFirstRun profile={profile} busy={busy} run={run} />
+      )}
+
       {adding ? (
         <div className="account-add">
           <label>
@@ -496,6 +507,73 @@ function HarnessAccountCard({
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * Two of agy's first-run questions, which Moonphase answers only if told to.
+ *
+ * Every session runs agy in a HOME of its own, so it asks them in every new
+ * session. Both are the user's to answer — an agreement with Google, and
+ * whether to trust what a repository contains — so they are asked here, as
+ * the first Google account is added, and stay here to change. Each saves as
+ * it is ticked, and only reaches sessions that have not asked yet.
+ */
+function AntigravityFirstRun({
+  profile,
+  busy,
+  run,
+  first = false,
+}: {
+  profile: WorkspaceProfile
+  busy: boolean
+  run: Runner
+  first?: boolean
+}) {
+  const terms = !!profile.antigravity_accept_terms
+  const trust = !!profile.antigravity_trust_folders
+  const save = (next: { accept_terms: boolean; trust_folders: boolean }) =>
+    void run(() => api.setAntigravityFirstRun(next), 'Saved. New sessions will use it.')
+  return (
+    <fieldset className="first-run-choices">
+      <legend>{first ? 'Before you add it: agy’s first-run questions' : 'In each new session'}</legend>
+      <p className="hint">
+        Every session starts agy in a fresh home, so it asks these again each time.
+        Moonphase can answer them for you.
+      </p>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={terms}
+          disabled={busy}
+          onChange={(e) => save({ accept_terms: e.target.checked, trust_folders: trust })}
+        />
+        <span>
+          Accept Google’s terms for me
+          <span className="hint">
+            Skips agy’s “Terms of Service &amp; Data Use” screen, and the colour picker
+            with it. You agree to Google’s terms in every session, and the screen’s
+            data-use checkbox is never shown to you, so that choice is not one you make.
+          </span>
+        </span>
+      </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={trust}
+          disabled={busy}
+          onChange={(e) => save({ accept_terms: terms, trust_folders: e.target.checked })}
+        />
+        <span>
+          Trust each session’s folder
+          <span className="hint">
+            Answers “Do you trust the contents of this project?” with yes. That question
+            guards against hostile content in a cloned repository, so only turn this on
+            if you trust the repositories your projects clone.
+          </span>
+        </span>
+      </label>
+    </fieldset>
   )
 }
 

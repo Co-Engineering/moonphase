@@ -3678,3 +3678,33 @@ button.link.danger { color: var(--red); }
 .dashboard-card .dashboard-problem { color: var(--amber); }
 .dashboard-updated { margin: 4px 0 0; font-size: 12px; }
 .dashboard-grid .card { margin: 0; }
+
+/* --- agy's first-run choices, on its account card ------------------------ */
+/* A checkbox with a sentence or two under its label: the box sits by the
+   label's first line, not centred against the whole explanation. */
+
+.first-run-choices {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px 4px;
+  margin: 12px 0;
+}
+
+.first-run-choices legend {
+  padding: 0 6px;
+  font-weight: 600;
+}
+
+.first-run-choices label.check {
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+
+.first-run-choices label.check > input[type='checkbox'] {
+  margin-top: 3px;
+}
+
+.first-run-choices label.check > span .hint {
+  display: block;
+  margin-top: 2px;
+}

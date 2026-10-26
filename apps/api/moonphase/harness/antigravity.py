@@ -318,29 +318,43 @@ class Antigravity(Harness):
     def profile_file_target(self, space: SessionSpace) -> str | None:
         return f"{_app_dir(space)}/settings.json"
 
-    def seed_config_files(self, space: SessionSpace) -> dict[str, str]:
-        """First-run config to skip first-run wizard prompts in clean session homes.
+    # No `seed_config_files`: everything agy asks on a new HOME's first start
+    # is either the user's to answer or comes bundled with something that is.
+    # Checked against the shipped 1.4.3 binary, the colour-scheme picker is
+    # not skipped by a `colorScheme` in settings.json — with "terminal" or
+    # "dark" it still opens. What does skip it is `cache/onboarding.json`,
+    # but that skips the "Terms of Service & Data Use" screen with it: an
+    # agreement, plus a data-sharing box ticked by default. Folder trust
+    # comes straight after. The sign-in relay needs nothing seeded either:
+    # agy asks for the sign-in before any of them.
 
-        Seeds `cache/onboarding.json` to bypass the color scheme, terms of service,
-        and onboarding wizard, and seeds `trustedWorkspaces` in `settings.json` so
-        the session opens directly on a ready prompt instead of blocking on setup.
+    def first_run_answers(self, profile: Any, space: SessionSpace) -> dict[str, str]:
+        """The terms and folder trust, for someone who said Moonphase may.
+
+        Each is its own choice (see `WorkspaceProfile`). Accepting the terms
+        is `cache/onboarding.json` as agy writes it once they are agreed to,
+        which also skips the colour picker; agy then never shows the Data Use
+        box, so the person never makes that choice either. Trust is the
+        session's worktree in `trustedWorkspaces`, in a settings.json that
+        `merge_into_profile_file` goes on to add the credential's keys to.
+        Both are written only if absent, which in practice means a session's
+        first start: every session has a HOME and a worktree of its own.
         """
-        return {
-            f"{_app_dir(space)}/cache/onboarding.json": json.dumps(
+        answers: dict[str, str] = {}
+        if getattr(profile, "antigravity_accept_terms", False):
+            answers[f"{_app_dir(space)}/cache/onboarding.json"] = json.dumps(
                 {
                     "consumerOnboardingComplete": True,
                     "enterpriseOnboardingComplete": False,
                     "onboardingComplete": True,
                 },
                 indent=2,
-            ),
-            f"{_app_dir(space)}/settings.json": json.dumps(
-                {
-                    "trustedWorkspaces": [space.workdir],
-                },
-                indent=2,
-            ),
-        }
+            )
+        if getattr(profile, "antigravity_trust_folders", False):
+            answers[f"{_app_dir(space)}/settings.json"] = json.dumps(
+                {"trustedWorkspaces": [space.workdir]}, indent=2
+            )
+        return answers
 
     def merge_into_profile_file(self, existing: str | None, profile: Any) -> str | None:
         """Point agy at the credential this session runs on.

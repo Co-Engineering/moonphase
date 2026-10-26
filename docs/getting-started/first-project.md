@@ -71,10 +71,12 @@ On first attach Claude Code asks whether you trust the workspace folder. Antigra
 asks the same, after a colour scheme and Google's terms — see
 [its first start](../guides/antigravity.md#the-first-start-in-each-session).
 
-!!! note "That prompt is not pre-answered, on purpose"
+!!! note "That prompt is not pre-answered unless you say so"
     It guards against hostile content in a cloned repository. Answering it for you would
     remove the one check that exists at exactly the moment it matters, so it is your
-    call, not Moonphase's.
+    call, not Moonphase's. Claude Code's is never pre-answered; Antigravity's is only
+    if you [turned that on](../guides/antigravity.md#letting-moonphase-answer-them)
+    when adding your Google account.
 
 ## The three views
 

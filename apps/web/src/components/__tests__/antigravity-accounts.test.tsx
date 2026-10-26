@@ -178,3 +178,53 @@ describe('the Antigravity account card', () => {
     expect(listed).toHaveBeenCalledWith('antigravity')
   })
 })
+
+/**
+ * agy asks Google's terms and folder trust in every new session, and both are
+ * the user's to answer. Moonphase answers them only once told to — asked as
+ * the first Google account is added, off until then, and changeable after.
+ */
+describe('agy’s first-run questions', () => {
+  it('asks before the first Google account is added, with both off', async () => {
+    settingsWith([claude, antigravity])
+
+    const terms = await screen.findByRole('checkbox', { name: /accept google’s terms/i })
+    const trust = screen.getByRole('checkbox', { name: /trust each session’s folder/i })
+    expect(terms).not.toBeChecked()
+    expect(trust).not.toBeChecked()
+    expect(screen.getByText(/before you add it/i)).toBeInTheDocument()
+  })
+
+  it('saves each choice on its own, leaving the other as it was', async () => {
+    settingsWith([claude, antigravity])
+    const saved = vi
+      .spyOn(api, 'setAntigravityFirstRun')
+      .mockResolvedValue({ ...profile, antigravity_accept_terms: true })
+
+    fireEvent.click(await screen.findByRole('checkbox', { name: /accept google’s terms/i }))
+
+    await waitFor(() =>
+      expect(saved).toHaveBeenCalledWith({ accept_terms: true, trust_folders: false }),
+    )
+  })
+
+  it('stays on the card to change once there is an account', async () => {
+    vi.spyOn(api, 'profile').mockResolvedValue({
+      ...profile,
+      antigravity_accept_terms: true,
+    } as WorkspaceProfile)
+    vi.spyOn(api, 'environments').mockResolvedValue([])
+    vi.spyOn(api, 'harnesses').mockResolvedValue([claude, antigravity])
+    vi.spyOn(api, 'harnessAccounts').mockImplementation(async (harness = 'claude_code') =>
+      harness === 'antigravity' ? [account({})] : [],
+    )
+    render(<Settings onClose={() => {}} onSaved={() => {}} />)
+
+    expect(
+      await screen.findByRole('checkbox', { name: /accept google’s terms/i }),
+    ).toBeChecked()
+    expect(screen.getByText(/in each new session/i)).toBeInTheDocument()
+    // Claude's card has no such questions.
+    expect(screen.getAllByRole('checkbox', { name: /accept google’s terms/i })).toHaveLength(1)
+  })
+})

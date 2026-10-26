@@ -89,6 +89,13 @@ export interface Organization {
   created_at: string
 }
 
+/** Whether a server's kernel lets containers create user namespaces. */
+export interface UserNamespaces {
+  /** Null on a kernel with no such restriction at all. */
+  restricted: boolean | null
+  lifted_by_moonphase: boolean
+}
+
 export interface Server {
   id: string
   org_id: string
@@ -341,6 +348,9 @@ export interface WorkspaceProfile {
   env_vars: Record<string, string>
   git_user_name: string | null
   git_user_email: string | null
+  /** Whether Moonphase answers agy's terms and folder-trust questions in new sessions. */
+  antigravity_accept_terms?: boolean
+  antigravity_trust_folders?: boolean
   harness_connected: boolean
   harness_auth_mode: string | null
   github_connected: boolean
@@ -613,6 +623,13 @@ export const api = {
       method: 'POST',
     }),
   testServer: (id: string) => request<Server>(`/api/servers/${id}/test`, { method: 'POST' }),
+  userNamespaces: (id: string) =>
+    request<UserNamespaces>(`/api/servers/${id}/user-namespaces`),
+  setUserNamespaces: (id: string, allow: boolean) =>
+    request<UserNamespaces>(`/api/servers/${id}/user-namespaces`, {
+      method: 'PUT',
+      body: JSON.stringify({ allow }),
+    }),
   rebootServer: (id: string) =>
     request<{ detail: string }>(`/api/servers/${id}/reboot`, { method: 'POST' }),
   serverResources: (id: string) =>
@@ -800,6 +817,11 @@ export const api = {
   profile: () => request<WorkspaceProfile>('/api/profile'),
   saveProfile: (input: WorkspaceProfileInput) =>
     request<WorkspaceProfile>('/api/profile', {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    }),
+  setAntigravityFirstRun: (input: { accept_terms: boolean; trust_folders: boolean }) =>
+    request<WorkspaceProfile>('/api/profile/antigravity-first-run', {
       method: 'PUT',
       body: JSON.stringify(input),
     }),
