@@ -1277,7 +1277,7 @@ async def get_profile(conn: AsyncConnection, org_id: UUID) -> dict[str, Any] | N
             select id, org_id, claude_settings_json, claude_md, mcp_json, skills_json,
                    env_vars, git_user_name, git_user_email,
                    antigravity_accept_terms, antigravity_trust_folders,
-                   created_at, updated_at
+                   antigravity_settings_json, created_at, updated_at
             from workspace_profiles
             where org_id = :org_id
             """
@@ -1320,7 +1320,7 @@ async def upsert_profile(
             returning id, org_id, claude_settings_json, claude_md, mcp_json, skills_json,
                       env_vars, git_user_name, git_user_email,
                       antigravity_accept_terms, antigravity_trust_folders,
-                      created_at, updated_at
+                      antigravity_settings_json, created_at, updated_at
             """
         ),
         {
@@ -1361,6 +1361,26 @@ async def set_antigravity_first_run(
             """
         ),
         {"org_id": org_id, "terms": accept_terms, "trust": trust_folders},
+    )
+    if result.first() is None:
+        raise PermissionError("Not allowed to edit this organization's profile.")
+
+
+async def set_antigravity_settings(
+    conn: AsyncConnection, org_id: UUID, settings_json: str | None
+) -> None:
+    """agy's own settings, merged into every session's settings.json."""
+    result = await conn.execute(
+        text(
+            """
+            insert into workspace_profiles (org_id, antigravity_settings_json)
+            values (:org_id, :settings)
+            on conflict (org_id) do update set
+              antigravity_settings_json = excluded.antigravity_settings_json
+            returning id
+            """
+        ),
+        {"org_id": org_id, "settings": settings_json},
     )
     if result.first() is None:
         raise PermissionError("Not allowed to edit this organization's profile.")

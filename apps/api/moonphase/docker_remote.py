@@ -42,6 +42,9 @@ class ContainerInfo:
     # against the environment's current image is how a stale container is
     # recognised. See _recreate_if_stale in routers/projects.py.
     image: str = ""
+    # Docker's `--runtime`, as fixed at creation: "sysbox-runc" for a project
+    # with Docker access, "runc" otherwise. Empty when unknown.
+    runtime: str = ""
 
 
 async def probe(conn: asyncssh.SSHClientConnection) -> DockerInfo:
@@ -161,7 +164,8 @@ async def inspect(conn: asyncssh.SSHClientConnection, name: str) -> ContainerInf
     result = await ssh.run(
         conn,
         "docker inspect --format "
-        "'{{.Id}}|{{.Name}}|{{.State.Status}}|{{.State.StartedAt}}|{{.Config.Image}}' "
+        "'{{.Id}}|{{.Name}}|{{.State.Status}}|{{.State.StartedAt}}|{{.Config.Image}}"
+        "|{{.HostConfig.Runtime}}' "
         + shlex.quote(name),
         timeout=30,
     )
@@ -180,6 +184,7 @@ async def inspect(conn: asyncssh.SSHClientConnection, name: str) -> ContainerInf
         # staleness check treats unknown as "leave it alone" rather than
         # recreating a container it cannot actually judge.
         image=parts[4] if len(parts) > 4 else "",
+        runtime=parts[5] if len(parts) > 5 else "",
     )
 
 

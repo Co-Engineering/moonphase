@@ -37,7 +37,14 @@ interface Props {
   onSaved: () => void
 }
 
-type Tab = 'accounts' | 'harness' | 'environments' | 'workspace' | 'instance' | 'people'
+type Tab =
+  | 'accounts'
+  | 'harness'
+  | 'antigravity'
+  | 'environments'
+  | 'workspace'
+  | 'instance'
+  | 'people'
 
 /**
  * Global settings.
@@ -106,7 +113,11 @@ export function Settings({ onClose, onSaved }: Props) {
           {(
             [
               ['accounts', 'Accounts'],
-              ['harness', 'Agent settings'],
+              // One tab per agent, by its own name: a single "Agent settings"
+              // tab held Claude Code's settings, and nobody looking for
+              // Antigravity's thought to look there.
+              ['harness', 'Claude Code'],
+              ['antigravity', 'Antigravity'],
               ['environments', 'Environments'],
               ['workspace', 'Workspace'],
               // Only for whoever administers the instance. Everyone else has no
@@ -138,6 +149,12 @@ export function Settings({ onClose, onSaved }: Props) {
           <AccountsTab profile={profile} busy={busy} run={run} />
         ) : tab === 'harness' ? (
           <HarnessSettingsTab profile={profile} busy={busy} run={run} />
+        ) : tab === 'antigravity' ? (
+          <>
+            <AntigravitySettings profile={profile} busy={busy} run={run} />
+            <AntigravityFirstRun profile={profile} busy={busy} run={run} />
+            <HarnessSettingsTab profile={profile} busy={busy} run={run} harness="antigravity" />
+          </>
         ) : tab === 'environments' ? (
           <EnvironmentsTab busy={busy} run={run} />
         ) : tab === 'instance' ? (
@@ -506,6 +523,81 @@ function HarnessAccountCard({
           </button>
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * agy’s own settings, for every session.
+ *
+ * agy keeps them in a settings.json in each session’s home, so a mode picked
+ * with `/config` or Shift+Tab is gone in the next session. These are merged
+ * into that file as every session starts, the way Claude Code’s settings are.
+ * Auto is the default here: agy’s own asks before every command.
+ */
+function AntigravitySettings({
+  profile,
+  busy,
+  run,
+}: {
+  profile: WorkspaceProfile
+  busy: boolean
+  run: Runner
+}) {
+  const saved = profile.antigravity_settings ?? {}
+  const [mode, setMode] = useState(String(saved.agentMode ?? 'default'))
+  const [permission, setPermission] = useState(String(saved.toolPermission ?? 'request-review'))
+  const save = () =>
+    run(
+      () => api.setAntigravitySettings({ ...saved, agentMode: mode, toolPermission: permission }),
+      'Saved. Restart a session’s harness to pick it up.',
+    )
+  return (
+    <div className="card inner">
+      <h3>How agy works</h3>
+      <label>
+        <span>Mode</span>
+        <select value={mode} onChange={(e) => setMode(e.target.value)} disabled={busy}>
+          <option value="auto">Auto — runs safe commands and edits without asking</option>
+          <option value="default">Agent — asks before each command (agy’s own default)</option>
+          <option value="accept-edits">
+            Accept edits — edits without asking, asks before commands
+          </option>
+          <option value="plan">Plan — proposes a plan before changing anything</option>
+        </select>
+      </label>
+      {mode === 'auto' && (
+        <p className="hint">
+          Auto runs commands in agy’s terminal sandbox and still asks before anything
+          irreversible. The sandbox needs user namespaces: Moonphase allows them on a
+          server you own as a session starts, and the project needs Docker access
+          (Sysbox). Where either is missing the session says so, and agy asks instead.
+        </p>
+      )}
+      <label>
+        <span>Permission prompts</span>
+        <select
+          value={permission}
+          onChange={(e) => setPermission(e.target.value)}
+          disabled={busy}
+        >
+          <option value="request-review">Ask — review changes and commands (agy’s default)</option>
+          <option value="strict">Strict — ask about everything</option>
+          <option value="always-proceed">Never ask — run everything without prompting</option>
+        </select>
+      </label>
+      {permission === 'always-proceed' && (
+        <p className="hint">
+          agy then runs every command and edit without asking, sandbox or not. The
+          project’s container is the only boundary left, so use it where nothing in the
+          container needs protecting from the agent.
+        </p>
+      )}
+      <div className="actions">
+        <button className="primary" disabled={busy} onClick={() => void save()}>
+          Save Antigravity settings
+        </button>
+      </div>
     </div>
   )
 }
@@ -1079,11 +1171,19 @@ function HarnessSettingsTab({
   profile,
   busy,
   run,
+  harness = 'claude_code',
 }: {
   profile: WorkspaceProfile
   busy: boolean
   run: Runner
+  /**
+   * Which agent's tab this is. Instructions, MCP servers and skills are one
+   * set shared by both, so the editors are the same; Claude Code's
+   * permissions and behaviour are its alone.
+   */
+  harness?: HarnessKind
 }) {
+  const claude = harness === 'claude_code'
   const [config, setConfig] = useState<ClaudeConfigValue>({
     claude_settings_json: profile.claude_settings_json,
     claude_md: profile.claude_md,
@@ -1140,9 +1240,16 @@ function HarnessSettingsTab({
   return (
     <>
       {connectError && <div className="banner error">{connectError}</div>}
+      {!claude && <h3 className="settings-subhead">Shared with Claude Code</h3>}
+      <p className="hint">
+        {claude
+          ? 'Instructions, MCP servers and skills are shared with Antigravity; permissions and behaviour are Claude Code’s alone.'
+          : 'One set for both agents: changing them here changes them for Claude Code too.'}
+      </p>
       <ClaudeConfigFields
         value={config}
         onChange={setConfig}
+        claudeSettings={claude}
         claudeMdHint="Written to ~/.claude/CLAUDE.md for Claude Code and ~/.gemini/AGENTS.md for Antigravity, so it applies to every project"
         instructionTabLabel="Instructions"
         onConnectMcp={(name) => void onConnectMcp(name)}

@@ -228,3 +228,49 @@ describe('agy’s first-run questions', () => {
     expect(screen.getAllByRole('checkbox', { name: /accept google’s terms/i })).toHaveLength(1)
   })
 })
+
+/**
+ * agy's settings had nowhere to live: the one settings tab was Claude Code's,
+ * and it was not called that. Each agent now has a tab by its own name.
+ */
+describe('Antigravity’s own settings', () => {
+  const openTab = async () => {
+    vi.spyOn(api, 'mcpOAuthConnections').mockResolvedValue([])
+    settingsWith([claude, antigravity])
+    fireEvent.click(await screen.findByRole('button', { name: 'Antigravity' }))
+  }
+
+  it('has a tab of its own, next to Claude Code’s', async () => {
+    settingsWith([claude, antigravity])
+    expect(await screen.findByRole('button', { name: 'Claude Code' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Antigravity' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Agent settings' })).toBeNull()
+  })
+
+  it('saves the mode and the permission prompts every session starts with', async () => {
+    const saved = vi
+      .spyOn(api, 'setAntigravitySettings')
+      .mockResolvedValue({ ...profile, antigravity_settings: { agentMode: 'auto' } })
+    await openTab()
+
+    fireEvent.change(await screen.findByRole('combobox', { name: /mode/i }), {
+      target: { value: 'auto' },
+    })
+    fireEvent.change(screen.getByRole('combobox', { name: /permission prompts/i }), {
+      target: { value: 'always-proceed' },
+    })
+    expect(screen.getByText(/the only boundary left/i)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /save antigravity settings/i }))
+
+    await waitFor(() =>
+      expect(saved).toHaveBeenCalledWith({ agentMode: 'auto', toolPermission: 'always-proceed' }),
+    )
+  })
+
+  it('says what is shared with Claude Code, and leaves out Claude’s own settings', async () => {
+    await openTab()
+
+    expect(await screen.findByText(/shared with claude code/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /permissions & behaviour/i })).toBeNull()
+  })
+})

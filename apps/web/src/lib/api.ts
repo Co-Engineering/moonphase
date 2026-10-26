@@ -351,6 +351,8 @@ export interface WorkspaceProfile {
   /** Whether Moonphase answers agy's terms and folder-trust questions in new sessions. */
   antigravity_accept_terms?: boolean
   antigravity_trust_folders?: boolean
+  /** agy’s own settings.json keys every session starts with. */
+  antigravity_settings?: Record<string, unknown>
   harness_connected: boolean
   harness_auth_mode: string | null
   github_connected: boolean
@@ -630,6 +632,11 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ allow }),
     }),
+  setDockerAccess: (projectId: string, enabled: boolean) =>
+    request<Project>(`/api/projects/${projectId}/docker-access`, {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
+    }),
   rebootServer: (id: string) =>
     request<{ detail: string }>(`/api/servers/${id}/reboot`, { method: 'POST' }),
   serverResources: (id: string) =>
@@ -827,6 +834,11 @@ export const api = {
     request<WorkspaceProfile>('/api/profile', {
       method: 'PUT',
       body: JSON.stringify(input),
+    }),
+  setAntigravitySettings: (settings: Record<string, unknown> | null) =>
+    request<WorkspaceProfile>('/api/profile/antigravity-settings', {
+      method: 'PUT',
+      body: JSON.stringify({ settings }),
     }),
   setAntigravityFirstRun: (input: { accept_terms: boolean; trust_folders: boolean }) =>
     request<WorkspaceProfile>('/api/profile/antigravity-first-run', {

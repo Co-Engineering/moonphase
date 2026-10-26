@@ -375,6 +375,36 @@ function Shell({ email }: { email: string }) {
     [reloadAll],
   )
 
+  // Said on the project's page, where the start notes go: the switch itself
+  // changes nothing visible until a session starts, which is when the
+  // container is recreated.
+  const toggleDockerAccess = useCallback(
+    (project: Project) => {
+      const on = !project.docker_access
+      void api.setDockerAccess(project.id, on).then(
+        () => {
+          setStartNote({
+            projectId: project.id,
+            note: on
+              ? 'Docker access is on. The container moves to Sysbox the next time a ' +
+                'session starts here, which also lets Antigravity’s Auto Mode run; ' +
+                'sessions running now carry on until then, and the files are kept.'
+              : 'Docker access is off. The container moves off Sysbox the next time a ' +
+                'session starts here; the files are kept.',
+          })
+          selectProject(project.id)
+          reloadAll()
+        },
+        (err) =>
+          setStartNote({
+            projectId: project.id,
+            note: err instanceof Error ? err.message : String(err),
+          }),
+      )
+    },
+    [reloadAll, selectProject],
+  )
+
   // Landing in the copy is the point of duplicating — nobody duplicates a
   // session to then go find it themselves.
   const duplicateSession = useCallback(
@@ -619,6 +649,7 @@ function Shell({ email }: { email: string }) {
                       onChooseAccount={(item, session) =>
                         setAccountTarget({ projectId: item.id, session: session?.tmux_session })
                       }
+                      onToggleDockerAccess={toggleDockerAccess}
                       harnesses={harnesses.data}
                     />
                   ))}
@@ -693,6 +724,7 @@ function Shell({ email }: { email: string }) {
                   onChooseAccount={(item, session) =>
                     setAccountTarget({ projectId: item.id, session: session?.tmux_session })
                   }
+                  onToggleDockerAccess={toggleDockerAccess}
                   harnesses={harnesses.data}
                 />
               ))}
@@ -1012,6 +1044,7 @@ function ProjectRow({
   onConfigure,
   onConfigureSession,
   onChooseAccount,
+  onToggleDockerAccess,
   onReorderSession,
   harnesses,
 }: {
@@ -1033,6 +1066,8 @@ function ProjectRow({
   onConfigureSession?: (session: Session) => void
   /** Pick which account the project, or one session, runs on. */
   onChooseAccount?: (project: Project, session?: Session) => void
+  /** Docker access, which recreates the container under Sysbox at the next start. */
+  onToggleDockerAccess?: (project: Project) => void
   /** `beforeName` is null when dropped after the last session. */
   onReorderSession?: (draggedName: string, beforeName: string | null) => void
   /** For the harness's display name; the built-in one is used until it loads. */
@@ -1119,6 +1154,18 @@ function ProjectRow({
                     detail: 'Which of your accounts your sessions here run on.',
                     disabledReason: project.access === 'admin' ? undefined : 'not yours',
                     onSelect: () => onChooseAccount(project),
+                  },
+                ]
+              : []),
+            ...(onToggleDockerAccess
+              ? [
+                  {
+                    label: project.docker_access ? 'Turn off Docker access' : 'Turn on Docker access',
+                    detail: project.docker_access
+                      ? 'Stop running under Sysbox. The container is recreated at the next session start; files are kept.'
+                      : 'Run under Sysbox: Docker inside the project, and Antigravity’s Auto Mode. The container is recreated at the next session start; files are kept.',
+                    disabledReason: project.access === 'admin' ? undefined : 'not yours',
+                    onSelect: () => onToggleDockerAccess(project),
                   },
                 ]
               : []),
@@ -1334,8 +1381,12 @@ export function ProjectView({
   const choosingNewAccounts = newSessionAccounts.length > 1
   const choosingAccounts = accounts.length > 1
 
+  // Every harness this instance runs, signed in to or not: one you have not
+  // signed in to yet is listed, disabled, rather than missing — when only the
+  // signed-in ones were offered, the choice did not exist at all until you
+  // happened to add a second account, and nothing said it ever would.
   const availableHarnesses = useMemo(() => {
-    const list = (harnesses ?? []).filter((h) => h.available && h.configured)
+    const list = (harnesses ?? []).filter((h) => h.available)
     if (!list.some((h) => h.kind === project.harness)) {
       list.unshift({
         kind: project.harness,
@@ -1834,24 +1885,34 @@ export function ProjectView({
                   ))}
                 </select>
                 {availableHarnesses.length > 1 && (
-                  <select
-                    className="harness-choice"
-                    value={effectiveNewHarness}
-                    onChange={(e) => {
-                      setNewHarness(e.target.value as HarnessKind)
-                      setNewAccount('')
-                    }}
-                    aria-label="Agent harness"
-                    title="Which agent harness to run in this session"
-                    disabled={busy}
-                  >
-                    {availableHarnesses.map((h) => (
-                      <option key={h.kind} value={h.kind}>
-                        {h.display_name}
-                        {h.kind === project.harness ? " (project's default)" : ''}
-                      </option>
-                    ))}
-                  </select>
+                  <label className="harness-choice">
+                    <span>Agent</span>
+                    <select
+                      value={effectiveNewHarness}
+                      onChange={(e) => {
+                        setNewHarness(e.target.value as HarnessKind)
+                        setNewAccount('')
+                      }}
+                      aria-label="Agent harness"
+                      title="Which agent this session runs. Each session has its own; the project's is only the default."
+                      disabled={busy}
+                    >
+                      {availableHarnesses.map((h) => (
+                        <option
+                          key={h.kind}
+                          value={h.kind}
+                          disabled={!h.configured && h.kind !== project.harness}
+                        >
+                          {h.display_name}
+                          {h.kind === project.harness
+                            ? ' (project default)'
+                            : h.configured
+                              ? ''
+                              : ' — sign in under Settings → Accounts'}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 )}
                 {choosingNewAccounts && (
                   <select

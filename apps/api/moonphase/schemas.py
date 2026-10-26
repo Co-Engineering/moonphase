@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -648,12 +648,21 @@ class WorkspaceProfileOut(BaseModel):
     # WorkspaceProfile.
     antigravity_accept_terms: bool = False
     antigravity_trust_folders: bool = False
+    # agy's own settings.json keys every session starts with — Moonphase's
+    # defaults until the person saves their own.
+    antigravity_settings: dict[str, Any] = Field(default_factory=dict)
     # Connection state, never the credentials themselves.
     harness_connected: bool = False
     harness_auth_mode: str | None = None
     github_connected: bool = False
     github_account: str | None = None
     github_scopes: str | None = None
+
+
+class AntigravitySettingsIn(BaseModel):
+    org_id: UUID | None = None
+    # agy's settings.json keys. Null goes back to Moonphase's defaults.
+    settings: dict[str, Any] | None
 
 
 class AntigravityFirstRunIn(BaseModel):
@@ -1202,6 +1211,10 @@ class UpdateStateOut(BaseModel):
     status: str | None = None
     status_detail: str | None = None
     command: str = ""
+
+
+class DockerAccessIn(BaseModel):
+    enabled: bool
 
 
 class RenameIn(BaseModel):

@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import text
 
 from .. import (
+    agy_sandbox,
     docker_remote,
     environments,
     imagebuild,
@@ -33,7 +34,8 @@ from .. import (
 from ..auth import Principal, current_principal
 from ..config import get_settings
 from ..db import service_session, user_session
-from ..harness import SessionSpace
+from ..harness import HarnessKind, SessionSpace
+from ..harness.antigravity import settings_from_profile
 from ..runtime import (
     CAN_ADMINISTER,
     CAN_CONTROL,
@@ -44,6 +46,7 @@ from ..runtime import (
 )
 from ..schemas import (
     AccountChoiceIn,
+    DockerAccessIn,
     LeftoversCleanIn,
     LeftoversCleanOut,
     LeftoverSessionOut,
@@ -613,7 +616,7 @@ async def _recreate_if_stale(
     ctx: runtime.ProjectContext,
     container: docker_remote.ContainerInfo,
 ) -> bool:
-    """Rebuild a container whose image is no longer the one it should have.
+    """Rebuild a container whose image or runtime is not the one it should have.
 
     A container keeps its creation-time image for life; there is no changing
     it without recreating. So every fix that lands in the image — a new
@@ -633,14 +636,23 @@ async def _recreate_if_stale(
     which, on a container this check considers stale, is not reachable anyway.
     """
     wanted = await _current_image_for(principal, ctx.project)
-    if not wanted or not container.image or container.image == wanted:
+    stale_image = bool(wanted and container.image and container.image != wanted)
+    # The runtime is fixed at creation the same way, and Docker access can now
+    # be switched after it: the container follows on its next start. Unknown
+    # (an older daemon, a stub) is left alone, as an unknown image is.
+    wrong_runtime = bool(container.runtime) and (
+        (container.runtime == "sysbox-runc") != bool(ctx.project.get("docker_access"))
+    )
+    if not stale_image and not wrong_runtime:
         return False
 
     log.info(
-        "recreating %s: image %s is stale, current is %s",
+        "recreating %s: image %s (current %s), runtime %s (docker access %s)",
         ctx.container,
         container.image,
         wanted,
+        container.runtime,
+        bool(ctx.project.get("docker_access")),
     )
     project = ctx.project
     await _provision_container(
@@ -715,6 +727,40 @@ async def _prepare_space(
         token=profile.vcs_credential.token if profile.vcs_credential else None,
     )
     return sessions.space_for(name, worktree.workdir), worktree
+
+
+async def _agy_sandbox_note(
+    principal: Principal,
+    ctx: runtime.ProjectContext,
+    conn_ssh: Any,
+    harness_kind: str,
+    profile: Any,
+) -> str | None:
+    """Ready agy's sandbox for a session about to start in Auto Mode.
+
+    See `agy_sandbox`. Before the launch, because agy looks once, as it
+    starts. Never in the way of starting it: whatever goes wrong here only
+    means agy asks before each command, which it says itself.
+    """
+    if harness_kind != HarnessKind.ANTIGRAVITY:
+        return None
+    if settings_from_profile(profile).get("agentMode") != "auto":
+        return None
+    try:
+        async with user_session(principal.claims) as conn:
+            server = await queries.get_server(conn, ctx.project["server_id"])
+        return await agy_sandbox.prepare(
+            conn_ssh,
+            ctx.container,
+            administers_server=(server or {}).get("access") in CAN_ADMINISTER,
+        )
+    except Exception as exc:  # noqa: BLE001 — never fatal, see above
+        log.warning("agy sandbox: not prepared for %s: %s", ctx.container, exc)
+        return None
+
+
+def _notes(*notes: str | None) -> str | None:
+    return " ".join(n for n in notes if n) or None
 
 
 async def _profile_or_409(
@@ -875,6 +921,7 @@ async def create_session(
         principal, ctx, name, profile, start_branch=requested_branch, conn_ssh=conn_ssh
     )
 
+    sandbox_note = await _agy_sandbox_note(principal, ctx, conn_ssh, session_harness, profile)
     try:
         await sessions.ensure_session(
             conn_ssh,
@@ -906,7 +953,12 @@ async def create_session(
             await queries.set_session_harness_account(conn, project_id, name, account_id)
         row = {**row, "harness_credential_id": account_id}
     return SessionOut.model_validate(
-        {**row, "alive": True, "attached_clients": 0, "start_note": worktree.note}
+        {
+            **row,
+            "alive": True,
+            "attached_clients": 0,
+            "start_note": _notes(worktree.note, sandbox_note),
+        }
     )
 
 
@@ -989,6 +1041,10 @@ async def start_session(
         )
         workdir, branch, start_note = worktree.workdir, worktree.branch, worktree.note
 
+    start_note = _notes(
+        start_note,
+        await _agy_sandbox_note(principal, ctx, conn_ssh, session_harness, profile),
+    )
     try:
         await sessions.ensure_session(
             conn_ssh,
@@ -1399,6 +1455,7 @@ async def duplicate_session(
             harness.transcript_dir(space),
         )
 
+    sandbox_note = await _agy_sandbox_note(principal, ctx, conn_ssh, source_harness, profile)
     try:
         await sessions.ensure_session(
             conn_ssh,
@@ -1461,7 +1518,12 @@ async def duplicate_session(
             )
         row = {**row, "harness_credential_id": source_account}
     return SessionOut.model_validate(
-        {**row, "alive": True, "attached_clients": 0, "start_note": worktree.note}
+        {
+            **row,
+            "alive": True,
+            "attached_clients": 0,
+            "start_note": _notes(worktree.note, sandbox_note),
+        }
     )
 
 
@@ -1713,6 +1775,43 @@ async def rename_project(
         renamed = result.first()
         row = await queries.get_project(conn, project_id) if renamed else None
 
+    if row is None:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return _to_out(row)
+
+
+@router.put("/{project_id}/docker-access", response_model=ProjectOut)
+async def set_docker_access(
+    project_id: UUID,
+    payload: DockerAccessIn,
+    principal: Principal = Depends(current_principal),
+) -> ProjectOut:
+    """Run the project under Sysbox, or stop.
+
+    Docker access used to be a choice made once, at creation, because a
+    container's runtime is fixed when it is created. Antigravity changed what
+    hangs on it — its Auto Mode needs user namespaces, which Docker's own
+    seccomp filter refuses and Sysbox allows — so it can now be switched. The
+    container is recreated on the next session start, reattaching both
+    volumes, as for a stale image (see `_recreate_if_stale`); sessions running
+    in it now carry on until then.
+    """
+    try:
+        ctx = await runtime.load_project_context(
+            principal.claims, project_id, require=CAN_ADMINISTER
+        )
+    except NotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    async with user_session(principal.claims) as conn:
+        server = await queries.get_server(conn, ctx.project["server_id"])
+        if server is None:
+            raise HTTPException(status_code=404, detail="Server not found.")
+        _require_sysbox_if_docker_access(server, payload.enabled)
+        await conn.execute(
+            text("update projects set docker_access = :on where id = :id"),
+            {"on": payload.enabled, "id": str(project_id)},
+        )
+        row = await queries.get_project(conn, project_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Project not found.")
     return _to_out(row)

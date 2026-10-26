@@ -59,6 +59,9 @@ class WorkspaceProfile:
     # they add their first Google account; off until they say.
     antigravity_accept_terms: bool = False
     antigravity_trust_folders: bool = False
+    # agy's own settings.json keys, as a JSON object; None means Moonphase's
+    # defaults. See Antigravity.merge_into_profile_file.
+    antigravity_settings_json: str | None = None
 
     # Resolved separately from the private schema.
     harness_credential: HarnessCredential | None = None
@@ -358,6 +361,7 @@ def profile_from_row(
         git_user_email=row.get("git_user_email"),
         antigravity_accept_terms=bool(row.get("antigravity_accept_terms")),
         antigravity_trust_folders=bool(row.get("antigravity_trust_folders")),
+        antigravity_settings_json=row.get("antigravity_settings_json"),
         harness_credential=harness_credential,
         vcs_credential=vcs_credential,
     )
