@@ -7,6 +7,7 @@ once, not once per server and again per project.
 
 from __future__ import annotations
 
+import json
 import logging
 import secrets
 from typing import Any
@@ -19,10 +20,12 @@ from ..auth import Principal, current_principal
 from ..config import get_settings
 from ..db import service_session, user_session
 from ..harness import get as get_harness
-from ..profile import parse_json_object
+from ..harness.antigravity import AGENT_MODES, TOOL_PERMISSIONS, settings_from_profile
+from ..profile import parse_json_object, profile_from_row
 from ..runtime import CAN_CONTROL, NotFound
 from ..schemas import (
     AntigravityFirstRunIn,
+    AntigravitySettingsIn,
     GitHubDeviceOut,
     GitHubDeviceStart,
     GitHubRepoOut,
@@ -92,6 +95,7 @@ async def _build_out(principal: Principal, org_id: UUID) -> WorkspaceProfileOut:
         git_user_email=row.get("git_user_email"),
         antigravity_accept_terms=bool(row.get("antigravity_accept_terms")),
         antigravity_trust_folders=bool(row.get("antigravity_trust_folders")),
+        antigravity_settings=settings_from_profile(profile_from_row(row)),
         harness_connected=harness_row is not None,
         harness_auth_mode=harness_row.get("auth_mode") if harness_row else None,
         github_connected=vcs_row is not None,
@@ -180,6 +184,43 @@ async def set_antigravity_first_run(
                 org_id,
                 accept_terms=payload.accept_terms,
                 trust_folders=payload.trust_folders,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return await _build_out(principal, org_id)
+
+
+def _check_antigravity_settings(settings: dict[str, Any]) -> None:
+    """Refuse what agy would quietly ignore, so a saved choice is one it keeps."""
+    allowed = {"agentMode": AGENT_MODES, "toolPermission": TOOL_PERMISSIONS}
+    for key, values in allowed.items():
+        if key in settings and settings[key] not in values:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{key} must be one of {', '.join(values)}.",
+            )
+    for key in ("modelProvider", "trustedWorkspaces"):
+        if key in settings:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{key} is set by Moonphase, not here.",
+            )
+
+
+@router.put("/antigravity-settings", response_model=WorkspaceProfileOut)
+async def set_antigravity_settings(
+    payload: AntigravitySettingsIn, principal: Principal = Depends(current_principal)
+) -> WorkspaceProfileOut:
+    """agy's own settings, for every session you start from now on."""
+    if payload.settings is not None:
+        _check_antigravity_settings(payload.settings)
+    org_id = await _resolve_org(principal, payload.org_id)
+    async with user_session(principal.claims) as conn:
+        try:
+            await queries.set_antigravity_settings(
+                conn,
+                org_id,
+                None if payload.settings is None else json.dumps(payload.settings),
             )
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc

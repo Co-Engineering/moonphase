@@ -69,6 +69,37 @@ TOKEN_FILE = "antigravity-oauth-token"
 # sign-in at all (see `merge_into_credentials_file`).
 _SIGNED_OUT = "{}\n"
 
+# agy's settings.json values for the two settings Moonphase offers a form for,
+# as `agy -p /config` reports them (1.4.7). agy ignores a value it does not
+# know and runs on its default, so these are checked before they are stored.
+# "auto" needs agy's terminal sandbox; without it agy falls back to "default"
+# by itself ("auto mode is unavailable because the terminal sandbox is
+# unavailable, falling back to default"). "always-proceed" needs nothing.
+AGENT_MODES = ("default", "accept-edits", "auto", "plan")
+TOOL_PERMISSIONS = ("request-review", "strict", "always-proceed")
+# What a person who never saved agy settings gets. agy's own default asks
+# before every command, which from a phone is no way to work; Auto still asks
+# before anything irreversible, and is a no-op where the sandbox cannot run.
+DEFAULT_SETTINGS: dict[str, Any] = {"agentMode": "auto"}
+# Keys Moonphase decides itself, never taken from a person's settings:
+# `modelProvider` follows the account (see merge_into_profile_file), and
+# `trustedWorkspaces` is a per-folder answer (see first_run_answers).
+_MOONPHASE_KEYS = frozenset({"modelProvider", "trustedWorkspaces"})
+
+
+def settings_from_profile(profile: Any) -> dict[str, Any]:
+    """The agy settings a person has chosen, or Moonphase's defaults."""
+    raw = getattr(profile, "antigravity_settings_json", None)
+    if raw is None:
+        return dict(DEFAULT_SETTINGS)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return dict(DEFAULT_SETTINGS)
+    if not isinstance(parsed, dict):
+        return dict(DEFAULT_SETTINGS)
+    return {k: v for k, v in parsed.items() if k not in _MOONPHASE_KEYS}
+
 # What its picker calls the personal Google account sign-in, and the redirect
 # that marks a URL as agy's own rather than any Google link on screen.
 _URL_START = "https://accounts.google.com/o/oauth2/auth?"
@@ -357,13 +388,17 @@ class Antigravity(Harness):
         return answers
 
     def merge_into_profile_file(self, existing: str | None, profile: Any) -> str | None:
-        """Point agy at the credential this session runs on.
+        """Point agy at the credential this session runs on, with the
+        person's own agy settings.
 
         `settings.json` is agy's own: it records folder trust and whatever is
-        changed in `/config`, so only `modelProvider` is touched. Set to
-        "gemini" it makes agy use `GEMINI_API_KEY` and skip the Google sign-in
-        entirely; left in place on a session that has since moved to a Google
-        account, it would go on asking for a key that is no longer there.
+        changed in `/config`, so only two things are touched. The keys the
+        person set in Moonphase (see `settings_from_profile`), which win over
+        a session's `/config` at each start, the way their Claude Code
+        settings do; and `modelProvider`. Set to "gemini" it makes agy use
+        `GEMINI_API_KEY` and skip the Google sign-in entirely; left in place
+        on a session that has since moved to a Google account, it would go on
+        asking for a key that is no longer there.
         """
         credential = getattr(profile, "harness_credential", None)
         if credential is None:
@@ -381,6 +416,7 @@ class Antigravity(Harness):
             return None
 
         before = dict(doc)
+        doc.update(settings_from_profile(profile))
         if credential.mode is HarnessAuthMode.API_KEY:
             # The only value agy accepts for the key: anything else makes it
             # throw the whole file away.

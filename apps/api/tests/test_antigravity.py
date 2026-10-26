@@ -97,6 +97,9 @@ def _profile(**overrides: object) -> WorkspaceProfile:
         "mcp_json": json.dumps({"mcpServers": {"probe-stdio": STDIO, "probe-http": HTTP}}),
         "skills": {"probe-skill": SKILL},
         "harness_credential": _key(),
+        # No agy settings of the person's own: what is under test below is
+        # the credential's key. Moonphase's defaults are tested on their own.
+        "antigravity_settings_json": "{}",
     }
     fields.update(overrides)
     return WorkspaceProfile(**fields)  # type: ignore[arg-type]
@@ -368,6 +371,45 @@ def test_a_google_sign_in_takes_out_only_the_gemini_provider() -> None:
     # A value Moonphase never writes is not Moonphase's to remove.
     other = json.dumps({"modelProvider": "something-else"})
     assert AGY.merge_into_profile_file(other, _profile(harness_credential=_oauth())) is None
+
+
+def test_someone_who_never_chose_gets_auto_mode() -> None:
+    """agy's own default asks before every command. Auto still asks before
+    anything irreversible, and agy falls back to its default by itself where
+    the sandbox cannot run, so it is Moonphase's default."""
+    merged = AGY.merge_into_profile_file(None, _profile(antigravity_settings_json=None))
+    assert json.loads(merged or "") == {"agentMode": "auto", "modelProvider": "gemini"}
+
+
+def test_the_persons_agy_settings_win_over_a_sessions_config() -> None:
+    """The way their Claude Code settings do: set in Moonphase once, they are
+    what every session starts with, whatever `/config` changed last time."""
+    chosen = json.dumps({"agentMode": "accept-edits", "toolPermission": "always-proceed"})
+    existing = json.dumps({"agentMode": "plan", "colorScheme": "dark"})
+
+    merged = AGY.merge_into_profile_file(
+        existing, _profile(antigravity_settings_json=chosen, harness_credential=_oauth())
+    )
+
+    assert json.loads(merged or "") == {
+        "agentMode": "accept-edits",
+        "toolPermission": "always-proceed",
+        "colorScheme": "dark",
+    }
+
+
+def test_settings_cannot_take_over_what_moonphase_decides() -> None:
+    """The provider follows the account, and folder trust is a per-folder
+    answer the person gives separately."""
+    chosen = json.dumps(
+        {"modelProvider": "gemini", "trustedWorkspaces": ["/"], "agentMode": "plan"}
+    )
+
+    merged = AGY.merge_into_profile_file(
+        None, _profile(antigravity_settings_json=chosen, harness_credential=_oauth())
+    )
+
+    assert json.loads(merged or "") == {"agentMode": "plan"}
 
 
 def test_an_unreadable_settings_file_is_left_exactly_as_it_is() -> None:

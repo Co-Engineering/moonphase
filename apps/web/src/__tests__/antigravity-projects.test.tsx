@@ -378,6 +378,36 @@ describe('starting a session on another harness in the same project', () => {
     expect(screen.getByLabelText<HTMLSelectElement>('Agent harness').value).toBe('claude_code')
   })
 
+  it('offers every harness, so the choice is there before a second sign-in', async () => {
+    // Only signed-in harnesses were listed, so with one account there was no
+    // choice to see at all, and nothing saying there would be.
+    vi.spyOn(api, 'branches').mockResolvedValue(['main'])
+    render(
+      <ProjectView
+        project={claudeProject}
+        session={null}
+        sessions={[]}
+        accounts={claudeAccounts}
+        harnesses={[
+          testHarnesses[0],
+          { ...testHarnesses[1], configured: false },
+        ]}
+        onEnter={() => {}}
+        onChanged={() => {}}
+        onToggleSidebar={() => {}}
+        onShare={() => {}}
+        onRemoved={() => {}}
+      />,
+    )
+    await screen.findByText('main (default)')
+
+    const picker = screen.getByLabelText<HTMLSelectElement>('Agent harness')
+    const agy = [...picker.options].find((o) => o.value === 'antigravity')!
+    expect(agy.disabled).toBe(true)
+    expect(agy.textContent).toMatch(/sign in under settings/i)
+    expect(screen.getByText('Agent')).toBeInTheDocument()
+  })
+
   it('displays harness badges when sessions use different harnesses', async () => {
     vi.spyOn(api, 'branches').mockResolvedValue(['main'])
 

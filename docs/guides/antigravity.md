@@ -7,9 +7,12 @@ Code, so it runs in the same `tmux` session, over the same PTY bridge, with the
 same attach and detach, its own `HOME` per session and its own git worktree. A
 laptop closing is no more of an event for it than for Claude.
 
-A project's harness is chosen once, in **New project → Harness**, and stays. Only
-harnesses you have connected are offered there, so Antigravity appears once it is
-connected below.
+A project's harness, chosen in **New project → Harness**, is only its default. Each
+session picks its own: the **Agent** choice next to **New session** on the project's
+page lists every harness, and one you have not connected yet is greyed out until you
+do, below. So one session can run Claude Code while another runs `agy`, in the same
+project and the same repository. A session keeps the agent it started with; for the
+other, start a new session.
 
 What this page says `agy` does was checked against version 1.4.3, the release
 current when it was written, rather than taken from Google's documentation, which
@@ -106,38 +109,61 @@ Both are written only when the file is not there yet, which means a session's fi
 start. A session that has already asked keeps the answer it was given, and turning a
 choice off later does not take an answer back.
 
+## Settings for agy itself
+
+**Settings → Antigravity** holds `agy`'s own settings, which it otherwise keeps per
+session: every session has its own `HOME`, so a mode picked with `/config` or
+**Shift+Tab** is gone in the next one. Moonphase merges them into each session's
+`settings.json` as it starts, the way Claude Code's settings reach its sessions, and
+they win over what a session's `/config` changed last time.
+
+| Setting | `settings.json` | Choices |
+| ------- | --------------- | ------- |
+| **Mode** | `agentMode` | **Auto** (Moonphase's default), Agent (`agy`'s own default: asks before each command), Accept edits, Plan |
+| **Permission prompts** | `toolPermission` | Ask (`agy`'s default), Strict, **Never ask** — runs every command and edit without prompting, sandbox or not |
+
+The same tab has the [first-run choices](#letting-moonphase-answer-them), and the
+instructions, MCP servers and skills Antigravity shares with Claude Code — one set,
+editable from either agent's tab.
+
 ## Auto Mode
 
-`agy`'s **Auto Mode** (`--mode auto`, `/config`, or **Shift+Tab**) approves file
-edits and safe commands without asking, and runs commands in its **terminal
-sandbox**. On Linux that sandbox is built on unprivileged user namespaces, and
-without it `agy` falls back from Auto Mode to asking about every command.
-
-Two things decide whether the sandbox can start:
+`agy`'s **Auto Mode** approves file edits and safe commands without asking, still
+asks before anything irreversible, and runs commands in its **terminal sandbox**. On
+Linux that sandbox is built on unprivileged user namespaces, and without it `agy`
+quietly falls back from Auto Mode to asking about every command. Two things decide
+whether it can start, and Moonphase checks both as an Antigravity session in Auto
+mode starts:
 
 - **The server's kernel.** Ubuntu, from 23.10 on, only lets programs an AppArmor
   profile names create user namespaces
-  (`kernel.apparmor_restrict_unprivileged_userns = 1`); `agy` then says
-  `Terminal sandbox unavailable: AppArmor restricts unprivileged user namespaces`.
-  That is a setting of the server's kernel, not of any container, so the server's
-  page shows an **Antigravity Auto Mode** card to its owner whenever it is on.
-  **Allow Auto Mode on this server** lifts the restriction for the whole machine —
-  the default on Debian, Fedora and most other distributions — and writes
-  `/etc/sysctl.d/60-moonphase-userns.conf` so a reboot keeps it. **Restore the
-  restriction** puts it back. Both need passwordless sudo, the same as installing
-  Docker.
-- **The project's container.** Docker's default seccomp filter blocks creating user
-  namespaces in an ordinary container, so the sandbox only starts in a project with
-  **Docker access** turned on, which runs under Sysbox. Turn that on for an
-  Antigravity project that should use Auto Mode.
+  (`kernel.apparmor_restrict_unprivileged_userns = 1`). That is the server's
+  setting, not any container's. On a server you own, Moonphase lifts it as the
+  session starts — for the whole machine, the default on Debian, Fedora and most
+  other distributions — and writes `/etc/sysctl.d/60-moonphase-userns.conf` so a
+  reboot keeps it. That needs passwordless sudo, the same as installing Docker. The
+  server's page has an **Antigravity Auto Mode** card to do it ahead of time, or to
+  **Restore the restriction**. On a server shared with you, the session says its
+  owner has to.
+- **The project's container.** Docker's default seccomp filter refuses user
+  namespaces in an ordinary container; under Sysbox they work. A project without
+  **Docker access** therefore cannot run the sandbox, and the session says so. Turn
+  it on from the project's **⋯ menu → Turn on Docker access**: the container is
+  recreated under Sysbox the next time a session starts, with `/workspace` and
+  `/home/dev` kept as they are.
 
-`agy` checks once, when it starts, so a session picks either change up on its next
-**Restart harness**.
+Whether it worked is checked, not assumed: the container is asked to create a user
+namespace as the session's user, which is what `agy`'s sandbox does first. Where
+something still stands in the way, the session's start message names it.
+
+Where the sandbox cannot run at all, **Permission prompts → Never ask** stops the
+prompts without it. The container is then the only boundary between the agent and
+anything in it.
 
 ## What it shares with Claude Code's configuration
 
-Moonphase's configuration screens reach Antigravity too, at every scope — **Settings → Agent settings** for the
-organization, a project's or a session's **⋯ menu → Configure** below that — layered
+Moonphase's configuration screens reach Antigravity too, at every scope — **Settings → Claude Code** or
+**Settings → Antigravity** for the organization, a project's or a session's **⋯ menu → Configure** below that — layered
 the same way, org then project then session:
 
 | In Moonphase | What `agy` gets |
@@ -146,7 +172,7 @@ the same way, org then project then session:
 | MCP servers | `~/.gemini/config/mcp_config.json` |
 | Skills | `~/.gemini/config/skills/<name>/SKILL.md`, unchanged — `agy` reads the same folders and frontmatter |
 | Environment variables | The session's environment, as for every harness |
-| Permissions and behaviour | Nothing. It is Claude Code's `settings.json`, and `agy`'s settings are a different file with different keys, so **Configure** does not offer it for an Antigravity session |
+| Permissions and behaviour | Nothing. It is Claude Code's `settings.json`; `agy`'s own are under [Settings → Antigravity](#settings-for-agy-itself) |
 
 `~` there is the session's own `HOME`, never the repository, so none of it shows up
 in `git status`. `agy` still reads a repository's own `AGENTS.md` or `GEMINI.md`

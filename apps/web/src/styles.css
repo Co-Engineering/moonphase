@@ -3708,3 +3708,29 @@ button.link.danger { color: var(--red); }
   display: block;
   margin-top: 2px;
 }
+
+/* --- picking a session's agent -------------------------------------------- */
+/* Labelled, because a bare dropdown among the name and branch fields read as
+   one more of them; this one decides what the session is. */
+
+.new-session label.harness-choice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.new-session label.harness-choice > span {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.new-session label.harness-choice select {
+  max-width: 240px;
+}
+
+.settings-subhead {
+  margin: 18px 0 4px;
+}

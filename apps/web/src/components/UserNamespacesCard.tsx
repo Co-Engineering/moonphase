@@ -57,6 +57,10 @@ export function UserNamespacesCard({ server }: { server: Server }) {
             pick it up when their harness next restarts.
           </p>
           <p className="hint">
+            Moonphase also does this by itself when you start an Antigravity session in
+            Auto mode on a server you own, so you only need this to do it ahead of time.
+          </p>
+          <p className="hint">
             It reaches projects with Docker access turned on, which run under Sysbox.
             Docker’s own default seccomp filter blocks user namespaces in every other
             container, so agy’s sandbox stays unavailable there either way.
