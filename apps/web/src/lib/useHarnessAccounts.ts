@@ -1,5 +1,12 @@
 import { useMemo } from 'react'
-import { api, type HarnessAccount, type HarnessKind, type Project, type Session } from './api'
+import {
+  api,
+  type HarnessAccount,
+  type HarnessInfo,
+  type HarnessKind,
+  type Project,
+  type Session,
+} from './api'
 import { useResource } from './useResource'
 
 type ByHarness = Partial<Record<HarnessKind, HarnessAccount[]>>
@@ -11,19 +18,22 @@ type ByHarness = Partial<Record<HarnessKind, HarnessAccount[]>>
  * the session's harness's with "No such account.". Each project or session
  * gets `accountsFor(target)`, its own harness's list.
  *
- * Claude Code's and Antigravity's accounts are always loaded; another harness's
- * once a project or session here uses it.
+ * Claude Code's are always loaded; another harness's once a project or
+ * session here uses it, or once it is signed in to — a new session can be
+ * started on any of those, and its account picker needs the list.
  */
 export function useHarnessAccounts(
   projects: Pick<Project, 'harness'>[] | null | undefined,
   sessions?: Pick<Session, 'harness'>[] | null | undefined,
+  harnesses?: Pick<HarnessInfo, 'kind' | 'configured'>[] | null | undefined,
 ) {
   const kinds = useMemo(() => {
     const found = new Set<HarnessKind>(['claude_code'])
     for (const project of projects ?? []) if (project.harness) found.add(project.harness)
     for (const session of sessions ?? []) if (session.harness) found.add(session.harness)
+    for (const harness of harnesses ?? []) if (harness.configured) found.add(harness.kind as HarnessKind)
     return [...found].sort()
-  }, [projects, sessions])
+  }, [projects, sessions, harnesses])
   const key = kinds.join(',')
 
   // Each harness's list on its own: one that fails to load leaves the others

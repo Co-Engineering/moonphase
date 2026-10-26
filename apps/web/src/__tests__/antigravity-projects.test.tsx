@@ -97,6 +97,26 @@ describe('loading accounts for the harnesses projects use', () => {
     expect(result.current.accountsFor(gravityProject)).toEqual([])
   })
 
+  it('loads a signed-in harness’s accounts before anything here uses it', async () => {
+    // A new session can be started on it, and its account picker needs them.
+    const listed = vi
+      .spyOn(api, 'harnessAccounts')
+      .mockImplementation(async (harness = 'claude_code') =>
+        harness === 'antigravity' ? googleAccounts : claudeAccounts,
+      )
+
+    const { result } = renderHook(() =>
+      useHarnessAccounts([claudeProject], [], [
+        { kind: 'claude_code', configured: true },
+        { kind: 'antigravity', configured: true },
+        { kind: 'opencode', configured: false },
+      ]),
+    )
+
+    await waitFor(() => expect(result.current.accountsFor('antigravity')).toEqual(googleAccounts))
+    expect(listed).not.toHaveBeenCalledWith('opencode')
+  })
+
   it('asks for Claude’s alone while no project uses anything else', async () => {
     const listed = vi.spyOn(api, 'harnessAccounts').mockResolvedValue(claudeAccounts)
 
@@ -330,6 +350,32 @@ describe('starting a session on another harness in the same project', () => {
     await waitFor(() =>
       expect(create).toHaveBeenCalledWith('p-claude', undefined, undefined, 'g2', 'antigravity'),
     )
+  })
+
+  it('does not carry a harness picked in one project over to the next', async () => {
+    vi.spyOn(api, 'branches').mockResolvedValue(['main'])
+    const view = (p: Project) => (
+      <ProjectView
+        project={p}
+        session={null}
+        sessions={[]}
+        accounts={claudeAccounts}
+        harnesses={testHarnesses}
+        onEnter={() => {}}
+        onChanged={() => {}}
+        onToggleSidebar={() => {}}
+        onShare={() => {}}
+        onRemoved={() => {}}
+      />
+    )
+    const { rerender } = render(view(claudeProject))
+    await screen.findByText('main (default)')
+    fireEvent.change(screen.getByLabelText('Agent harness'), { target: { value: 'antigravity' } })
+
+    // The same view, now showing another Claude project.
+    rerender(view(project({ id: 'p-other', harness: 'claude_code' })))
+
+    expect(screen.getByLabelText<HTMLSelectElement>('Agent harness').value).toBe('claude_code')
   })
 
   it('displays harness badges when sessions use different harnesses', async () => {

@@ -894,7 +894,11 @@ async def _running_projects(conn: Any) -> list[dict[str, Any]]:
     result = await conn.execute(
         text(
             """
-            select p.id, p.org_id, p.name, p.server_id, p.harness, p.container_name,
+            select p.id, p.org_id, p.name, p.server_id, p.container_name,
+                   -- The session's, not the project's: a project can run
+                   -- sessions on more than one harness, and each is read,
+                   -- notified about and resumed as what it actually runs.
+                   s.harness,
                    p.status::text as project_status, p.status_detail,
                    s.id as session_id, s.tmux_session, s.user_id,
                    s.home_dir, s.workdir,

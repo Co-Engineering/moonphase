@@ -191,6 +191,39 @@ async def test_start_session_preserves_stored_harness(mock_project_env, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_an_existing_session_cannot_be_restarted_as_another_harness(
+    mock_project_env, monkeypatch
+) -> None:
+    """Its HOME, transcripts and account are its harness's; another harness
+    started over them would find none of its own."""
+    from fastapi import HTTPException
+
+    async def get_sessions(conn, project_id):
+        return [
+            {
+                "tmux_session": "stored-agy",
+                "harness": "antigravity",
+                "is_mine": True,
+                "home_dir": "/home/dev/sessions/stored-agy",
+                "workdir": "/workspace",
+                "branch": "feature-x",
+            }
+        ]
+
+    monkeypatch.setattr(projects.queries, "get_sessions", get_sessions)
+
+    with pytest.raises(HTTPException) as refused:
+        await projects.start_session(
+            uuid4(),
+            SessionStartIn(session="stored-agy", restart=True, harness="claude_code"),
+            PRINCIPAL,
+        )
+
+    assert refused.value.status_code == 409
+    assert mock_project_env.ensured_sessions == []
+
+
+@pytest.mark.asyncio
 async def test_duplicate_session_preserves_source_harness(mock_project_env, monkeypatch) -> None:
     source_row = {
         "tmux_session": "source-session",

@@ -303,7 +303,7 @@ function Shell({ email }: { email: string }) {
   const sessions = useResource(() => api.allSessions(), [], { pollMs: 10000 })
   // Per harness: an Antigravity project or session gets Antigravity accounts,
   // never Claude's, which the backend would refuse for it.
-  const accounts = useHarnessAccounts(projects.data, sessions.data)
+  const accounts = useHarnessAccounts(projects.data, sessions.data, harnesses.data)
   const { accountsFor } = accounts
   // Which harness the Configure dialog is for. Its editors are Claude Code's,
   // and not all of them mean anything to another harness.
@@ -1321,8 +1321,15 @@ export function ProjectView({
   // Blank means the project's account, which is what nearly everyone wants.
   const [newAccount, setNewAccount] = useState('')
   const [choosingAccount, setChoosingAccount] = useState(false)
-  const [newHarness, setNewHarness] = useState<HarnessKind>(project.harness)
-  const effectiveNewHarness = newHarness || project.harness
+  // Remembered with the project it was picked in: this view stays mounted
+  // from one project to the next, and a harness picked in one is no choice
+  // made for another.
+  const [newHarness, setNewHarnessFor] = useState<{ project: string; kind: HarnessKind } | null>(
+    null,
+  )
+  const setNewHarness = (kind: HarnessKind) => setNewHarnessFor({ project: project.id, kind })
+  const effectiveNewHarness =
+    newHarness?.project === project.id ? newHarness.kind : project.harness
   const newSessionAccounts = accountsFor ? accountsFor(effectiveNewHarness) : accounts
   const choosingNewAccounts = newSessionAccounts.length > 1
   const choosingAccounts = accounts.length > 1

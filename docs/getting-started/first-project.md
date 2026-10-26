@@ -68,8 +68,8 @@ Open the project and press **Enter** on a session. Nothing connects until you do
 session you are not looking at costs nothing.
 
 On first attach Claude Code asks whether you trust the workspace folder. Antigravity
-seeds onboarding and trusted workspaces automatically — see
-[starting a session](../guides/antigravity.md#starting-a-session).
+asks the same, after a colour scheme and Google's terms — see
+[its first start](../guides/antigravity.md#the-first-start-in-each-session).
 
 !!! note "That prompt is not pre-answered unless you say so"
     It guards against hostile content in a cloned repository. Answering it for you would

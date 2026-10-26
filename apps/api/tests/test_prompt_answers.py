@@ -342,3 +342,41 @@ async def test_an_agent_quoting_a_terminal_only_question_does_not_lock_the_feed(
 
     assert fake.calls == [CAPTURE, _typed("carry on"), ENTER]
     assert activity.parse_prompt(pane, AGY.activity_signals()) is None
+
+
+# --- a project running more than one harness ------------------------------------
+
+
+async def test_an_agy_session_in_a_claude_project_is_answered_as_agy(
+    project, container, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The session's harness decides the keys, not the project's: Claude's
+    Enter after the digit would confirm agy's next prompt."""
+    project("claude_code")
+
+    async def agy_session(*_: Any) -> tuple[Any, dict[str, Any]]:
+        return (None, {"harness": "antigravity"})
+
+    monkeypatch.setattr(runtime, "load_session_space", agy_session)
+    fake = container(AGY_PERMISSION)
+
+    await feed.answer(uuid.uuid4(), AnswerIn(key="2"), session=None, principal=PRINCIPAL)
+
+    assert fake.calls == [CAPTURE, _typed("2")]
+
+
+async def test_a_session_that_cannot_be_read_is_not_answered_as_the_projects_harness(
+    project, container, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project("claude_code")
+
+    async def unreadable(*_: Any) -> tuple[Any, dict[str, Any]]:
+        raise ConnectionError("database went away")
+
+    monkeypatch.setattr(runtime, "load_session_space", unreadable)
+    fake = container(AGY_PERMISSION)
+
+    with pytest.raises(ConnectionError):
+        await feed.answer(uuid.uuid4(), AnswerIn(key="2"), session=None, principal=PRINCIPAL)
+
+    assert fake.calls == []

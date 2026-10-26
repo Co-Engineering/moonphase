@@ -360,3 +360,52 @@ async def test_a_failed_resume_starts_the_clock_through_a_real_sweep(
     await monitor._check_container(object(), "c-alpha", [_row("one")])
 
     assert monitor._resume_due("c-alpha") is False
+
+
+async def test_each_session_resumes_on_its_own_harness(monitor, monkeypatch) -> None:
+    """A project can run sessions on more than one harness. Resumed as the
+    project's, an Antigravity session in a Claude Code project would come
+    back as Claude Code, on a Claude account, in agy's HOME."""
+    resumed: list[dict[str, Any]] = []
+    profiled: list[str] = []
+
+    async def fake_org(_conn, _uid):
+        return "o1"
+
+    async def fake_project(_conn, _pid):
+        return {"id": "proj-1"}
+
+    async def fake_profile(_org, _project, harness_kind, _session):
+        profiled.append(harness_kind)
+        return _authed_profile()
+
+    async def fake_ensure(_conn, _container, **kwargs):
+        resumed.append(kwargs)
+        return False
+
+    monkeypatch.setattr(
+        "moonphase.monitor.queries.personal_org_id_for_user_privileged", fake_org
+    )
+    monkeypatch.setattr("moonphase.monitor.queries.get_project", fake_project)
+    monkeypatch.setattr(
+        "moonphase.monitor.runtime.load_session_profile_privileged", fake_profile
+    )
+    monkeypatch.setattr("moonphase.monitor.sessions.ensure_session", fake_ensure)
+
+    group = [_row("claude"), {**_row("gravity"), "harness": "antigravity"}]
+    await monitor._check_container(object(), "c-alpha", group)
+
+    assert {r["session"]: r["harness_kind"] for r in resumed} == {
+        "claude": "claude_code",
+        "gravity": "antigravity",
+    }
+    assert sorted(profiled) == ["antigravity", "claude_code"]
+
+
+def test_the_sweep_reads_each_sessions_own_harness() -> None:
+    """Every per-session use above reads `harness` off these rows."""
+    import inspect
+
+    source = inspect.getsource(monitor_module._running_projects)
+    assert "s.harness" in source
+    assert "p.harness" not in source

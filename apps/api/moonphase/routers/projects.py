@@ -962,10 +962,19 @@ async def start_session(
     # layout. That is also the upgrade path for sessions made before sessions
     # had owners, which still live in the container's shared home.
     existing = next((r for r in rows if str(r["tmux_session"]) == name), None)
-    session_harness = (
-        options.harness
-        or (str(existing["harness"]) if existing and existing.get("harness") else ctx.harness)
-    )
+    # The harness is fixed at creation too: its HOME, transcripts and account
+    # are that harness's, and another one started over them would find none
+    # of its own. A different harness is a new session.
+    stored = str(existing["harness"]) if existing and existing.get("harness") else None
+    if stored and options.harness and options.harness != stored:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Session {name!r} runs {harness_registry.get(stored).display_name}. "
+                "Start a new session to use another harness."
+            ),
+        )
+    session_harness = stored or options.harness or ctx.harness
     profile = await _profile_or_409(principal, ctx, name, harness_kind=session_harness)
 
     start_note: str | None = None
