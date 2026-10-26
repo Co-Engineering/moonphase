@@ -53,6 +53,12 @@ class WorkspaceProfile:
     env_vars: dict[str, str] = field(default_factory=dict)
     git_user_name: str | None = None
     git_user_email: str | None = None
+    # Whether Moonphase may answer two of Antigravity's first-run questions
+    # in each new session for this person: Google's Terms of Service & Data
+    # Use, and trusting the session's folder. Theirs to decide, asked when
+    # they add their first Google account; off until they say.
+    antigravity_accept_terms: bool = False
+    antigravity_trust_folders: bool = False
 
     # Resolved separately from the private schema.
     harness_credential: HarnessCredential | None = None
@@ -350,6 +356,8 @@ def profile_from_row(
         env_vars={str(k): str(v) for k, v in raw_env.items()},
         git_user_name=row.get("git_user_name"),
         git_user_email=row.get("git_user_email"),
+        antigravity_accept_terms=bool(row.get("antigravity_accept_terms")),
+        antigravity_trust_folders=bool(row.get("antigravity_trust_folders")),
         harness_credential=harness_credential,
         vcs_credential=vcs_credential,
     )

@@ -183,6 +183,17 @@ class Harness(abc.ABC):
         """
         return {}
 
+    def first_run_answers(self, profile: Any, space: SessionSpace) -> dict[str, str]:
+        """First-run questions answered for someone who said Moonphase may.
+
+        The exception to `seed_config_files`'s rule, and only by the user's
+        own choice, read off `profile`: the same {path: contents}, written
+        only if absent, so a file the harness has since made its own is left
+        alone. Empty when the user has not allowed it.
+        """
+        del profile, space
+        return {}
+
     def profile_files(self, profile: Any, space: SessionSpace) -> dict[str, str]:
         """The user's global configuration, as {path: contents}.
 

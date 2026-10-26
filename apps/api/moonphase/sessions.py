@@ -316,15 +316,20 @@ async def seed_config(
     container: str,
     harness: Harness,
     space: SessionSpace | None = None,
+    workspace_profile: profile.WorkspaceProfile | None = None,
 ) -> None:
     """Write first-run config, but never over a file the harness already owns.
 
     Claude Code treats ~/.claude.json as its own mutable state (trust
     decisions, history, project settings). Overwriting it on every session
     start would silently discard all of that, so this is create-if-absent only.
+    The first-run answers the session's owner has allowed go the same way.
     """
     space = space or SessionSpace()
-    for path, contents in harness.seed_config_files(space).items():
+    files = dict(harness.seed_config_files(space))
+    if workspace_profile is not None:
+        files.update(harness.first_run_answers(workspace_profile, space))
+    for path, contents in files.items():
         quoted = shlex.quote(path)
         directory = shlex.quote(path.rsplit("/", 1)[0])
         command = (
@@ -410,7 +415,7 @@ async def ensure_session(
     # the next restart rather than silently absent until someone recreates the
     # session by hand.
     await ensure_home(conn, container, space)
-    await seed_config(conn, container, harness, space)
+    await seed_config(conn, container, harness, space, workspace_profile)
     if workspace_profile is not None:
         await profile.apply(conn, container, harness, workspace_profile, space)
     else:

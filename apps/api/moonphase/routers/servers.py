@@ -11,12 +11,19 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from .. import docker_remote, provision, queries, ssh
+from .. import docker_remote, provision, queries, ssh, userns_remote
 from ..auth import Principal, current_principal
 from ..config import get_settings
 from ..db import service_session, user_session
 from ..runtime import CAN_ADMINISTER, Forbidden, NotFound, load_server_target
-from ..schemas import RenameIn, ServerBootstrapOut, ServerCreate, ServerOut
+from ..schemas import (
+    RenameIn,
+    ServerBootstrapOut,
+    ServerCreate,
+    ServerOut,
+    UserNamespacesIn,
+    UserNamespacesOut,
+)
 from ..ssh import HostKeyMismatch, SSHError
 
 log = logging.getLogger(__name__)
@@ -434,6 +441,52 @@ async def reboot_server(
         await ssh.pool.drop(str(server_id))
 
     return {"detail": "Reboot sent. Projects on this server will come back on their own."}
+
+
+async def _userns(
+    principal: Principal, server_id: UUID, change: bool | None
+) -> UserNamespacesOut:
+    await _require_admin(principal, server_id)
+    try:
+        target = await load_server_target(principal.claims, server_id)
+    except NotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    try:
+        conn_ssh = await ssh.pool.get(target)
+        if change is None:
+            info = await userns_remote.probe(conn_ssh)
+        elif change:
+            info = await userns_remote.lift(conn_ssh)
+        else:
+            info = await userns_remote.restore(conn_ssh)
+    except SSHError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return UserNamespacesOut(
+        restricted=info.restricted, lifted_by_moonphase=info.lifted_by_moonphase
+    )
+
+
+@router.get("/{server_id}/user-namespaces", response_model=UserNamespacesOut)
+async def get_user_namespaces(
+    server_id: UUID, principal: Principal = Depends(current_principal)
+) -> UserNamespacesOut:
+    """Whether the server's kernel lets containers create user namespaces,
+    which Antigravity's Auto Mode needs. See `userns_remote`."""
+    return await _userns(principal, server_id, None)
+
+
+@router.put("/{server_id}/user-namespaces", response_model=UserNamespacesOut)
+async def set_user_namespaces(
+    server_id: UUID,
+    payload: UserNamespacesIn,
+    principal: Principal = Depends(current_principal),
+) -> UserNamespacesOut:
+    """Lift Ubuntu's restriction on the whole server, or put it back.
+
+    The machine itself, so its owner's call alone. Sessions already running
+    keep what they started with: agy looks once, when it starts.
+    """
+    return await _userns(principal, server_id, payload.allow)
 
 
 @router.delete("/{server_id}", status_code=status.HTTP_204_NO_CONTENT)
