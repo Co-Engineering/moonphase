@@ -298,19 +298,26 @@ function Shell({ email }: { email: string }) {
   const projects = useResource<Project[]>(() => api.projects(), [], { pollMs: 8000 })
   const harnesses = useResource(() => api.harnesses(), [])
   const profile = useResource(() => api.profile(), [])
-  // Per harness: an Antigravity project gets Antigravity accounts, never
-  // Claude's, which the backend would refuse for it.
-  const accounts = useHarnessAccounts(projects.data)
+  // Every session, in one query and without touching a server. Listing what
+  // exists must not cost a connection to a machine that may be asleep.
+  const sessions = useResource(() => api.allSessions(), [], { pollMs: 10000 })
+  // Per harness: an Antigravity project or session gets Antigravity accounts,
+  // never Claude's, which the backend would refuse for it.
+  const accounts = useHarnessAccounts(projects.data, sessions.data, harnesses.data)
   const { accountsFor } = accounts
   // Which harness the Configure dialog is for. Its editors are Claude Code's,
   // and not all of them mean anything to another harness.
   const configureHarness: HarnessKind =
-    (configureTarget && projects.data?.find((p) => p.id === configureTarget.projectId)?.harness) ||
+    (configureTarget &&
+      (configureTarget.session
+        ? sessions.data?.find(
+            (s) =>
+              s.project_id === configureTarget.projectId &&
+              s.tmux_session === configureTarget.session,
+          )?.harness
+        : projects.data?.find((p) => p.id === configureTarget.projectId)?.harness)) ||
     'claude_code'
   const environments = useResource(() => api.environments(), [])
-  // Every session, in one query and without touching a server. Listing what
-  // exists must not cost a connection to a machine that may be asleep.
-  const sessions = useResource(() => api.allSessions(), [], { pollMs: 10000 })
 
   // A sound for the case push notifications don't cover: sitting right here
   // with the app open, looking at a different session than the one that just
@@ -758,6 +765,7 @@ function Shell({ email }: { email: string }) {
             session={selected?.kind === 'project' ? (selected.session ?? null) : null}
             sessions={(sessions.data ?? []).filter((s) => s.project_id === activeProject.id)}
             accounts={accountsFor(activeProject)}
+            accountsFor={accountsFor}
             harnesses={harnesses.data}
             startNote={startNote?.projectId === activeProject.id ? startNote.note : null}
             onStartNote={(note) =>
@@ -892,7 +900,7 @@ function Shell({ email }: { email: string }) {
             <AccountDialog
               project={project}
               session={session}
-              accounts={accountsFor(project)}
+              accounts={accountsFor(session ? session.harness : project.harness)}
               harnesses={harnesses.data}
               onChanged={reloadAll}
               onClose={() => setAccountTarget(null)}
@@ -1134,7 +1142,10 @@ function ProjectRow({
           be visible at once. Nothing connects until one is opened. */}
       {hasSessions &&
         !collapsed &&
-        sessions.map((session) => (
+        sessions.map((session) => {
+          const sessionCopy = harnessCopy(session.harness || project.harness, harnesses)
+          const sessionConfigures = configureDetail(session.harness || project.harness)
+          return (
           <div
             className={`tree-session-row${
               draggingOver === session.tmux_session ? ' drag-over' : ''
@@ -1217,7 +1228,7 @@ function ProjectRow({
               },
               {
                 label: 'Configure',
-                detail: `${configures} for this session only.`,
+                detail: `${sessionConfigures} for this session only.`,
                 disabledReason:
                   session.is_mine || project.access === 'admin'
                     ? undefined
@@ -1227,7 +1238,7 @@ function ProjectRow({
               ...(onChooseAccount
                 ? [
                     {
-                      label: copy.account,
+                      label: sessionCopy.account,
                       detail: 'Restart this session on another of your accounts.',
                       disabledReason:
                         session.is_mine && canControl(project.access) ? undefined : 'not yours',
@@ -1255,7 +1266,7 @@ function ProjectRow({
             ]}
           />
           </div>
-        ))}
+        )})}
     </>
   )
 }
@@ -1265,6 +1276,7 @@ export function ProjectView({
   session,
   sessions,
   accounts = [],
+  accountsFor,
   harnesses,
   startNote = null,
   onStartNote,
@@ -1284,6 +1296,7 @@ export function ProjectView({
    * appears once there are two.
    */
   accounts?: HarnessAccount[]
+  accountsFor?: (target: Pick<Project, 'harness'> | HarnessKind | string) => HarnessAccount[]
   /** For the harness's display name; the built-in one is used until it loads. */
   harnesses?: HarnessInfo[] | null
   /** What the server said about where the latest session here started, if anything. */
@@ -1308,8 +1321,39 @@ export function ProjectView({
   // Blank means the project's account, which is what nearly everyone wants.
   const [newAccount, setNewAccount] = useState('')
   const [choosingAccount, setChoosingAccount] = useState(false)
+  // Remembered with the project it was picked in: this view stays mounted
+  // from one project to the next, and a harness picked in one is no choice
+  // made for another.
+  const [newHarness, setNewHarnessFor] = useState<{ project: string; kind: HarnessKind } | null>(
+    null,
+  )
+  const setNewHarness = (kind: HarnessKind) => setNewHarnessFor({ project: project.id, kind })
+  const effectiveNewHarness =
+    newHarness?.project === project.id ? newHarness.kind : project.harness
+  const newSessionAccounts = accountsFor ? accountsFor(effectiveNewHarness) : accounts
+  const choosingNewAccounts = newSessionAccounts.length > 1
   const choosingAccounts = accounts.length > 1
-  const copy = harnessCopy(project.harness, harnesses)
+
+  const availableHarnesses = useMemo(() => {
+    const list = (harnesses ?? []).filter((h) => h.available && h.configured)
+    if (!list.some((h) => h.kind === project.harness)) {
+      list.unshift({
+        kind: project.harness,
+        display_name: harnessCopy(project.harness, harnesses).agent,
+        supported_auth_modes: [],
+        available: true,
+        configured: true,
+        login_supported: false,
+      })
+    }
+    return list
+  }, [harnesses, project.harness])
+
+  const active = sessions.find((s) => s.tmux_session === session) ?? null
+  const activeHarness = active?.harness ?? project.harness
+  const copy = harnessCopy(activeHarness, harnesses)
+  const newCopy = harnessCopy(effectiveNewHarness, harnesses)
+  const hasMultipleHarnesses = sessions.some((s) => s.harness !== project.harness)
   const branches = useResource<string[]>(
     () =>
       session === null && project.status === 'running' && canControl(project.access)
@@ -1317,7 +1361,6 @@ export function ProjectView({
         : Promise.resolve([]),
     [project.id, project.status, project.access, session === null],
   )
-  const active = sessions.find((s) => s.tmux_session === session) ?? null
   const mine = sessions.filter((s) => s.is_mine)
   // Set briefly when a keystroke is refused, so the explanation reacts to the
   // attempt instead of sitting there having already been read and dismissed.
@@ -1684,6 +1727,7 @@ export function ProjectView({
                       <span className="session-meta">
                         {item.is_mine ? 'yours' : (item.owner ?? 'someone else')}
                         {item.branch ? ` · ${item.branch}` : ''}
+                        {hasMultipleHarnesses ? ` · ${harnessCopy(item.harness, harnesses).agent}` : ''}
                       </span>
                       {liveActivity(item) === 'awaiting_input' && (
                         <span className="needs-you" title="Waiting for you">
@@ -1708,15 +1752,20 @@ export function ProjectView({
                         Resume
                       </button>
                     )}
-                    {choosingAccounts && item.is_mine && canControl(project.access) && (
-                      <SessionAccountSwitcher
-                        project={project}
-                        session={item}
-                        accounts={accounts}
-                        harnesses={harnesses}
-                        onSwitched={onChanged}
-                      />
-                    )}
+                    {(() => {
+                      const itemAccounts = accountsFor
+                        ? accountsFor(item.harness)
+                        : (item.harness === project.harness ? accounts : [])
+                      return itemAccounts.length > 1 && item.is_mine && canControl(project.access) ? (
+                        <SessionAccountSwitcher
+                          project={project}
+                          session={item}
+                          accounts={itemAccounts}
+                          harnesses={harnesses}
+                          onSwitched={onChanged}
+                        />
+                      ) : null
+                    })()}
                     <button
                       className="ghost"
                       title="Open in its own window — one per monitor, tiled by your window manager"
@@ -1784,26 +1833,47 @@ export function ProjectView({
                     </option>
                   ))}
                 </select>
-                {choosingAccounts && (
+                {availableHarnesses.length > 1 && (
+                  <select
+                    className="harness-choice"
+                    value={effectiveNewHarness}
+                    onChange={(e) => {
+                      setNewHarness(e.target.value as HarnessKind)
+                      setNewAccount('')
+                    }}
+                    aria-label="Agent harness"
+                    title="Which agent harness to run in this session"
+                    disabled={busy}
+                  >
+                    {availableHarnesses.map((h) => (
+                      <option key={h.kind} value={h.kind}>
+                        {h.display_name}
+                        {h.kind === project.harness ? " (project's default)" : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                {choosingNewAccounts && (
                   <select
                     className="account-choice"
                     value={newAccount}
                     onChange={(e) => setNewAccount(e.target.value)}
-                    aria-label={copy.account}
-                    title={`Which of your ${copy.agent} accounts the session runs on`}
+                    aria-label={newCopy.account}
+                    title={`Which of your ${newCopy.agent} accounts the session runs on`}
                     disabled={busy}
                   >
                     <option value="">
-                      {projectAccount(project, accounts)
+                      {effectiveNewHarness === project.harness &&
+                      projectAccount(project, newSessionAccounts)
                         ? `${accountName(
-                            projectAccount(project, accounts)!,
-                            project.harness,
+                            projectAccount(project, newSessionAccounts)!,
+                            effectiveNewHarness,
                           )} (project's)`
-                        : "Project's account"}
+                        : `${newCopy.agent}'s default`}
                     </option>
-                    {accounts.map((a) => (
+                    {newSessionAccounts.map((a) => (
                       <option key={a.id} value={a.id}>
-                        {accountName(a, project.harness)}
+                        {accountName(a, effectiveNewHarness)}
                       </option>
                     ))}
                   </select>
@@ -1813,13 +1883,23 @@ export function ProjectView({
                   disabled={busy}
                   onClick={() =>
                     void act(async () => {
+                      const harnessArg =
+                        effectiveNewHarness !== project.harness ? effectiveNewHarness : undefined
                       const created = noteStart(
-                        await api.createSession(
-                          project.id,
-                          newSession.trim() || undefined,
-                          newBranch.trim() || undefined,
-                          newAccount || undefined,
-                        ),
+                        harnessArg
+                          ? await api.createSession(
+                              project.id,
+                              newSession.trim() || undefined,
+                              newBranch.trim() || undefined,
+                              newAccount || undefined,
+                              harnessArg,
+                            )
+                          : await api.createSession(
+                              project.id,
+                              newSession.trim() || undefined,
+                              newBranch.trim() || undefined,
+                              newAccount || undefined,
+                            ),
                       )
                       setNewSession('')
                       setNewBranch('')

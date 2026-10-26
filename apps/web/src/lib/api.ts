@@ -684,14 +684,22 @@ export const api = {
    * Omit the name and it is derived from you, which is the useful default.
    * Omit the branch and the worktree starts from the branch `/workspace` is on,
    * refreshed from origin first.
+   * Omit the harness and it defaults to the project's harness.
    */
-  createSession: (projectId: string, name?: string, branch?: string, accountId?: string) =>
+  createSession: (
+    projectId: string,
+    name?: string,
+    branch?: string,
+    accountId?: string,
+    harness?: HarnessKind,
+  ) =>
     request<Session>(`/api/projects/${projectId}/sessions`, {
       method: 'POST',
       body: JSON.stringify({
         name: name ?? null,
         branch: branch ?? null,
         account_id: accountId ?? null,
+        harness: harness ?? null,
       }),
     }),
   /** Branches worth offering as a new session's starting point. */

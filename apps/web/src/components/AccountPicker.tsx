@@ -105,8 +105,9 @@ export function SessionAccountSwitcher({
   harnesses?: HarnessInfo[] | null
   onSwitched: () => void
 }) {
-  const copy = harnessCopy(project.harness, harnesses)
-  const name = (account: HarnessAccount) => accountName(account, project.harness)
+  const harnessKind = session.harness || project.harness
+  const copy = harnessCopy(harnessKind, harnesses)
+  const name = (account: HarnessAccount) => accountName(account, harnessKind)
   const [pending, setPending] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -192,7 +193,8 @@ export function AccountDialog({
   onChanged: () => void
   onClose: () => void
 }) {
-  const copy = harnessCopy(project.harness, harnesses)
+  const harnessKind = session?.harness || project.harness
+  const copy = harnessCopy(harnessKind, harnesses)
   const title = session
     ? `${copy.account} — ${session.display_name ?? session.tmux_session}`
     : `${copy.account} — ${project.name}`

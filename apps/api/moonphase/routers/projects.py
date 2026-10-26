@@ -722,12 +722,14 @@ async def _profile_or_409(
     ctx: runtime.ProjectContext,
     session: str | None = None,
     account_id: UUID | None = None,
+    harness_kind: str | None = None,
 ) -> Any:
+    target_harness = harness_kind or ctx.harness
     profile = await runtime.load_session_profile(
-        principal.claims, ctx.project, ctx.harness, session, account_id=account_id
+        principal.claims, ctx.project, target_harness, session, account_id=account_id
     )
     if not profile.has_harness_auth:
-        harness_name = harness_registry.get(ctx.harness).display_name
+        harness_name = harness_registry.get(target_harness).display_name
         raise HTTPException(
             status_code=409,
             detail=(
@@ -855,15 +857,18 @@ async def create_session(
         also_avoid = await workspaces.existing_branch_names(conn_ssh, ctx.container)
         name = _session_name_for(principal, taken, also_avoid)
 
+    session_harness = payload.harness if (payload and payload.harness) else ctx.harness
     account_id = payload.account_id if payload else None
     if account_id is not None:
-        await _own_account(principal, account_id, ctx.harness)
+        await _own_account(principal, account_id, session_harness)
 
     # After the name is settled, because the profile now carries this
     # session's own configuration layer and there is no session without a
     # name to ask about. No row exists yet, so only the org and project
     # layers can contribute here.
-    profile = await _profile_or_409(principal, ctx, name, account_id)
+    profile = await _profile_or_409(
+        principal, ctx, name, account_id, harness_kind=session_harness
+    )
 
     requested_branch = payload.branch if payload and payload.branch else None
     space, worktree = await _prepare_space(
@@ -874,7 +879,7 @@ async def create_session(
         await sessions.ensure_session(
             conn_ssh,
             ctx.container,
-            harness_kind=ctx.harness,
+            harness_kind=session_harness,
             workspace_profile=profile,
             session=name,
             space=space,
@@ -886,14 +891,14 @@ async def create_session(
         row = await queries.upsert_session(
             conn,
             project_id=project_id,
-            harness=ctx.harness,
+            harness=session_harness,
             tmux_session=name,
             state="running",
             user_id=principal.user_id,
             workdir=worktree.workdir,
             home_dir=space.home,
             branch=worktree.branch,
-            transcript_path=harness_registry.get(ctx.harness).transcript_dir(space),
+            transcript_path=harness_registry.get(session_harness).transcript_dir(space),
             mark_started=True,
         )
     if account_id is not None:
@@ -930,8 +935,6 @@ async def start_session(
     taken = {str(row["tmux_session"]) for row in rows}
     mine = [row for row in rows if row.get("is_mine")]
 
-    profile = await _profile_or_409(principal, ctx)
-
     if options.session:
         name = sessions.sanitise_name(options.session)
         owned = next((r for r in rows if str(r["tmux_session"]) == name), None)
@@ -952,8 +955,6 @@ async def start_session(
         also_avoid = await workspaces.existing_branch_names(conn_ssh, ctx.container)
         name = _session_name_for(principal, taken, also_avoid)
 
-    profile = await _profile_or_409(principal, ctx, name)
-
     # A session's home and checkout are fixed when it is created. Moving a
     # running one would point it at a directory its harness has never seen and
     # leave its real state orphaned — so an existing session keeps what it was
@@ -961,6 +962,21 @@ async def start_session(
     # layout. That is also the upgrade path for sessions made before sessions
     # had owners, which still live in the container's shared home.
     existing = next((r for r in rows if str(r["tmux_session"]) == name), None)
+    # The harness is fixed at creation too: its HOME, transcripts and account
+    # are that harness's, and another one started over them would find none
+    # of its own. A different harness is a new session.
+    stored = str(existing["harness"]) if existing and existing.get("harness") else None
+    if stored and options.harness and options.harness != stored:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Session {name!r} runs {harness_registry.get(stored).display_name}. "
+                "Start a new session to use another harness."
+            ),
+        )
+    session_harness = stored or options.harness or ctx.harness
+    profile = await _profile_or_409(principal, ctx, name, harness_kind=session_harness)
+
     start_note: str | None = None
     if existing is not None and not options.restart:
         space = SessionSpace(
@@ -977,7 +993,7 @@ async def start_session(
         await sessions.ensure_session(
             conn_ssh,
             ctx.container,
-            harness_kind=ctx.harness,
+            harness_kind=session_harness,
             workspace_profile=profile,
             session=name,
             space=space,
@@ -991,14 +1007,14 @@ async def start_session(
         row = await queries.upsert_session(
             conn,
             project_id=project_id,
-            harness=ctx.harness,
+            harness=session_harness,
             tmux_session=name,
             state="running",
             user_id=principal.user_id,
             workdir=workdir,
             home_dir=space.home,
             branch=branch,
-            transcript_path=harness_registry.get(ctx.harness).transcript_dir(space),
+            transcript_path=harness_registry.get(session_harness).transcript_dir(space),
             mark_started=True,
         )
     return SessionOut.model_validate({**row, "start_note": start_note})
@@ -1191,8 +1207,9 @@ async def switch_session_account(
         raise Forbidden(
             "That session runs on someone else's account. Only they can change it."
         )
+    session_harness = str(row.get("harness") or ctx.harness)
     if payload.account_id is not None:
-        await _own_account(principal, payload.account_id, ctx.harness)
+        await _own_account(principal, payload.account_id, session_harness)
 
     async with service_session() as conn:
         await queries.set_session_harness_account(
@@ -1204,7 +1221,7 @@ async def switch_session_account(
     # its sign-in in one token file, which the restart below rewrites for the
     # new account (or empties, for an API key). Whether it also remembers the
     # account somewhere else could not be checked without a real sign-in.
-    if ctx.harness == harness_registry.HarnessKind.CLAUDE_CODE:
+    if session_harness == harness_registry.HarnessKind.CLAUDE_CODE:
         try:
             conn_ssh = await ssh.pool.get(ctx.target)
             await docker_remote.exec_capture(
@@ -1219,7 +1236,9 @@ async def switch_session_account(
 
     return await start_session(
         project_id,
-        SessionStartIn(session=session_name, restart=True, resume=True),
+        SessionStartIn(
+            session=session_name, restart=True, resume=True, harness=session_harness
+        ),
         principal,
     )
 
@@ -1345,9 +1364,12 @@ async def duplicate_session(
     also_avoid = await workspaces.existing_branch_names(conn_ssh, ctx.container)
     new_name = _unique_name(source_name, taken | also_avoid)
 
-    # The copy carries on the same conversation, so on the same account.
+    # The copy carries on the same conversation, so on the same account and harness.
+    source_harness = str(source_row.get("harness") or ctx.harness)
     source_account = source_row.get("harness_credential_id")
-    profile = await _profile_or_409(principal, ctx, new_name, source_account)
+    profile = await _profile_or_409(
+        principal, ctx, new_name, source_account, harness_kind=source_harness
+    )
 
     source_space = SessionSpace(
         home=str(source_row["home_dir"]), workdir=str(source_row["workdir"])
@@ -1368,7 +1390,7 @@ async def duplicate_session(
     # below; ensure_session would create it too, but only after the copy.
     await sessions.ensure_home(conn_ssh, ctx.container, space)
 
-    harness = harness_registry.get(ctx.harness)
+    harness = harness_registry.get(source_harness)
     if harness.duplicate_resumes:
         await docker_remote.copy_path(
             conn_ssh,
@@ -1381,7 +1403,7 @@ async def duplicate_session(
         await sessions.ensure_session(
             conn_ssh,
             ctx.container,
-            harness_kind=ctx.harness,
+            harness_kind=source_harness,
             workspace_profile=profile,
             session=new_name,
             space=space,
@@ -1396,7 +1418,7 @@ async def duplicate_session(
         row = await queries.upsert_session(
             conn,
             project_id=project_id,
-            harness=ctx.harness,
+            harness=source_harness,
             tmux_session=new_name,
             state="running",
             user_id=principal.user_id,

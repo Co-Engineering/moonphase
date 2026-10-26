@@ -126,7 +126,8 @@ it held.
 - [ ] Usage, plan limits, search and summaries for Antigravity sessions, which
       are Claude Code's only so far. Google documents that `agy` hands a status line
       command the quota it reports, which is where plan limits would come from
-- [ ] Multiple harnesses in one workspace as separate tmux sessions
+- [x] Multiple harnesses in one workspace as separate tmux sessions — a new
+      session picks its harness, and keeps it
 - [ ] Per-harness runtime images. One image carries all four today, which costs
       disk on the server and saves a rebuild when a project changes harness
 

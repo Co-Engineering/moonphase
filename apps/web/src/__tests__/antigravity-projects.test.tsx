@@ -97,6 +97,26 @@ describe('loading accounts for the harnesses projects use', () => {
     expect(result.current.accountsFor(gravityProject)).toEqual([])
   })
 
+  it('loads a signed-in harness’s accounts before anything here uses it', async () => {
+    // A new session can be started on it, and its account picker needs them.
+    const listed = vi
+      .spyOn(api, 'harnessAccounts')
+      .mockImplementation(async (harness = 'claude_code') =>
+        harness === 'antigravity' ? googleAccounts : claudeAccounts,
+      )
+
+    const { result } = renderHook(() =>
+      useHarnessAccounts([claudeProject], [], [
+        { kind: 'claude_code', configured: true },
+        { kind: 'antigravity', configured: true },
+        { kind: 'opencode', configured: false },
+      ]),
+    )
+
+    await waitFor(() => expect(result.current.accountsFor('antigravity')).toEqual(googleAccounts))
+    expect(listed).not.toHaveBeenCalledWith('opencode')
+  })
+
   it('asks for Claude’s alone while no project uses anything else', async () => {
     const listed = vi.spyOn(api, 'harnessAccounts').mockResolvedValue(claudeAccounts)
 
@@ -107,6 +127,29 @@ describe('loading accounts for the harnesses projects use', () => {
     expect(listed).toHaveBeenCalledWith('claude_code')
     // And another harness's project gets nothing rather than Claude's.
     expect(result.current.accountsFor(gravityProject)).toEqual([])
+  })
+
+  it('loads accounts for harnesses used by sessions in a project', async () => {
+    const listed = vi
+      .spyOn(api, 'harnessAccounts')
+      .mockImplementation(async (harness = 'claude_code') =>
+        harness === 'antigravity' ? googleAccounts : claudeAccounts,
+      )
+
+    const agySession = {
+      tmux_session: 's-agy',
+      harness: 'antigravity',
+      project_id: 'p-claude',
+    } as unknown as Session
+
+    const { result } = renderHook(() =>
+      useHarnessAccounts([claudeProject], [agySession]),
+    )
+
+    await waitFor(() => expect(result.current.accountsFor('antigravity')).toEqual(googleAccounts))
+    expect(result.current.accountsFor(claudeProject)).toEqual(claudeAccounts)
+    expect(listed).toHaveBeenCalledWith('claude_code')
+    expect(listed).toHaveBeenCalledWith('antigravity')
   })
 })
 
@@ -232,5 +275,152 @@ describe('configuring a project on another harness', () => {
     expect(await screen.findByRole('tab', { name: 'Permissions & behaviour' })).toBeTruthy()
     expect(screen.getByRole('tab', { name: 'CLAUDE.md' })).toBeTruthy()
     expect(screen.queryByText(/permissions file does not apply/)).toBeNull()
+  })
+})
+
+describe('starting a session on another harness in the same project', () => {
+  const testHarnesses = [
+    {
+      kind: 'claude_code' as const,
+      display_name: 'Claude Code',
+      supported_auth_modes: ['oauth' as const],
+      available: true,
+      configured: true,
+      login_supported: true,
+    },
+    {
+      kind: 'antigravity' as const,
+      display_name: 'Antigravity',
+      supported_auth_modes: ['oauth' as const],
+      available: true,
+      configured: true,
+      login_supported: true,
+    },
+  ]
+
+  it('allows picking a different harness and passes it when creating the session', async () => {
+    vi.spyOn(api, 'branches').mockResolvedValue(['main'])
+    const create = vi
+      .spyOn(api, 'createSession')
+      .mockResolvedValue({ tmux_session: 'g' } as unknown as Session)
+
+    const accountsFor = (h: Pick<Project, 'harness'> | string) => {
+      const kind = typeof h === 'string' ? h : h.harness
+      return kind === 'antigravity' ? googleAccounts : claudeAccounts
+    }
+
+    render(
+      <ProjectView
+        project={claudeProject}
+        session={null}
+        sessions={[]}
+        accounts={claudeAccounts}
+        accountsFor={accountsFor}
+        harnesses={testHarnesses}
+        onEnter={() => {}}
+        onChanged={() => {}}
+        onToggleSidebar={() => {}}
+        onShare={() => {}}
+        onRemoved={() => {}}
+      />,
+    )
+    await screen.findByText('main (default)')
+
+    // Defaults to project harness (Claude Code)
+    const harnessSelect = screen.getByLabelText<HTMLSelectElement>('Agent harness')
+    expect(harnessSelect.value).toBe('claude_code')
+    expect(screen.getByLabelText('Claude account')).toBeTruthy()
+
+    // Switch to Antigravity
+    fireEvent.change(harnessSelect, { target: { value: 'antigravity' } })
+
+    // Account picker switches to Antigravity account
+    const accountPicker = screen.getByLabelText<HTMLSelectElement>('Antigravity account')
+    expect(accountPicker).toBeTruthy()
+    expect([...accountPicker.options].map((o) => o.textContent)).toEqual([
+      "Antigravity's default",
+      'Google account',
+      'Work',
+    ])
+
+    // Pick work account and start session
+    fireEvent.change(accountPicker, { target: { value: 'g2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Start my session' }))
+
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith('p-claude', undefined, undefined, 'g2', 'antigravity'),
+    )
+  })
+
+  it('does not carry a harness picked in one project over to the next', async () => {
+    vi.spyOn(api, 'branches').mockResolvedValue(['main'])
+    const view = (p: Project) => (
+      <ProjectView
+        project={p}
+        session={null}
+        sessions={[]}
+        accounts={claudeAccounts}
+        harnesses={testHarnesses}
+        onEnter={() => {}}
+        onChanged={() => {}}
+        onToggleSidebar={() => {}}
+        onShare={() => {}}
+        onRemoved={() => {}}
+      />
+    )
+    const { rerender } = render(view(claudeProject))
+    await screen.findByText('main (default)')
+    fireEvent.change(screen.getByLabelText('Agent harness'), { target: { value: 'antigravity' } })
+
+    // The same view, now showing another Claude project.
+    rerender(view(project({ id: 'p-other', harness: 'claude_code' })))
+
+    expect(screen.getByLabelText<HTMLSelectElement>('Agent harness').value).toBe('claude_code')
+  })
+
+  it('displays harness badges when sessions use different harnesses', async () => {
+    vi.spyOn(api, 'branches').mockResolvedValue(['main'])
+
+    const sessions = [
+      {
+        id: 's-claude',
+        tmux_session: 'claude-sess',
+        name: 'claude-sess',
+        harness: 'claude_code',
+        is_mine: true,
+        is_running: true,
+        preview_ports: [],
+        created_at: '',
+      },
+      {
+        id: 's-agy',
+        tmux_session: 'agy-sess',
+        name: 'agy-sess',
+        harness: 'antigravity',
+        is_mine: true,
+        is_running: true,
+        preview_ports: [],
+        created_at: '',
+      },
+    ] as unknown as Session[]
+
+    render(
+      <ProjectView
+        project={claudeProject}
+        session={null}
+        sessions={sessions}
+        accounts={claudeAccounts}
+        harnesses={testHarnesses}
+        onEnter={() => {}}
+        onChanged={() => {}}
+        onToggleSidebar={() => {}}
+        onShare={() => {}}
+        onRemoved={() => {}}
+      />,
+    )
+    await screen.findByText('main (default)')
+
+    expect(screen.getByText(/yours · Antigravity/)).toBeTruthy()
+    expect(screen.getByText(/yours · Claude/)).toBeTruthy()
   })
 })
