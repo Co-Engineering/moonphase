@@ -1110,6 +1110,128 @@ async def list_harness_accounts_privileged(
     return [_row_to_dict(r) for r in result]
 
 
+# ---------------------------------------------------------------------------
+# Plan-limit readings per Claude account (see account_usage)
+# ---------------------------------------------------------------------------
+
+_ACCOUNT_USAGE_COLUMNS = (
+    "account_id, windows, read_at, source, problem, detail, retry_at, refusals, updated_at"
+)
+
+
+async def save_account_reading_privileged(
+    conn: AsyncConnection,
+    *,
+    account_id: UUID,
+    windows: list[dict[str, Any]],
+    read_at: Any,
+    source: str,
+) -> None:
+    """Keep a reading, unless a newer one is already kept. A good reading
+    also clears whatever went wrong last time."""
+    await conn.execute(
+        text(
+            """
+            insert into private.harness_account_usage
+              (account_id, windows, read_at, source)
+            values (:id, cast(:windows as jsonb), :read_at, :source)
+            on conflict (account_id) do update set
+              windows    = excluded.windows,
+              read_at    = excluded.read_at,
+              source     = excluded.source,
+              problem    = null,
+              detail     = null,
+              retry_at   = null,
+              refusals   = 0,
+              updated_at = now()
+            where private.harness_account_usage.read_at is null
+               or excluded.read_at > private.harness_account_usage.read_at
+            """
+        ),
+        {
+            "id": account_id,
+            "windows": json.dumps(windows),
+            "read_at": read_at,
+            "source": source,
+        },
+    )
+
+
+async def save_account_problem_privileged(
+    conn: AsyncConnection,
+    *,
+    account_id: UUID,
+    problem: str,
+    detail: str | None,
+    retry_at: Any,
+    refusals: int,
+) -> None:
+    """Why the last attempt to read an account failed. Its last good reading
+    stays."""
+    await conn.execute(
+        text(
+            """
+            insert into private.harness_account_usage
+              (account_id, problem, detail, retry_at, refusals)
+            values (:id, :problem, :detail, :retry_at, :refusals)
+            on conflict (account_id) do update set
+              problem    = excluded.problem,
+              detail     = excluded.detail,
+              retry_at   = excluded.retry_at,
+              refusals   = excluded.refusals,
+              updated_at = now()
+            """
+        ),
+        {
+            "id": account_id,
+            "problem": problem,
+            "detail": detail,
+            "retry_at": retry_at,
+            "refusals": refusals,
+        },
+    )
+
+
+async def get_account_usage_privileged(
+    conn: AsyncConnection, account_ids: list[Any]
+) -> dict[Any, dict[str, Any]]:
+    """{account id: its kept reading}, for those that have one."""
+    if not account_ids:
+        return {}
+    result = await conn.execute(
+        text(
+            f"select {_ACCOUNT_USAGE_COLUMNS} from private.harness_account_usage "
+            "where account_id = any(:ids)"
+        ),
+        {"ids": [a if isinstance(a, UUID) else UUID(str(a)) for a in account_ids]},
+    )
+    rows = [_row_to_dict(r) for r in result]
+    return {row["account_id"]: row for row in rows}
+
+
+async def claude_accounts_for_usage_privileged(conn: AsyncConnection) -> list[dict[str, Any]]:
+    """Every Claude subscription with a stored sign-in, and its kept reading's
+    timing — what the monitor needs to decide whether to ask Anthropic."""
+    result = await conn.execute(
+        text(
+            """
+            select hc.id, hc.oauth_blob_enc, u.read_at, u.retry_at, u.refusals
+            from private.harness_credentials hc
+            left join private.harness_account_usage u on u.account_id = hc.id
+            where hc.harness = 'claude_code'
+              and hc.auth_mode = 'oauth'
+              and hc.oauth_blob_enc is not null
+            """
+        )
+    )
+    out = []
+    for row in result:
+        data = _row_to_dict(row)
+        data["oauth_blob"] = decrypt(data.pop("oauth_blob_enc"))
+        out.append(data)
+    return out
+
+
 async def get_harness_account_privileged(
     conn: AsyncConnection, account_id: UUID
 ) -> dict[str, Any] | None:

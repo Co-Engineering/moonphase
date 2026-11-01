@@ -185,3 +185,85 @@ async def test_signing_in_without_naming_an_account_replaces_the_default() -> No
             assert await _resolve(conn, org_id, org_id) == "sk-ant-new"
         finally:
             await _cleanup(conn, org_id)
+
+
+# --- each account's plan limits, kept (see account_usage) ----------------------
+
+
+def _windows(kept: dict) -> list:
+    # jsonb comes back as text on this driver; account_usage.from_json takes both.
+    import json
+
+    raw = kept["windows"]
+    return json.loads(raw) if isinstance(raw, str) else raw
+
+
+@pytest.mark.asyncio
+async def test_a_kept_reading_is_only_ever_replaced_by_a_newer_one() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    windows = [{"key": "five_hour", "label": "Current session", "percent": 40.0,
+                "resets_at": (now + timedelta(hours=2)).timestamp()}]
+    async with service_session() as conn:
+        org_id = await _org(conn)
+        try:
+            account = await _account(conn, org_id, "Personal", "sk-ant-personal")
+            assert await queries.get_account_usage_privileged(conn, [account]) == {}
+
+            await queries.save_account_reading_privileged(
+                conn, account_id=account, windows=windows, read_at=now, source="statusline"
+            )
+            older = [{**windows[0], "percent": 5.0}]
+            await queries.save_account_reading_privileged(
+                conn, account_id=account, windows=older,
+                read_at=now - timedelta(minutes=10), source="statusline",
+            )
+            kept = (await queries.get_account_usage_privileged(conn, [account]))[account]
+            assert _windows(kept)[0]["percent"] == 40.0
+            assert kept["read_at"] == now and kept["problem"] is None
+
+            # A failure keeps the reading and says why, until a newer reading.
+            await queries.save_account_problem_privileged(
+                conn, account_id=account, problem="rate_limited", detail="No.",
+                retry_at=now + timedelta(minutes=5), refusals=1,
+            )
+            kept = (await queries.get_account_usage_privileged(conn, [account]))[account]
+            assert kept["problem"] == "rate_limited" and _windows(kept)[0]["percent"] == 40.0
+            await queries.save_account_reading_privileged(
+                conn, account_id=account, windows=windows,
+                read_at=now + timedelta(minutes=1), source="session",
+            )
+            kept = (await queries.get_account_usage_privileged(conn, [account]))[account]
+            assert kept["problem"] is None and kept["refusals"] == 0
+            assert kept["source"] == "session"
+        finally:
+            # Removing the account removes what was kept for it.
+            await _cleanup(conn, org_id)
+            left = await conn.execute(
+                text("select count(*) from private.harness_account_usage where account_id = :a"),
+                {"a": account},
+            )
+            assert left.scalar() == 0
+
+
+@pytest.mark.asyncio
+async def test_only_signed_in_claude_subscriptions_are_offered_for_asking() -> None:
+    async with service_session() as conn:
+        org_id = await _org(conn)
+        try:
+            await _account(conn, org_id, "Key", "sk-ant-key")
+            row = await queries.add_harness_account_privileged(
+                conn, org_id=org_id, harness="claude_code", auth_mode="oauth",
+                label="Sub", api_key=None, oauth_token=None,
+                oauth_blob='{"claudeAiOauth": {"accessToken": "t"}}',
+                created_by=None,  # type: ignore[arg-type]
+            )
+            offered = {
+                a["id"]: a for a in await queries.claude_accounts_for_usage_privileged(conn)
+            }
+            assert row["id"] in offered
+            assert "accessToken" in (offered[row["id"]]["oauth_blob"] or "")
+            assert offered[row["id"]]["read_at"] is None
+        finally:
+            await _cleanup(conn, org_id)

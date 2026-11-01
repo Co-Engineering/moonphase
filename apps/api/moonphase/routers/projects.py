@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import text
 
 from .. import (
+    account_usage,
     agy_sandbox,
     docker_remote,
     environments,
@@ -1110,6 +1111,19 @@ async def delete_session(
             principal.claims, project_id, require=CAN_OBSERVE
         )
         conn_ssh = await ssh.pool.get(ctx.target)
+        # What the session last saw of its account's plan limits, before its
+        # HOME — and the status-line file in it — goes. The monitor reads it
+        # every couple of minutes too; this is the last word.
+        await account_usage.capture_before_removal(
+            conn_ssh,
+            ctx.container,
+            {
+                **row,
+                "project_org_id": project.get("org_id"),
+                "session_account_id": row.get("harness_credential_id"),
+            },
+            time.time(),
+        )
         await sessions.kill_session(conn_ssh, ctx.container, session_name)
         await workspaces.remove_worktree(conn_ssh, ctx.container, session_name)
         await sessions.remove_session_home(conn_ssh, ctx.container, session_name)

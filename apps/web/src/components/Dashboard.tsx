@@ -6,7 +6,8 @@ import { resetLabel, untilLabel } from './Usage'
  * Every Claude account's limits at a glance — what `/usage` shows inside
  * Claude Code, for all of them at once, without opening a session on each.
  *
- * Read from Anthropic with each account's own sign-in, a minute at a time.
+ * Read from what Moonphase wrote down as its sessions reported them, so an
+ * account whose sessions are all closed still shows where its windows stood.
  */
 export function Dashboard({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const usage = useResource(() => api.accountUsage(), [], { pollMs: 60000 })
@@ -33,7 +34,7 @@ export function Dashboard({ onToggleSidebar }: { onToggleSidebar: () => void }) 
       <div className="content">
         {usage.error && <div className="banner error">{usage.error}</div>}
         {!usage.data ? (
-          <p className="hint">Asking Anthropic…</p>
+          <p className="hint">Loading…</p>
         ) : accounts.length === 0 ? (
           <div className="empty">
             <h3>No Claude accounts yet</h3>
@@ -74,7 +75,13 @@ function AccountCard({ account }: { account: AccountUsage }) {
       )}
 
       {account.status !== 'ok' && (
-        <p className={account.status === 'api_key' ? 'hint' : 'hint dashboard-problem'}>
+        <p
+          className={
+            account.status === 'api_key' || account.status === 'waiting'
+              ? 'hint'
+              : 'hint dashboard-problem'
+          }
+        >
           {account.stale && 'Out of date — '}
           {account.detail}
           {account.retry_at &&
@@ -89,13 +96,32 @@ function AccountCard({ account }: { account: AccountUsage }) {
       )}
       {account.fetched_at && (
         <p className="hint dashboard-updated">
-          Updated {new Date(account.fetched_at).toLocaleTimeString()}
-          {account.source === 'statusline' && ' · as your running session last saw it'}
-          {account.source === 'session' && ' · read through one of your running sessions'}
+          As of {readingTime(account.fetched_at)}
+          {account.source === 'statusline' && ' · as a session on it last saw it'}
+          {account.source === 'session' && ' · asked through one of its sessions'}
+          {account.source === 'stored' && ' · asked with its stored sign-in'}
         </p>
       )}
     </div>
   )
+}
+
+/**
+ * When a reading was true. Readings are kept, so one can be from yesterday —
+ * a time alone would pass it off as today's.
+ */
+function readingTime(iso: string): string {
+  const at = new Date(iso)
+  const today = new Date()
+  return at.toDateString() === today.toDateString()
+    ? at.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+    : at.toLocaleString(undefined, {
+        weekday: 'short',
+        day: 'numeric',
+        month: 'short',
+        hour: 'numeric',
+        minute: '2-digit',
+      })
 }
 
 function LiveWindowBar({ window: w }: { window: LiveWindow }) {

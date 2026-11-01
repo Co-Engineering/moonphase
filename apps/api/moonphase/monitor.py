@@ -24,6 +24,7 @@ from uuid import UUID
 from sqlalchemy import text
 
 from . import (
+    account_usage,
     activity,
     docker_remote,
     harness_updates,
@@ -53,6 +54,11 @@ MAX_BACKOFF_SECONDS = 600.0
 # perfectly useful; re-reading transcripts every sweep would turn the cheapest
 # question here into the most expensive one.
 USAGE_INTERVAL_SECONDS = 120.0
+
+# How often accounts with no fresh reading are asked of Anthropic directly.
+# The endpoint is rate-limited per account, and the status lines of the
+# account's own sessions report on every reply anyway.
+PLAN_LIMITS_SECONDS = 300.0
 
 # How long to leave a container alone after an auto-resume attempt that could
 # not bring everything back.
@@ -113,6 +119,8 @@ class SessionMonitor:
         self._volumes_checked: dict[str, float] = {}
         # When each container was last asked to update its harnesses.
         self._harnesses_checked: dict[str, float] = {}
+        # When accounts were last asked of Anthropic with stored sign-ins.
+        self._plan_limits_checked = 0.0
 
     def start(self) -> None:
         settings = get_settings()
@@ -158,6 +166,10 @@ class SessionMonitor:
                 await self.sweep_harnesses()
             except Exception as exc:  # noqa: BLE001
                 log.warning("harness update sweep failed: %s", exc)
+            try:
+                await self.refresh_plan_limits()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("plan limit refresh failed: %s", exc)
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._stop.wait(), timeout=interval)
 
@@ -433,6 +445,28 @@ class SessionMonitor:
                     session_id=row["session_id"],
                     cursors=collected.cursors,
                 )
+
+        # And each Claude account's plan limits, as its sessions here last
+        # saw them — written down, so the dashboard still has them after the
+        # sessions are gone. See account_usage.
+        try:
+            await account_usage.collect(
+                conn_ssh,
+                container,
+                [{**r, "project_id": r["id"], "project_org_id": r["org_id"]} for r in group],
+                time.time(),
+            )
+        except Exception as exc:  # noqa: BLE001 — one container must not sink the sweep
+            log.debug("usage: no plan limits from %s: %s", container, exc)
+
+    async def refresh_plan_limits(self) -> int:
+        """Ask Anthropic about accounts nothing running has reported on lately,
+        with the sign-in stored for them. At most every PLAN_LIMITS_SECONDS."""
+        now = time.monotonic()
+        if now - self._plan_limits_checked < PLAN_LIMITS_SECONDS:
+            return 0
+        self._plan_limits_checked = now
+        return await account_usage.refresh_from_stored(time.time())
 
     async def check_budgets(self) -> int:
         """Warn people before a limit stops them, not after.
@@ -901,6 +935,7 @@ async def _running_projects(conn: Any) -> list[dict[str, Any]]:
                    s.harness,
                    p.status::text as project_status, p.status_detail,
                    s.id as session_id, s.tmux_session, s.user_id,
+                   s.harness_credential_id as session_account_id,
                    s.home_dir, s.workdir,
                    s.transcript_path, s.usage_cursors,
                    s.activity, s.pane_digest, s.notified_state

@@ -10,15 +10,13 @@ by a preference they have to set.
 The one number transcripts cannot give is the size of a subscription's
 allowance, so here it is something you tell it once, and the percentage
 appears after you do. The provider's own reading of each account's windows is
-`/accounts` below — see `plan_usage` for why that one does ask Anthropic.
+`/accounts` below, as the monitor wrote it down — see `account_usage`.
 Everything else — when the window opened, when it resets, what went into
 it — comes from data already collected.
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 import time
 from datetime import UTC, datetime, timedelta
@@ -26,11 +24,10 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from .. import docker_remote, plan_usage, profile, queries, runtime, ssh, usage
+from .. import account_usage, plan_usage, queries, usage
 from ..auth import Principal, current_principal
 from ..db import service_session, user_session
-from ..harness import HarnessKind, SessionSpace, claude_code
-from ..harness import get as get_harness
+from ..harness import HarnessKind
 from ..schemas import (
     AccountUsageOut,
     LiveWindowOut,
@@ -43,7 +40,6 @@ from ..schemas import (
     UsageSliceOut,
     UsageWindowOut,
 )
-from ..ssh import SSHError
 
 log = logging.getLogger(__name__)
 
@@ -343,84 +339,6 @@ async def clear_price(
         await queries.delete_model_price(conn, org_id, model)
 
 
-# How many of an account's running sessions to look in for a current token
-# before giving up. Each one costs an SSH round trip.
-_BORROW_ATTEMPTS = 3
-
-
-async def _borrow_tokens(
-    principal: Principal, sessions: list[tuple[dict[str, Any], dict[str, Any]]], now: float
-) -> list[plan_usage.AccountToken]:
-    """Current access tokens from your running sessions on an account.
-
-    Read, never refreshed: Claude refreshes its own, and doing it here would
-    spend the refresh token that session relies on. An idle session's token
-    can have expired too — Claude only refreshes when it next needs it — so
-    those are skipped.
-    """
-    found: list[plan_usage.AccountToken] = []
-    harness = get_harness("claude_code")
-    for session, project in sessions[:_BORROW_ATTEMPTS]:
-        try:
-            ctx = await runtime.load_project_context(
-                principal.claims, project["id"], require=runtime.CAN_OBSERVE
-            )
-            conn_ssh = await ssh.pool.get(ctx.target)
-            path = harness.credentials_merge_target(
-                SessionSpace(home=str(session["home_dir"]))
-            )
-            if path is None:
-                return found
-            contents = await profile.read_file(conn_ssh, ctx.container, path)
-        except (SSHError, runtime.NotFound, runtime.Forbidden) as exc:
-            log.debug("could not read a token from %s: %s", session.get("tmux_session"), exc)
-            continue
-        token = plan_usage.token_from_credentials_file(contents)
-        if token is not None and token.valid(now):
-            found.append(token)
-    return found
-
-
-# How many of an account's sessions to look in for a status-line reading.
-_STATUSLINE_ATTEMPTS = 5
-
-_READ_USAGE_FILE = 'f="$1"; [ -f "$f" ] || exit 0; stat -c %Y "$f" && cat "$f"'
-
-
-async def _statusline_reading(
-    principal: Principal, sessions: list[tuple[dict[str, Any], dict[str, Any]]], now: float
-) -> tuple[list[plan_usage.Window], float] | None:
-    """The newest plan-limit reading any of your sessions on an account saved.
-
-    Each session's status line keeps what Claude Code last told it (see
-    ClaudeCode's status line), so this needs no request to Anthropic and no
-    sign-in beyond the one the session already runs on.
-    """
-    best: tuple[list[plan_usage.Window], float] | None = None
-    for session, project in sessions[:_STATUSLINE_ATTEMPTS]:
-        path = f"{session['home_dir']}/{claude_code.USAGE_FILE}"
-        try:
-            ctx = await runtime.load_project_context(
-                principal.claims, project["id"], require=runtime.CAN_OBSERVE
-            )
-            conn_ssh = await ssh.pool.get(ctx.target)
-            result = await docker_remote.exec_capture(
-                conn_ssh, ctx.container, ["sh", "-c", _READ_USAGE_FILE, "sh", path], timeout=20
-            )
-        except (SSHError, runtime.NotFound, runtime.Forbidden) as exc:
-            log.debug("no status-line reading from %s: %s", session.get("tmux_session"), exc)
-            continue
-        mtime_line, _, body = result.stdout.partition("\n")
-        try:
-            at = float(mtime_line.strip())
-            windows = plan_usage.parse_statusline(json.loads(body), now)
-        except ValueError:
-            continue
-        if windows and (best is None or at > best[1]):
-            best = (windows, at)
-    return best
-
-
 def _windows_out(windows: list[plan_usage.Window]) -> list[LiveWindowOut]:
     return [
         LiveWindowOut(key=w.key, label=w.label, percent=w.percent, resets_at=w.resets_at)
@@ -428,14 +346,16 @@ def _windows_out(windows: list[plan_usage.Window]) -> list[LiveWindowOut]:
     ]
 
 
-async def _account_usage(
-    principal: Principal,
-    account: dict[str, Any],
-    material: dict[str, Any] | None,
-    sessions: list[tuple[dict[str, Any], dict[str, Any]]],
-    now: float,
+_WAITING = (
+    "No reading yet. Moonphase writes one down as soon as a session on this "
+    "account gets a reply from Claude, and keeps it after the session is gone."
+)
+
+
+def _account_out(
+    account: dict[str, Any], kept: dict[str, Any] | None, now: float
 ) -> AccountUsageOut:
-    account_id = str(account["id"])
+    """One account's card, from what the monitor last wrote down for it."""
     out = AccountUsageOut(
         account_id=account["id"],
         label=account.get("label"),
@@ -448,185 +368,44 @@ async def _account_usage(
         out.detail = "Billed per token, so there are no plan limits to show."
         return out
 
-    async with plan_usage.lock_for(account_id):
-        return await _read_account(principal, out, account_id, material, sessions, now)
+    kept = kept or {}
+    if kept.get("read_at") is not None:
+        out.windows = _windows_out(account_usage.from_json(kept.get("windows"), now))
+        out.fetched_at = kept["read_at"]
+        out.source = kept.get("source")
 
-
-def _fill_from_last(out: AccountUsageOut, account_id: str) -> None:
-    last = plan_usage.last_known(account_id)
-    if last is not None:
-        out.windows = _windows_out(last.windows)
-        out.fetched_at = datetime.fromtimestamp(last.fetched_at, tz=UTC)
-        out.stale = True
-
-
-def _slow_down(out: AccountUsageOut, account_id: str, until: float) -> None:
-    at = datetime.fromtimestamp(until, tz=UTC)
-    out.status = "rate_limited"
-    out.detail = out.detail or (
-        "Anthropic refused to report usage — usually because this account has hit a limit."
-    )
-    out.retry_at = at
-    _fill_from_last(out, account_id)
-
-
-async def _read_account(
-    principal: Principal,
-    out: AccountUsageOut,
-    account_id: str,
-    material: dict[str, Any] | None,
-    sessions: list[tuple[dict[str, Any], dict[str, Any]]],
-    now: float,
-) -> AccountUsageOut:
-    reading = await _statusline_reading(principal, sessions, now)
-    if reading is not None:
-        windows, at = reading
-        plan_usage.remember(account_id, windows, at=at)
-        out.windows = _windows_out(windows)
-        out.fetched_at = datetime.fromtimestamp(at, tz=UTC)
-        out.source = "statusline"
-        return out
-
-    hit = plan_usage.cached(account_id, now)
-    if hit is not None:
-        out.windows = _windows_out(hit.windows)
-        out.fetched_at = datetime.fromtimestamp(hit.fetched_at, tz=UTC)
-        return out
-
-    # Refused recently: asking again before the time it gave only keeps the
-    # account pinned at its limit.
-    waiting = plan_usage.backing_off(account_id, now)
-    if waiting is not None:
-        out.detail = waiting[1]
-        _slow_down(out, account_id, waiting[0])
-        return out
-
-    # Every token there is for this account, best first. A refusal of one
-    # (expired, or a kind not allowed to read usage) moves on to the next.
-    candidates: list[tuple[str, plan_usage.AccountToken]] = []
-    stored = plan_usage.token_from_credentials_file((material or {}).get("oauth_blob"))
-    if stored is not None and stored.valid(now):
-        candidates.append(("stored", stored))
-    if not candidates:
-        candidates += [("session", t) for t in await _borrow_tokens(principal, sessions, now)]
-    long_lived = (material or {}).get("oauth_token")
-    if long_lived:
-        candidates.append(("setup_token", plan_usage.AccountToken(str(long_lived), None)))
-
-    if not candidates:
-        out.status = "expired"
-        out.detail = (
-            "The sign-in Moonphase stored has expired, and none of your running "
-            "sessions on this account has a current one. Use a session on it, or "
-            "sign it in again."
-        )
-        _fill_from_last(out, account_id)
-        return out
-
-    last: plan_usage.UsageUnavailable | None = None
-    for source, token in candidates:
-        try:
-            windows = await plan_usage.fetch(token.token)
-        except plan_usage.UsageUnavailable as exc:
-            last = exc
-            if exc.reason in ("expired", "unsupported"):
-                continue
-            break
-        reading = plan_usage.remember(account_id, windows)
-        out.windows = _windows_out(reading.windows)
-        out.fetched_at = datetime.fromtimestamp(reading.fetched_at, tz=UTC)
-        out.source = source
-        return out
-
-    assert last is not None
-    if last.reason == "rate_limited":
-        out.detail = last.detail
-        _slow_down(
-            out,
-            account_id,
-            plan_usage.refused(account_id, now, last.retry_after, last.detail),
-        )
-        return out
-    out.status = last.reason
-    out.detail = last.detail
-    if last.reason == "unsupported" and candidates[-1][0] == "setup_token":
-        out.detail = (
-            "This account was signed in with a long-lived token (claude setup-token), "
-            "which Anthropic does not let read plan usage, and none of your running "
-            "sessions on it has a current interactive sign-in." + _quote(last.detail)
-        )
-    _fill_from_last(out, account_id)
+    problem = kept.get("problem")
+    if problem:
+        # The last attempt to read it failed. What it said is kept, and so is
+        # the reading before it, shown as out of date.
+        out.status = problem
+        out.detail = kept.get("detail")
+        out.retry_at = kept.get("retry_at")
+        out.stale = out.fetched_at is not None
+    elif out.fetched_at is None:
+        out.status = "waiting"
+        out.detail = _WAITING
     return out
-
-
-def _quote(detail: str) -> str:
-    marker = " Anthropic said:"
-    return detail[detail.index(marker):] if marker in detail else ""
 
 
 @router.get("/accounts", response_model=list[AccountUsageOut])
 async def read_account_usage(
     principal: Principal = Depends(current_principal),
 ) -> list[AccountUsageOut]:
-    """Every one of your Claude accounts' limits, as `/usage` shows them."""
+    """Every one of your Claude accounts' limits, as `/usage` shows them.
+
+    Read from what the monitor wrote down (see `account_usage`), never live:
+    the dashboard asks nothing of a server or of Anthropic, and an account
+    whose sessions have all been closed still shows what they last saw.
+    """
     now = time.time()
     async with user_session(principal.claims) as conn:
         org_id = await queries.personal_org_id(conn)
-        if org_id is None:
-            return []
-        session_rows = await queries.list_all_sessions(conn)
-        project_rows = await queries.list_projects(conn)
+    if org_id is None:
+        return []
 
     async with service_session() as conn:
         accounts = await queries.list_harness_accounts_privileged(conn, org_id, "claude_code")
-        materials: dict[Any, dict[str, Any] | None] = {}
-        for account in accounts:
-            row = await queries.resolve_harness_credential_privileged(
-                conn,
-                org_id=org_id,
-                project_id=org_id,
-                harness="claude_code",
-                account_id=account["id"],
-            )
-            materials[account["id"]] = row if row and row["id"] == account["id"] else None
+        kept = await queries.get_account_usage_privileged(conn, [a["id"] for a in accounts])
 
-    # Which of your running sessions runs on which account: the session's own
-    # choice, else its project's (when the project is yours), else the default.
-    default_id = next((a["id"] for a in accounts if a.get("is_default")), None)
-    projects = {p["id"]: p for p in project_rows}
-    by_account: dict[Any, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
-    for session in session_rows:
-        if not session.get("is_mine") or session.get("state") != "running":
-            continue
-        # Claude Code sessions only. An Antigravity session for which neither
-        # it nor its project names an account runs on Antigravity's default,
-        # but the fallback below is Claude's: it would be counted as a session
-        # on that account, have its HOME searched for Claude's credentials
-        # file and status-line reading, and push a real Claude session out of
-        # the few each account is allowed to look in. Every row from the
-        # database names its harness (the column is not null); a hand-built
-        # one that does not is taken as Claude Code, which is what a project
-        # runs when it names none.
-        if str(session.get("harness") or HarnessKind.CLAUDE_CODE) != HarnessKind.CLAUDE_CODE:
-            continue
-        project = projects.get(session["project_id"])
-        if project is None:
-            continue
-        own_project = project.get("org_id") == org_id
-        account = (
-            session.get("harness_credential_id")
-            or (project.get("harness_credential_id") if own_project else None)
-            or default_id
-        )
-        by_account.setdefault(account, []).append((session, project))
-
-    return list(
-        await asyncio.gather(
-            *(
-                _account_usage(
-                    principal, a, materials.get(a["id"]), by_account.get(a["id"], []), now
-                )
-                for a in accounts
-            )
-        )
-    )
+    return [_account_out(a, kept.get(a["id"]), now) for a in accounts]

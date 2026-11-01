@@ -222,7 +222,15 @@ export interface AccountUsage {
   label: string | null
   auth_mode: 'oauth' | 'api_key'
   is_default: boolean
-  status: 'ok' | 'api_key' | 'expired' | 'unsupported' | 'rate_limited' | 'unreachable' | 'error'
+  status:
+    | 'ok'
+    | 'api_key'
+    | 'waiting'
+    | 'expired'
+    | 'unsupported'
+    | 'rate_limited'
+    | 'unreachable'
+    | 'error'
   detail: string | null
   windows: LiveWindow[]
   fetched_at: string | null
@@ -230,8 +238,8 @@ export interface AccountUsage {
   stale: boolean
   /** After being told to slow down: when it will ask again. */
   retry_at: string | null
-  /** Which token the reading came from. */
-  source: 'statusline' | 'stored' | 'session' | 'setup_token' | null
+  /** Where the reading came from. */
+  source: 'statusline' | 'stored' | 'session' | null
 }
 
 /** Where a sign-in goes: an account to replace, or a name for a new one. */
