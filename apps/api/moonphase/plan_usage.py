@@ -16,7 +16,6 @@ otherwise borrows the current one from a running session on that account.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import time
@@ -32,12 +31,10 @@ log = logging.getLogger(__name__)
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 # Required by the provider for OAuth-authenticated calls.
 OAUTH_BETA = "oauth-2025-04-20"
-# The numbers move slowly, and the endpoint is rate-limited per account — a
-# limit the account's own running Claude sessions draw on too.
-CACHE_SECONDS = 120.0
 # After a 429 with no Retry-After, wait this long, doubling on each refusal in
 # a row up to the cap. Asking again a minute later just keeps the account at
-# its limit.
+# its limit. The endpoint is rate-limited per account, a limit the account's
+# own running Claude sessions draw on too. See account_usage.
 BACKOFF_SECONDS = 300.0
 BACKOFF_CAP_SECONDS = 1800.0
 
@@ -263,63 +260,3 @@ async def fetch(token: str, client: httpx.AsyncClient | None = None) -> list[Win
     raise UsageUnavailable(
         "error", f"Anthropic answered {response.status_code}." + _said(message)
     )
-
-
-# account id -> last good reading. Per process, which is all it needs to be:
-# it only exists so that a dashboard left open does not ask once a minute per
-# viewer.
-_cache: dict[str, Reading] = {}
-
-
-def cached(account_id: str, now: float) -> Reading | None:
-    reading = _cache.get(account_id)
-    if reading is None or now - reading.fetched_at > CACHE_SECONDS:
-        return None
-    return reading
-
-
-def last_known(account_id: str) -> Reading | None:
-    return _cache.get(account_id)
-
-
-def remember(account_id: str, windows: list[Window], at: float | None = None) -> Reading:
-    reading = Reading(windows=windows, fetched_at=time.time() if at is None else at)
-    _cache[account_id] = reading
-    _backoff.pop(account_id, None)
-    return reading
-
-
-# account id -> (do not ask before this time, refusals in a row, what was said).
-_backoff: dict[str, tuple[float, int, str | None]] = {}
-
-
-def backing_off(account_id: str, now: float) -> tuple[float, str | None] | None:
-    """When it is worth asking again, and what the refusal said — or None."""
-    entry = _backoff.get(account_id)
-    if entry is None or entry[0] <= now:
-        return None
-    return entry[0], entry[2]
-
-
-def refused(
-    account_id: str, now: float, retry_after: float | None, detail: str | None = None
-) -> float:
-    """Record a 429. Returns when it is worth asking again."""
-    streak = _backoff.get(account_id, (0.0, 0, None))[1] + 1
-    wait = (
-        retry_after
-        if retry_after is not None
-        else min(BACKOFF_CAP_SECONDS, BACKOFF_SECONDS * 2 ** (streak - 1))
-    )
-    until = now + wait
-    _backoff[account_id] = (until, streak, detail)
-    return until
-
-
-# One request per account at a time, so two people opening the dashboard
-# together — or the page and its own poll — do not both spend the allowance.
-_locks: dict[str, asyncio.Lock] = {}
-
-
-def lock_for(account_id: str) -> asyncio.Lock:
-    return _locks.setdefault(account_id, asyncio.Lock())

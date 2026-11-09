@@ -15,7 +15,6 @@ route, as test_harness_accounts.py does.
 
 from __future__ import annotations
 
-import json
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
@@ -24,7 +23,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
-from moonphase import mcp_login, plan_usage, queries
+from moonphase import mcp_login, queries
 from moonphase.harness import SessionSpace
 from moonphase.routers import mcp_oauth, projects
 from moonphase.routers import usage as usage_router
@@ -181,136 +180,6 @@ async def test_connecting_from_settings_relays_through_a_claude_code_session(
     await mcp_oauth.start_mcp_oauth_for_org(McpOAuthStartIn(server_name="linear"), PRINCIPAL)
 
     assert picked == [(claude_project, "claude")]
-
-
-# --- the Dashboard's plan limits ----------------------------------------------
-
-NOW = 1_800_000_000.0
-
-
-def _creds(token: str, expires_in: float) -> str:
-    return json.dumps(
-        {"claudeAiOauth": {"accessToken": token, "expiresAt": int((NOW + expires_in) * 1000)}}
-    )
-
-
-@pytest.fixture
-def dashboard(monkeypatch):
-    plan_usage._cache.clear()
-    plan_usage._backoff.clear()
-    org = uuid4()
-    personal = uuid4()
-    w = SimpleNamespace(
-        org=org,
-        personal=personal,
-        accounts=[
-            {"id": personal, "label": "Personal", "auth_mode": "oauth", "is_default": True},
-        ],
-        # Expired, so the route goes looking in running sessions for a token.
-        materials={personal: {"id": personal, "oauth_blob": _creds("stored", -3600)}},
-        sessions=[],
-        projects=[],
-        files={},
-        statusline={},
-        looked_in=[],
-        fetched_with=[],
-    )
-
-    async def personal_org_id(conn):
-        return w.org
-
-    async def list_all_sessions(conn):
-        return w.sessions
-
-    async def list_projects(conn, server_id=None):
-        return w.projects
-
-    async def list_accounts(conn, org_id, harness):
-        assert harness == "claude_code"
-        return w.accounts
-
-    async def resolve(conn, *, org_id, project_id, harness, account_id=None):
-        return w.materials.get(account_id)
-
-    async def load_project_context(claims, project_id, *, require):
-        return SimpleNamespace(target="t", container="mp-x")
-
-    async def pool_get(target):
-        return object()
-
-    async def read_file(conn, container, path):
-        w.looked_in.append(path)
-        return w.files.get(path)
-
-    async def exec_capture(conn, container, argv, **kw):
-        w.looked_in.append(argv[-1])
-        entry = w.statusline.get(argv[-1])
-        if entry is None:
-            return SimpleNamespace(ok=True, stdout="")
-        return SimpleNamespace(ok=True, stdout=f"{int(entry[0])}\n{json.dumps(entry[1])}")
-
-    async def fetch(token, client=None):
-        w.fetched_with.append(token)
-        return plan_usage.parse_windows(
-            {"five_hour": {"utilization": 10.0, "resets_at": "2027-01-15T12:00:00Z"}}
-        )
-
-    monkeypatch.setattr(usage_router, "user_session", _no_db)
-    monkeypatch.setattr(usage_router, "service_session", _no_db)
-    monkeypatch.setattr(usage_router.queries, "personal_org_id", personal_org_id)
-    monkeypatch.setattr(usage_router.queries, "list_all_sessions", list_all_sessions)
-    monkeypatch.setattr(usage_router.queries, "list_projects", list_projects)
-    monkeypatch.setattr(usage_router.queries, "list_harness_accounts_privileged", list_accounts)
-    monkeypatch.setattr(usage_router.queries, "resolve_harness_credential_privileged", resolve)
-    monkeypatch.setattr(usage_router.runtime, "load_project_context", load_project_context)
-    monkeypatch.setattr(usage_router.ssh.pool, "get", pool_get)
-    monkeypatch.setattr(usage_router.profile, "read_file", read_file)
-    monkeypatch.setattr(usage_router.docker_remote, "exec_capture", exec_capture)
-    monkeypatch.setattr(usage_router.plan_usage, "fetch", fetch)
-    monkeypatch.setattr(usage_router.time, "time", lambda: NOW)
-    monkeypatch.setattr(plan_usage.time, "time", lambda: NOW)
-    return w
-
-
-def _running(w, name: str, harness: str) -> str:
-    project = {"id": uuid4(), "org_id": w.org, "harness_credential_id": None}
-    w.projects.append(project)
-    w.sessions.append(_session(name, harness=harness, project_id=project["id"]))
-    return f"/home/dev/sessions/{name}"
-
-
-@pytest.mark.asyncio
-async def test_an_antigravity_session_is_not_counted_on_the_default_claude_account(
-    dashboard,
-) -> None:
-    """An Antigravity session that names no account of its own fell through
-    to the default — Claude's default, here — and was searched for Claude's
-    credentials file and status-line reading. Whatever it held would have
-    been reported as the Claude account's."""
-    home = _running(dashboard, "agy", "antigravity")
-    dashboard.files[f"{home}/.claude/.credentials.json"] = _creds("not-claudes", 3600)
-    dashboard.statusline[f"{home}/.moonphase/usage.json"] = (
-        NOW - 30,
-        {"rate_limits": {"five_hour": {"used_percentage": 99, "resets_at": NOW + 60}}},
-    )
-
-    [personal] = await usage_router.read_account_usage(PRINCIPAL)
-
-    assert not any(path.startswith(home) for path in dashboard.looked_in)
-    assert "not-claudes" not in dashboard.fetched_with
-    assert personal.source != "statusline"
-    assert personal.status == "expired"
-
-
-@pytest.mark.asyncio
-async def test_a_claude_code_session_on_the_default_account_is_still_read(dashboard) -> None:
-    home = _running(dashboard, "claude", "claude_code")
-    dashboard.files[f"{home}/.claude/.credentials.json"] = _creds("live", 3600)
-
-    [personal] = await usage_router.read_account_usage(PRINCIPAL)
-
-    assert personal.status == "ok" and personal.source == "session"
-    assert dashboard.fetched_with == ["live"]
 
 
 # --- how Claude is paid for ---------------------------------------------------

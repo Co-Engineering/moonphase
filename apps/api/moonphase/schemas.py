@@ -1268,17 +1268,19 @@ class AccountUsageOut(BaseModel):
     label: str | None
     auth_mode: HarnessAuthModeStr
     is_default: bool
-    # ok, api_key (no plan limits to show), expired, unsupported,
+    # ok, api_key (no plan limits to show), waiting (nothing written down
+    # yet), or why the last attempt to read it failed: expired, unsupported,
     # rate_limited, unreachable, error.
     status: str
     detail: str | None = None
     windows: list[LiveWindowOut] = []
-    # When the windows were read. Older than a minute or two means `stale`:
-    # the last good reading, shown because the current one failed.
+    # When the windows were true — when a session's status line wrote them,
+    # or Anthropic answered. `stale`: the last good reading, shown because a
+    # later attempt failed.
     fetched_at: datetime | None = None
     stale: bool = False
     # When it is worth asking again, after the provider said to slow down.
     retry_at: datetime | None = None
-    # Which token the reading came from: stored (at sign-in), session
-    # (borrowed from a running session), setup_token.
+    # Where the reading came from: statusline, stored (the sign-in kept at
+    # sign-in) or session (a token borrowed from a running session).
     source: str | None = None

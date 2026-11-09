@@ -9,28 +9,35 @@ All of it is Claude Code's for now: Antigravity sessions are not counted here an
 accounts have no plan limits on the Dashboard — see
 [what does not work yet](antigravity.md#what-does-not-work-yet).
 
-## The dashboard: every account's limits, live
+## The dashboard: every account's limits
 
 **Dashboard** in the sidebar shows what `/usage` shows inside Claude Code — the
 five-hour session window, the weekly windows, how full each is and when it resets —
-for every Claude account you have connected, side by side. It refreshes every minute.
+for every Claude account you have connected, side by side.
 
 Those numbers come from Anthropic, not from transcripts — the allowance is not
-published. They reach Moonphase in two ways:
+published. Moonphase's background monitor collects them and **writes them to its
+database**, and the dashboard only reads what was written. So an account whose
+sessions have all been closed still shows where its windows stood, with the time that
+was true, and a window whose reset has passed since shows as empty again. They are
+collected two ways:
 
 - **From your sessions, first.** Claude Code hands its status line the same 5-hour and
   weekly limits `/usage` shows, with every reply. Moonphase starts Claude with a status
   line that keeps the latest of those in the session's home, then runs whatever status
-  line you configured yourself, so yours still shows. The dashboard reads the newest
-  reading across your sessions on each account. No extra request, and it works with
-  Moonphase's long-lived sign-in.
-- **From Anthropic's usage endpoint, as a fallback**, when no session on an account
-  has reported anything yet. That endpoint is rate-limited and needs an interactive
-  login, so it often can't answer; Moonphase never refreshes a sign-in to make it.
+  line you configured yourself, so yours still shows. The monitor reads those files
+  every couple of minutes and keeps the newest per account; deleting a session reads
+  its file one last time first. No extra request, and it works with Moonphase's
+  long-lived sign-in.
+- **From Anthropic's usage endpoint**, for an account none of whose sessions has
+  reported in the last ten minutes: with a token borrowed from one of its running
+  sessions, or the sign-in stored for it while that is still valid. That endpoint is
+  rate-limited, so a refusal is kept with when to try again, and nothing is asked
+  before then; Moonphase never refreshes a sign-in to make it.
 
-A reading is only as new as the last reply in a session on that account. An account
-nobody has used since a restart shows its last reading with the time it was taken.
-API-key accounts have no plan windows; their spend is on the Usage screen.
+An account with nothing written down yet says so: it fills in as soon as a session on
+it gets a reply from Claude. API-key accounts have no plan windows; their spend is on
+the Usage screen.
 
 ## Two different questions
 

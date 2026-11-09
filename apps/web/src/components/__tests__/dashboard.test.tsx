@@ -71,6 +71,32 @@ describe('the dashboard', () => {
     expect(await screen.findByText(/slow down\. Trying again at/)).toBeTruthy()
   })
 
+  it('says, without alarm, what fills an account it has no reading for yet', async () => {
+    vi.spyOn(api, 'accountUsage').mockResolvedValue([
+      usage({
+        status: 'waiting',
+        detail: 'No reading yet. It appears once a session on this account gets a reply.',
+        fetched_at: null,
+        source: null,
+      }),
+    ])
+    render(<Dashboard onToggleSidebar={() => {}} />)
+
+    const note = await screen.findByText(/No reading yet/)
+    expect(note.className).not.toMatch(/dashboard-problem/)
+  })
+
+  it('dates a kept reading from another day rather than passing it off as today’s', async () => {
+    vi.spyOn(api, 'accountUsage').mockResolvedValue([
+      usage({ fetched_at: '2026-10-19T10:00:00Z', source: 'statusline' }),
+    ])
+    render(<Dashboard onToggleSidebar={() => {}} />)
+
+    const line = await screen.findByText(/^As of /)
+    expect(line.textContent).toMatch(/Oct/)
+    expect(line.textContent).toMatch(/as a session on it last saw it/)
+  })
+
   it('points to Settings with no accounts', async () => {
     vi.spyOn(api, 'accountUsage').mockResolvedValue([])
     render(<Dashboard onToggleSidebar={() => {}} />)
