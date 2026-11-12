@@ -516,6 +516,7 @@ async def start_project(
     conn_ssh = await ssh.pool.get(ctx.target)
     try:
         await docker_remote.start(conn_ssh, ctx.container)
+        await repair_if_tmux_unusable(principal, ctx, conn_ssh)
     except SSHError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -655,6 +656,13 @@ async def _recreate_if_stale(
         container.runtime,
         bool(ctx.project.get("docker_access")),
     )
+    await _recreate_container(principal, ctx)
+    return True
+
+
+async def _recreate_container(principal: Principal, ctx: runtime.ProjectContext) -> None:
+    """Replace the container with a fresh one from its image, keeping both
+    volumes. See `_recreate_if_stale` for why that is safe to do unasked."""
     project = ctx.project
     await _provision_container(
         principal,
@@ -673,6 +681,44 @@ async def _recreate_if_stale(
         memory=None,
         docker_access=bool(project.get("docker_access")),
     )
+
+
+# Exits 0 when the dev user's tmux directory is there but no longer the dev
+# user's. Read as root: the dev user cannot always stat it.
+_TMUX_DIR_UNUSABLE = (
+    'd=/tmp/tmux-$(id -u dev); [ -e "$d" ] || exit 1; '
+    '[ "$(stat -c %u "$d")" != "$(id -u dev)" ]'
+)
+
+
+async def _tmux_dir_unusable(conn_ssh: Any, container: str) -> bool:
+    """Whether tmux will refuse to start here, and nothing in the container
+    can fix it.
+
+    Seen on a Sysbox container after the host rebooted: what it had written
+    to its own layer — /tmp, not the volumes — came back owned by an id the
+    restarted container no longer maps, `nobody` from inside. tmux refuses a
+    socket directory that is not its user's ("directory /tmp/tmux-1001 has
+    unsafe permissions"), so no session can start, and root in the container
+    cannot remove or rename it: /tmp is sticky, and the owner is not one of
+    its ids. A new container from the same image, both volumes reattached,
+    is clean. Nothing can be running to lose — tmux could not start.
+    """
+    result = await docker_remote.exec_capture(
+        conn_ssh, container, ["sh", "-c", _TMUX_DIR_UNUSABLE], user="root", timeout=30
+    )
+    return result.ok
+
+
+async def repair_if_tmux_unusable(
+    principal: Principal, ctx: runtime.ProjectContext, conn_ssh: Any
+) -> bool:
+    """Recreate a running container tmux cannot start in. Every path that
+    starts a container calls this after: the terminal, Start, a session."""
+    if not await _tmux_dir_unusable(conn_ssh, ctx.container):
+        return False
+    log.info("recreating %s: its tmux directory is no longer its user's", ctx.container)
+    await _recreate_container(principal, ctx)
     return True
 
 
@@ -695,6 +741,7 @@ async def _start_container(
         return conn_ssh
     if container.state != "running":
         await docker_remote.start(conn_ssh, ctx.container)
+    await repair_if_tmux_unusable(principal, ctx, conn_ssh)
     return conn_ssh
 
 
