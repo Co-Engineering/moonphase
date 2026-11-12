@@ -187,6 +187,9 @@ class Box:
         # agy undownloaded (see the tests for that below).
         self.agy_session = self.home / "sessions" / "alice" / ".gemini"
         self.agy_session.mkdir(parents=True)
+        # And to run OpenCode, likewise (see the tests for its absence below).
+        self.opencode_session = self.home / "sessions" / "alice" / ".config" / "opencode"
+        self.opencode_session.mkdir(parents=True)
         self.script.write_text(harness_updates.update_script())
         stubs = {
             "npm": STUB_NPM,
@@ -562,6 +565,40 @@ def test_a_container_nobody_runs_agy_in_does_not_download_it(box: Box) -> None:
     assert box.current(CLAUDE) == "1.0.0"
 
 
+def test_opencode_is_not_installed_where_no_session_runs_it(box: Box) -> None:
+    """Two releases of it were kept current in every container, most of a
+    gigabyte each, though nothing ran it."""
+    shutil.rmtree(box.opencode_session)
+
+    result = box.run("6")
+
+    assert result.returncode == 0, box.log()
+    assert box.current(OPENCODE) is None
+    assert box.status()["packages"]["opencode-ai"]["result"] == "unused"
+    assert box.current(CLAUDE) == "1.0.0"
+
+
+def test_a_copy_installed_where_nothing_runs_it_is_removed(box: Box) -> None:
+    box.run("6")
+    assert box.current(OPENCODE) == "1.0.0"
+    shutil.rmtree(box.opencode_session)
+
+    box.run("6", "force")
+
+    assert not (box.root / "opencode-ai").exists()
+
+
+def test_a_copy_still_running_is_not_removed(box: Box) -> None:
+    box.run("6")
+    shutil.rmtree(box.opencode_session)
+    running = box.root / OPENCODE / "1.0.0"
+    box.process(4242, [str(running / "bin" / "opencode")])
+
+    box.run("6", "force")
+
+    assert running.exists()
+
+
 def test_agy_is_fetched_once_a_session_is_set_up_to_run_it(box: Box) -> None:
     """The first Antigravity session in a container: profile.apply has
     written its ~/.gemini before the launch asks for an update, so that very
@@ -901,7 +938,8 @@ def test_agy_is_updated_from_its_manifest_and_never_through_npm() -> None:
     ]
     assert calls == [
         "update_one anthropic-ai-claude-code @anthropic-ai/claude-code claude",
-        "update_one opencode-ai opencode-ai opencode",
+        # Only where a session's HOME has its config directory.
+        "update_one opencode-ai opencode-ai opencode .config/opencode",
         # After npm's, so a slow download delays only agy's own switch.
         # The last word is what marks a container as using it: its sessions'
         # ~/.gemini.

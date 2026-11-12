@@ -13,6 +13,7 @@ import {
   type HarnessKind,
   type Project,
   type Server,
+  type ServerProjectResourceUsage,
   type ServerResources,
   type Session,
   setupState,
@@ -2294,6 +2295,15 @@ function shareOf(value: number, top: number): number {
   return Math.max(2, Math.round((value / top) * 100))
 }
 
+/**
+ * Everything a project takes on the server: both volumes, and what its
+ * container wrote outside them — /tmp above all, which once held more than
+ * either volume and showed up nowhere.
+ */
+export function projectBytes(p: ServerProjectResourceUsage): number {
+  return p.workspace_bytes + p.home_bytes + (p.container_bytes ?? 0)
+}
+
 function ServerResourcesPanel({
   data,
   adminProjectIds,
@@ -2309,7 +2319,7 @@ function ServerResourcesPanel({
 
   const topProjectBytes = Math.max(
     1,
-    ...data.by_project.map((p) => p.workspace_bytes + p.home_bytes),
+    ...data.by_project.map(projectBytes),
   )
 
   return (
@@ -2338,10 +2348,17 @@ function ServerResourcesPanel({
           <h3>By project</h3>
           <div className="usage-bars">
             {data.by_project.map((project) => {
-              const bytes = project.workspace_bytes + project.home_bytes
+              const bytes = projectBytes(project)
               return (
                 <Fragment key={project.project_id}>
-                  <div className="usage-bar">
+                  <div
+                    className="usage-bar"
+                    title={
+                      `Workspace ${formatBytes(project.workspace_bytes)} · ` +
+                      `home ${formatBytes(project.home_bytes)} · ` +
+                      `container ${formatBytes(project.container_bytes ?? 0)}`
+                    }
+                  >
                     <span className="usage-bar-name">{project.name}</span>
                     <span className="usage-bar-track">
                       <span

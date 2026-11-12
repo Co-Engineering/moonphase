@@ -124,6 +124,8 @@ export interface ServerProjectResourceUsage {
   project_id: string
   name: string
   workspace_bytes: number
+  /** Written outside both volumes: /tmp, and whatever was installed into the container. */
+  container_bytes?: number
   home_bytes: number
   cpu_percent: number | null
   mem_bytes: number | null

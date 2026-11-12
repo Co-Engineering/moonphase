@@ -273,9 +273,16 @@ async def test_resource_reading_matches_volumes_and_stats_to_their_project(
             name="mp-a-cafe1234", cpu_percent=1.5, mem_bytes=1024
         )}
 
+    sized: list[int] = []
+
+    async def fake_container_sizes(_conn):
+        sized.append(1)
+        return {"mp-a-cafe1234": 7000, "someone-elses": 1}
+
     async def fake_upsert(_conn, **kwargs):
         upserted.update(kwargs)
 
+    monkeypatch.setattr(docker_remote, "container_sizes", fake_container_sizes)
     monkeypatch.setattr(monitor, "_target_for", fake_target)
     monkeypatch.setattr("moonphase.ssh.pool.get", fake_pool_get)
     monkeypatch.setattr("moonphase.monitor.service_session", lambda: _NullSession())
@@ -297,3 +304,35 @@ async def test_resource_reading_matches_volumes_and_stats_to_their_project(
     assert by_project["proj-b"]["cpu_percent"] is None, "no container, no live stat"
     # Largest total first.
     assert upserted["by_project"][0]["project_id"] == "proj-a"
+    # What the container wrote outside its volumes counts too: the /tmp a
+    # month of sessions filled was nowhere on this card.
+    assert by_project["proj-a"]["container_bytes"] == 7000
+    assert by_project["proj-b"]["container_bytes"] == 0
+
+    # Docker walks every file to size a container, so not on every reading.
+    await monitor._read_server_resources(_server("srv-1"), projects)
+    assert sized == [1]
+    assert {p["project_id"]: p for p in upserted["by_project"]}["proj-a"][
+        "container_bytes"
+    ] == 7000
+
+
+async def test_container_sizes_are_each_containers_own_layer(monkeypatch) -> None:
+    from moonphase import ssh as ssh_module
+
+    async def fake_run(_conn, command, **_):
+        assert "ps -a -s" in command
+        return ssh_module.CommandResult(
+            exit_status=0,
+            stdout=(
+                "mp-clockwork-ba0bbb23\t25.8GB (virtual 27.8GB)\n"
+                "mp-task-73c6d73f\t1.83MB (virtual 4.93GB)\n"
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(docker_remote.ssh, "run", fake_run)
+
+    sizes = await docker_remote.container_sizes(object())  # type: ignore[arg-type]
+
+    assert sizes == {"mp-clockwork-ba0bbb23": 25_800_000_000, "mp-task-73c6d73f": 1_830_000}

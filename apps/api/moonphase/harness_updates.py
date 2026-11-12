@@ -215,10 +215,17 @@ def update_script() -> str:
     # that waits for the lock, which is held for the whole run.
     slugs = [(package_slug(p), b) for p, b in managed] + [(s, b) for s, _, b, _ in manifests]
     bins = "".join(f" {shlex.quote(s)} {shlex.quote(b)}" for s, b in slugs)
+    markers = {
+        h.managed_package: h.managed_marker
+        for h in harness_registry.available()
+        if h.managed_package and h.managed_marker
+    }
     updates = (
         f"write_profile{bins}\n"
         + "".join(
-            f"update_one {shlex.quote(package_slug(p))} {shlex.quote(p)} {shlex.quote(b)}\n"
+            f"update_one {shlex.quote(package_slug(p))} {shlex.quote(p)} {shlex.quote(b)}"
+            + (f" {shlex.quote(markers[p])}" if p in markers else "")
+            + "\n"
             for p, b in managed
         )
         + "".join(
@@ -448,9 +455,17 @@ switch_to() {
 }
 
 update_one() {
-    slug=$1 pkg=$2 bin=$3
+    # $4 optionally a path under a session's HOME that exists once a session
+    # there runs it: without one anywhere in this container, nothing is
+    # installed, and what an earlier release installed regardless goes.
+    slug=$1 pkg=$2 bin=$3 marker=${4:-}
     dir=$ROOT/$slug
     used=$channel fallback=
+    if [ -n "$marker" ] && ! in_some_home "$marker"; then
+        retire "$dir"
+        record "$pkg" unused
+        return
+    fi
     mkdir -p "$dir" || { record "$pkg" "failed: cannot create $dir"; return; }
     cache=$(mktemp -d "$work/npm.XXXXXX")
     version=$(resolve "$pkg@$channel")
@@ -754,6 +769,29 @@ in_use() {
         fi
     done
     return 1
+}
+
+retire() {
+    # $1 a harness's directory, in a container where nothing runs it. Every
+    # version goes unless a process still runs a binary from it; the
+    # directory itself once none is left.
+    [ -d "$1" ] || return 0
+    for v in "$1"/*; do
+        case ${v##*/} in current|previous) continue ;; esac
+        [ -d "$v" ] || continue
+        real=$(cd "$v" 2>/dev/null && pwd -P) || real=$v
+        if in_use "$v" "$real"; then
+            echo "moonphase: keeping $v, still running"
+            continue
+        fi
+        rm -rf -- "$v"
+        echo "moonphase: removed $v, unused here"
+    done
+    for v in "$1"/*; do
+        case ${v##*/} in current|previous) continue ;; esac
+        [ -d "$v" ] && return 0
+    done
+    rm -rf -- "$1"
 }
 
 prune() {
