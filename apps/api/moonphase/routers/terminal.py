@@ -41,6 +41,7 @@ from ..ratelimit import RateLimiter
 from ..runtime import CAN_CONTROL, CAN_OBSERVE, Forbidden, NotFound
 from ..schemas import UploadOut
 from ..ssh import SSHError
+from .projects import repair_if_tmux_unusable
 
 log = logging.getLogger(__name__)
 
@@ -356,6 +357,8 @@ async def project_terminal(
         else:
             if container.state != "running":
                 await docker_remote.start(conn_ssh, ctx.container)
+            # A container tmux cannot start in is replaced first (see there).
+            await repair_if_tmux_unusable(principal, ctx, conn_ssh)
 
             session_harness = (
                 str(session_row.get("harness") or ctx.harness)
