@@ -28,6 +28,7 @@ from . import (
     activity,
     docker_remote,
     harness_updates,
+    housekeeping,
     push,
     queries,
     runtime,
@@ -78,10 +79,18 @@ RESUME_RETRY_INTERVAL_SECONDS = 600.0
 # read like the activity sweep.
 RESOURCE_INTERVAL_SECONDS = 300.0
 
+# How often each container's own disk use is re-read: Docker walks every file
+# a container wrote to answer, which takes a while on a full one.
+CONTAINER_SIZE_INTERVAL_SECONDS = 3600.0
+
 # This is cleanup, not monitoring — nothing about a leaked volume needs to be
 # noticed within minutes. Once an hour per server is enough to keep the disk
 # from filling back up between resource-usage readings.
 VOLUME_SWEEP_INTERVAL_SECONDS = 3600.0
+
+# Caches and temp files a day may add to are not worth reading for more often
+# than this; see housekeeping.
+HOUSEKEEPING_INTERVAL_SECONDS = 24 * 3600.0
 
 # The longest each running container goes between being asked to update its
 # harnesses. Cheap (one exec that usually exits at once); the container's own
@@ -116,11 +125,18 @@ class SessionMonitor:
         # When each server's disk/CPU/memory was last read, and when it was
         # last swept for orphaned volumes — both keyed by server id.
         self._resources_checked: dict[str, float] = {}
+        # Each server's last reading of its containers' own sizes, and when.
+        self._container_sizes: dict[str, tuple[float, dict[str, int]]] = {}
         self._volumes_checked: dict[str, float] = {}
         # When each container was last asked to update its harnesses.
         self._harnesses_checked: dict[str, float] = {}
         # When accounts were last asked of Anthropic with stored sign-ins.
         self._plan_limits_checked = 0.0
+        # When each server was last cleaned up (keyed by server id), and the
+        # clean-up running now, if one is: it can take minutes, so it runs
+        # beside the sweeps rather than in them.
+        self._housekept: dict[str, float] = {}
+        self._housekeeping: asyncio.Task[None] | None = None
 
     def start(self) -> None:
         settings = get_settings()
@@ -140,6 +156,11 @@ class SessionMonitor:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._task
             self._task = None
+        if self._housekeeping is not None:
+            self._housekeeping.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._housekeeping
+            self._housekeeping = None
 
     async def _run(self) -> None:
         interval = get_settings().moonphase_monitor_interval
@@ -170,6 +191,8 @@ class SessionMonitor:
                 await self.refresh_plan_limits()
             except Exception as exc:  # noqa: BLE001
                 log.warning("plan limit refresh failed: %s", exc)
+            if self._housekeeping is None or self._housekeeping.done():
+                self._housekeeping = asyncio.create_task(self.sweep_housekeeping())
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._stop.wait(), timeout=interval)
 
@@ -590,6 +613,14 @@ class SessionMonitor:
         volumes_by_name = {v.name: v for v in await docker_remote.volume_usage(conn_ssh)}
         containers = [p["container_name"] for p in projects if p.get("container_name")]
         stats = await docker_remote.container_stats(conn_ssh, containers)
+        server_id = str(server["id"])
+        read_at, sizes = self._container_sizes.get(server_id, (None, {}))
+        if read_at is None or time.monotonic() - read_at >= CONTAINER_SIZE_INTERVAL_SECONDS:
+            try:
+                sizes = await docker_remote.container_sizes(conn_ssh)
+                self._container_sizes[server_id] = (time.monotonic(), sizes)
+            except SSHError as exc:
+                log.debug("resource sweep: no container sizes from %s: %s", server["name"], exc)
 
         by_project: list[dict[str, Any]] = []
         for project in projects:
@@ -602,11 +633,17 @@ class SessionMonitor:
                     "name": project["name"],
                     "workspace_bytes": workspace.size_bytes if workspace else 0,
                     "home_bytes": home.size_bytes if home else 0,
+                    # Outside both volumes: /tmp and whatever was installed
+                    # into the container itself.
+                    "container_bytes": sizes.get(project.get("container_name") or "", 0),
                     "cpu_percent": stat.cpu_percent if stat else None,
                     "mem_bytes": stat.mem_bytes if stat else None,
                 }
             )
-        by_project.sort(key=lambda p: p["workspace_bytes"] + p["home_bytes"], reverse=True)
+        by_project.sort(
+            key=lambda p: p["workspace_bytes"] + p["home_bytes"] + p["container_bytes"],
+            reverse=True,
+        )
 
         async with service_session() as conn:
             await queries.upsert_resource_snapshot(
@@ -616,6 +653,53 @@ class SessionMonitor:
                 disk_used_bytes=disk.used_bytes,
                 by_project=by_project,
             )
+
+    async def sweep_housekeeping(self) -> int:
+        """Throw away what can be thrown away, once a day per server.
+
+        Caches and temp files only — see housekeeping for what, and why each
+        one grew without bound. Every running project's container, then the
+        server's own images and build cache. Returns how many servers.
+        """
+        now = time.monotonic()
+        async with service_session() as conn:
+            servers = await queries.list_servers(conn)
+            projects = await queries.list_projects(conn)
+        cleaned = 0
+        for server in servers:
+            server_id = str(server["id"])
+            if server.get("status") != "online":
+                continue
+            # Not a 0.0 default: the monotonic clock starts near zero at boot,
+            # and a server would wait a day for its first clean-up.
+            last = self._housekept.get(server_id)
+            if last is not None and now - last < HOUSEKEEPING_INTERVAL_SECONDS:
+                continue
+            self._housekept[server_id] = now
+            containers = [
+                str(p["container_name"])
+                for p in projects
+                if str(p["server_id"]) == server_id
+                and p.get("container_name")
+                and p.get("status") == "running"
+            ]
+            try:
+                conn_ssh = await ssh.pool.get(await self._target_for({"server_id": server["id"]}))
+                for container in containers:
+                    try:
+                        done = await housekeeping.clean_container(conn_ssh, container)
+                    except SSHError as exc:
+                        log.info("housekeeping: %s: %s", container, exc)
+                        continue
+                    if done:
+                        log.info("housekeeping: %s: %s", container, done.replace("\n", "; "))
+                done = await housekeeping.clean_server(conn_ssh)
+                if done:
+                    log.info("housekeeping: %s: %s", server["name"], done.replace("\n", "; "))
+                cleaned += 1
+            except SSHError as exc:
+                log.info("housekeeping: could not reach %s: %s", server["name"], exc)
+        return cleaned
 
     async def sweep_volumes(self) -> int:
         """Find volumes no project claims, and remove ones past their grace period.

@@ -214,6 +214,27 @@ delete the work. The same background monitor that computes activity also finds v
 with no project left, and removes them once they have sat unclaimed for this long. Set it
 lower to reclaim disk faster, or higher if you want longer to notice and undo a delete.
 
+### What is cleaned up on its own
+
+Once a day per server, the same monitor throws away what whatever made it makes again
+when it needs it. Before it did, these grew without limit and filled a 256 GB worker:
+
+| What | Rule |
+| ---- | ---- |
+| `/tmp` in every running project's container | Files untouched for 7 days, and any file over 1 GB not written to for a day. `/tmp` is in the container itself, which lives for months; Claude Code keeps its background tasks' output and scratchpads there, and one dev-server log left in a scratchpad reached 17 GB. tmux's socket is never touched |
+| Go's build cache (`~/.cache/go-build`) | Trimmed to 5 GB per session, least recently used first. Go only trims what has gone unused for five days |
+| Next.js's cache (`.next/cache`) | Removed once over 5 GB; Next rebuilds it. It has no limit of its own in development |
+| Docker's build cache | Anything older than a week |
+| Environment images | Ones no container uses, built more than a day ago |
+
+Nothing else is touched: no worktree, no source, no `node_modules`, nothing a session
+keeps in its home beyond those two caches. The server's **Resources** card counts each
+project's container alongside its volumes, so what a container wrote outside them shows
+up there too; hover over a project for the split.
+
+The OpenCode harness is also only installed in containers where a session runs it, as
+Antigravity's is; it used to be kept current in every container, two releases each.
+
 ## GitHub
 
 | Variable                      | Default | Notes |

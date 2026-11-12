@@ -49,6 +49,11 @@ class OpenCode(Harness):
     supported_auth_modes = (HarnessAuthMode.API_KEY,)
     managed_package = "opencode-ai"
     managed_binary = "opencode"
+    # Its config directory, which `profile_files` writes before a session's
+    # launch asks for an update. Without one in any HOME, no session here
+    # runs OpenCode, and keeping two releases of it current in every
+    # container cost most of a gigabyte each for nothing.
+    managed_marker = ".config/opencode"
 
     def managed_env(self) -> dict[str, str]:
         # Checked against the shipped 1.18 binary: its updater returns early

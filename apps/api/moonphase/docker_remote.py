@@ -549,6 +549,24 @@ async def volume_usage(conn: asyncssh.SSHClientConnection) -> list[VolumeUsage]:
     return out
 
 
+async def container_sizes(conn: asyncssh.SSHClientConnection) -> dict[str, int]:
+    """{container name: bytes in its own writable layer}, for every container.
+
+    What a container wrote outside its volumes — /tmp, anything installed
+    into it — which `system df` only totals. Docker has to walk those files
+    to answer, so this is slow on a full container; callers ask rarely.
+    """
+    result = await ssh.run(
+        conn, "docker ps -a -s --format '{{.Names}}\t{{.Size}}'", timeout=300
+    )
+    sizes: dict[str, int] = {}
+    for line in result.stdout.splitlines():
+        name, _, size = line.partition("\t")
+        # "25.8GB (virtual 27.8GB)": the first is the container's own.
+        sizes[name] = _parse_docker_bytes(size.split(" (", 1)[0])
+    return sizes
+
+
 async def container_stats(
     conn: asyncssh.SSHClientConnection, names: list[str]
 ) -> dict[str, ContainerStat]:

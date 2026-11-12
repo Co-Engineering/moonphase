@@ -118,10 +118,10 @@ class Harness(abc.ABC):
     managed_manifest: str | None = None
     managed_binary: str | None = None
     # A path under a session's HOME that exists once a session has been set up
-    # to run this harness. For a manifest-released harness the update script
-    # downloads it only into containers where one has — a native agent is a
-    # few hundred megabytes, and most containers never run it. None means
-    # every container keeps it current, as npm harnesses always have been.
+    # to run this harness. The update script installs it only into containers
+    # where one has — an agent is a few hundred megabytes, and most containers
+    # never run it — and an npm harness's earlier copies go from those where
+    # none has. None means every container keeps it current.
     managed_marker: str | None = None
     # Whether a duplicate, resumed in its own worktree, picks up the copied
     # transcripts. False means it starts a fresh conversation, so duplicating
