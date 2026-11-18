@@ -1,10 +1,11 @@
-import { describe, expect, it, beforeEach } from 'vitest'
+import { afterEach, describe, expect, it, beforeEach } from 'vitest'
 import {
   currentHost,
   forgetHost,
   insecureHostWarning,
   normaliseHost,
   rememberHost,
+  servedByInstance,
 } from '../host'
 
 describe('normaliseHost', () => {
@@ -59,5 +60,27 @@ describe('insecureHostWarning', () => {
   it('says nothing about localhost, which browsers exempt', () => {
     expect(insecureHostWarning('http://localhost:8471')).toBeNull()
     expect(insecureHostWarning('http://127.0.0.1:8471')).toBeNull()
+  })
+})
+
+describe('whether the page came from an instance', () => {
+  const win = window as unknown as { moonphase?: { desktop: boolean; platform: string } }
+  afterEach(() => {
+    delete win.moonphase
+    window.localStorage.clear()
+  })
+
+  it('is so for a page an instance served, with no address of its own', () => {
+    expect(servedByInstance()).toBe(true)
+  })
+
+  it('is not so for the desktop app, whose page is a file it ships', () => {
+    win.moonphase = { desktop: true, platform: 'linux' }
+    expect(servedByInstance()).toBe(false)
+  })
+
+  it('is not so once an address has been typed in', () => {
+    window.localStorage.setItem('moonphase.host', 'https://typed.example.test')
+    expect(servedByInstance()).toBe(false)
   })
 })

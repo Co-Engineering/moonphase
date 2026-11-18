@@ -62,6 +62,24 @@ export function forgetHost(): void {
  * origin we were served from. The last is the common case once the API serves
  * the frontend, and means a fresh install of the PWA needs no setup at all.
  */
+/**
+ * Whether this page came from a Moonphase instance itself, so that its
+ * address is not in question and a failed config fetch means "it is unwell"
+ * rather than "where is it?".
+ *
+ * Not having been given an address is not enough on its own: that is also a
+ * desktop app on its first launch. It loads its own copy of the page from
+ * disk, has no instance until it is told one, and on that reasoning waited
+ * forever for an instance to "come back" instead of asking for its address.
+ * Nor is a page from a dev server with the API elsewhere.
+ */
+export function servedByInstance(): boolean {
+  if (storedHost()) return false
+  if (window.moonphase?.desktop) return false
+  if (import.meta.env.VITE_API_URL) return false
+  return window.location.protocol === 'http:' || window.location.protocol === 'https:'
+}
+
 export function currentHost(): string {
   const stored = storedHost()
   if (stored) return stored

@@ -47,6 +47,7 @@ import {
   currentHost,
   fetchConfig,
   rememberHost,
+  servedByInstance,
   storedHost,
   type InstanceConfig,
 } from './lib/host'
@@ -114,7 +115,15 @@ export function App() {
     // the outside — the API is replaced, one request fails, and the app threw
     // away a working instance to show an empty box asking for an address the
     // person never typed and has no reason to know.
-    const servedFromHost = !storedHost()
+    const servedFromHost = servedByInstance()
+
+    // Nowhere to ask yet: a desktop app on its first launch has no instance
+    // until it is told one. Its own page's address is a file on disk, and
+    // trying that only puts "Failed to fetch" above an empty address field.
+    if (!servedFromHost && !storedHost() && !import.meta.env.VITE_API_URL) {
+      setReady(true)
+      return
+    }
 
     const load = () => {
       void fetchConfig(currentHost())

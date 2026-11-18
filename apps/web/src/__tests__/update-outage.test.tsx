@@ -91,3 +91,51 @@ describe('while the API is being replaced', () => {
     )
   }, 12000)
 })
+
+/**
+ * The desktop app's first launch. It loads its own copy of the page from
+ * disk and has no instance until it is told one — but nothing had been
+ * stored yet, so it took itself for a page an instance served, and sat on
+ * "Waiting for Moonphase to come back…" forever instead of asking.
+ */
+describe('the desktop app, before it has been given an address', () => {
+  const desktop = window as unknown as { moonphase?: { desktop: boolean; platform: string } }
+  afterEach(() => {
+    delete desktop.moonphase
+  })
+
+  it('asks for the address straight away, without trying anything first', async () => {
+    desktop.moonphase = { desktop: true, platform: 'darwin' }
+    const fetched = vi.fn(async () => {
+      throw new TypeError('Failed to fetch')
+    })
+    vi.stubGlobal('fetch', fetched)
+
+    render(<App />)
+
+    await waitFor(() =>
+      expect(screen.getByText(/connect to moonphase/i)).toBeInTheDocument(),
+    )
+    expect(screen.queryByText(/waiting for moonphase to come back/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/failed to fetch/i)).not.toBeInTheDocument()
+    expect(fetched).not.toHaveBeenCalled()
+  })
+
+  it('once given one, says so when that address does not answer', async () => {
+    desktop.moonphase = { desktop: true, platform: 'darwin' }
+    window.localStorage.setItem('moonphase.host', 'https://typed.example.test')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Failed to fetch')
+      }),
+    )
+
+    render(<App />)
+
+    await waitFor(() =>
+      expect(screen.getByText(/connect to moonphase/i)).toBeInTheDocument(),
+    )
+    expect(screen.queryByText(/waiting for moonphase to come back/i)).not.toBeInTheDocument()
+  })
+})
